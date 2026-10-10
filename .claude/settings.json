@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest *)",
+      "Bash(uv run ruff *)",
+      "Bash(uv run alembic *)",
+      "Bash(pnpm lint *)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm build *)",
+      "Bash(gh issue view *)",
+      "Bash(gh issue list *)"
+    ],
+    "deny": [
+      "Read(.env*)",
+      "Read(**/.env*)",
+      "Read(**/secrets/**)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/credentials*.json)"
+    ]
+  }
+}
