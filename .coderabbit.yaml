@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+reviews:
+  profile: "chill"
+  auto_review:
+    enabled: true
+    # This repo stacks feature PRs on top of unmerged setup branches
+    # (e.g. slice/1-... -> setup/mattpocock-skills -> main), so without this,
+    # CodeRabbit's default "default branch only" policy skips every stacked PR.
+    base_branches:
+      - ".*"
