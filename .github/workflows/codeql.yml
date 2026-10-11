@@ -11,8 +11,45 @@ permissions:
   contents: read
 
 jobs:
+  detect-languages:
+    name: Detect languages with source code
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      languages: ${{ steps.detect.outputs.languages }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Detect which languages currently have source files
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          parts=()
+          if find apps/api -type f -name '*.py' 2>/dev/null | grep -q .; then
+            parts+=("python")
+          fi
+          if find apps/web -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \) 2>/dev/null | grep -q .; then
+            parts+=("javascript-typescript")
+          fi
+          if [ "${#parts[@]}" -eq 0 ]; then
+            languages='[]'
+          else
+            joined=$(printf '"%s",' "${parts[@]}")
+            languages="[${joined%,}]"
+          fi
+          echo "Detected languages with source code: $languages"
+          echo "languages=$languages" >> "$GITHUB_OUTPUT"
+
   analyze:
     name: Analyze (${{ matrix.language }})
+    needs: detect-languages
+    # A matrix with zero entries fails the whole workflow run rather than
+    # skipping cleanly, so this repo (still CLAUDE.md-only stubs under
+    # apps/api and apps/web) must guard the job itself, not just the matrix.
+    if: needs.detect-languages.outputs.languages != '[]'
     runs-on: ubuntu-latest
     permissions:
       security-events: write
@@ -22,14 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # apps/web (Next.js + TypeScript)
-          - language: javascript-typescript
-            build-mode: none
-          # apps/api (FastAPI)
-          - language: python
-            build-mode: none
-
+        language: ${{ fromJson(needs.detect-languages.outputs.languages) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -38,7 +68,7 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
+          build-mode: none
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
