@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.config import settings  # noqa: E402
-from core.db import _normalize_database_url  # noqa: E402
+from core.db import _connect_args, _normalize_database_url  # noqa: E402
 from models.base import Base  # noqa: E402
 
 # this is the Alembic Config object, which provides
@@ -79,6 +79,7 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=_connect_args(settings.database_url),
     )
 
     async with connectable.connect() as connection:
