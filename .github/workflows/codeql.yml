@@ -31,7 +31,8 @@ jobs:
           if find apps/api -type f -name '*.py' 2>/dev/null | grep -q .; then
             parts+=("python")
           fi
-          if find apps/web -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \) 2>/dev/null | grep -q .; then
+          # Tracked JS/TS anywhere (apps/web, root tooling, configs). No pipe, so pipefail can't mask a match.
+          if [ -n "$(git ls-files -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs')" ]; then
             parts+=("javascript-typescript")
           fi
           if [ "${#parts[@]}" -eq 0 ]; then
