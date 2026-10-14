@@ -28,10 +28,13 @@ jobs:
         run: |
           set -euo pipefail
           parts=()
-          if find apps/api -type f -name '*.py' 2>/dev/null | grep -q .; then
+          # Tracked files only, and no `| grep -q` pipes: under pipefail, grep exiting early
+          # can SIGPIPE the producer and silently drop a language.
+          if [ -n "$(git ls-files -- 'apps/api/*.py')" ]; then
             parts+=("python")
           fi
-          if find apps/web -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \) 2>/dev/null | grep -q .; then
+          # JS/TS anywhere: apps/web, root tooling, configs.
+          if [ -n "$(git ls-files -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs')" ]; then
             parts+=("javascript-typescript")
           fi
           if [ "${#parts[@]}" -eq 0 ]; then
@@ -47,8 +50,8 @@ jobs:
     name: Analyze (${{ matrix.language }})
     needs: detect-languages
     # A matrix with zero entries fails the whole workflow run rather than
-    # skipping cleanly, so this repo (still CLAUDE.md-only stubs under
-    # apps/api and apps/web) must guard the job itself, not just the matrix.
+    # skipping cleanly, so guard the job itself for when no language has
+    # sources yet (e.g. apps/api before the walking skeleton lands).
     if: needs.detect-languages.outputs.languages != '[]'
     runs-on: ubuntu-latest
     permissions:

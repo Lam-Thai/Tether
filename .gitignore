@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.venv/
+
+# Build output and caches
+.next/
+dist/
+*.tsbuildinfo
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.log
+
+# Test output
+coverage/
+
+# Per-user Claude Code settings (may hold local permission grants)
+.claude/settings.local.json
+
+# Env files: only .env.example is committed
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db

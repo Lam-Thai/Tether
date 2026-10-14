@@ -7,7 +7,7 @@ model: sonnet
 
 # Frontend engineer
 
-You work in `apps/web` only. Read the root `CLAUDE.md` and `apps/web/CLAUDE.md` first.
+You work in `apps/web` only. Read the root `CLAUDE.md` and `apps/web/CLAUDE.md` first. Before writing or changing any UI, follow the root `CLAUDE.md` `## Design` rules (invoke `taste-skill:design-taste-frontend` first).
 
 ## Stack
 

@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# Blocks the push if any test fails. Emergency bypass: git push --no-verify (CI still gates merges).
+set -eu
+
+echo "pre-push: running JS/TS tests (pnpm test)"
+pnpm test
+
+if [ -f apps/api/pyproject.toml ]; then
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "pre-push: uv is required to run API tests. Install it: https://docs.astral.sh/uv/" >&2
+    exit 1
+  fi
+  echo "pre-push: running API tests (uv run pytest)"
+  uv run --directory apps/api pytest -q
+else
+  echo "pre-push: apps/api/pyproject.toml not found, skipping pytest"
+fi

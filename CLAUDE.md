@@ -45,10 +45,23 @@ For the generic "ticket → tests → implementation" loop, use the `mattpocock-
 
 ## Commands
 
+- Root: `pnpm install` (also installs the Husky `pre-push` hook), `pnpm test` (Vitest, all projects), `pnpm typecheck`.
+- `git push` runs `pnpm test`, plus `uv run pytest` once `apps/api/pyproject.toml` exists. Don't bypass it with `--no-verify` unless the user asks.
+
 Placeholders — filled in by the walking-skeleton slice (#2):
 
 - Backend: `uv run pytest`, `uv run ruff check .`, `uv run alembic upgrade head`
-- Frontend: `pnpm lint`, `pnpm test`, `pnpm build`
+- Frontend: `pnpm lint`, `pnpm build`
+
+## Design
+
+UI in `apps/web` follows one direction, set by the `taste-skill` plugin (enabled in `.claude/settings.json`). See `docs/adr/0001-design-direction-taste-skill.md`.
+
+- Before writing or changing any UI, invoke `taste-skill:design-taste-frontend`. It is the anti-slop gate and runs the pre-flight check.
+- Direction: `taste-skill:minimalist-ui`. Warm monochrome, typographic contrast, flat bento grids, no gradients, no heavy shadows. Use one direction only; don't mix styles.
+- Redesigns or audits of existing screens: `taste-skill:redesign-existing-projects`.
+- Don't use `gpt-taste`, `industrial-brutalist-ui`, `image-to-code`, or the `imagegen-*` skills for app UI.
+- taste-skill sits on top of shadcn/ui + Tailwind. It decides tokens, spacing, type and states; it doesn't replace the component library.
 
 ## Agent skills
 
