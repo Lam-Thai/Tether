@@ -31,4 +31,5 @@ The rules live in the `## Design` section of the root `CLAUDE.md`.
 
 - Every contributor and cloud agent gets the same design gate without a manual install. Claude Code prompts to trust the marketplace the first time.
 - The direction is a single choice: changing it means superseding this ADR, not mixing skills page by page.
+- Supply-chain trade-off: the marketplace tracks the default branch of a third-party repo, and plugin skill text becomes agent instructions. An upstream change reaches every session without review. If that becomes a concern, pin the marketplace to a reviewed commit and bump it deliberately.
 - A future marketing landing page may warrant a different skill. If it does, that gets its own ADR, scoped to that surface.

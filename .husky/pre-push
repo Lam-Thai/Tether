@@ -6,6 +6,10 @@ echo "pre-push: running JS/TS tests (pnpm test)"
 pnpm test
 
 if [ -f apps/api/pyproject.toml ]; then
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "pre-push: uv is required to run API tests. Install it: https://docs.astral.sh/uv/" >&2
+    exit 1
+  fi
   echo "pre-push: running API tests (uv run pytest)"
   uv run --directory apps/api pytest -q
 else

@@ -22,6 +22,8 @@ pnpm typecheck # strict TypeScript check of root tooling
 1. `pnpm test`, the Vitest suite.
 2. `uv run pytest` in `apps/api`. This runs only once `apps/api/pyproject.toml` exists; until then the step is skipped.
 
-The suite includes `tooling/repo-hygiene.test.ts`, which fails if any `.env` file other than `.env.example` is tracked.
+The suite includes `tooling/repo-hygiene.test.ts`, which fails if any env file other than `.env.example` is tracked (`.env*`, `.envrc`, `*.env`).
+
+If a git GUI client reports `pnpm: command not found` from the hook, it isn't loading your shell's PATH (common with nvm/fnm). Add the PATH setup to `~/.config/husky/init.sh`, which Husky sources before every hook.
 
 In a real emergency you can skip the hook with `git push --no-verify`. CI still has to pass before merge.

@@ -19,13 +19,22 @@ describe("findForbiddenEnvFiles", () => {
     ).toEqual([".env", ".env.local", "apps/api/.env.production", "apps/web/.env.sample"]);
   });
 
+  it("flags common env-file variants", () => {
+    const variants = [".envrc", ".env-prod", ".env.", ".ENV", "apps/api/.Env.Local", "prod.env", "deploy/secrets.env"];
+    expect(findForbiddenEnvFiles(variants)).toEqual(variants);
+  });
+
+  it("flags anything inside a .env directory", () => {
+    expect(findForbiddenEnvFiles([".env/prod", "apps/api/.env/keys.json"])).toEqual([".env/prod", "apps/api/.env/keys.json"]);
+  });
+
   it("allows .env.example at any depth", () => {
     expect(findForbiddenEnvFiles([".env.example", "apps/api/.env.example"])).toEqual([]);
   });
 
   it("ignores files that only look similar", () => {
     expect(
-      findForbiddenEnvFiles(["src/env.ts", "apps/web/.envrc.md", "docs/.env-notes.md", "my.env", "README.md"]),
+      findForbiddenEnvFiles(["src/env.ts", "src/environment.ts", ".envoy.yaml", "docs/env.md", "README.md"]),
     ).toEqual([]);
   });
 });
