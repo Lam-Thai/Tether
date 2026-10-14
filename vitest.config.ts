@@ -2,7 +2,6 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    // Add app projects here (e.g. "apps/web") once they have their own vitest config.
     projects: [
       {
         test: {
@@ -11,6 +10,7 @@ export default defineConfig({
           environment: "node",
         },
       },
+      "apps/web/vitest.config.ts",
     ],
   },
 });

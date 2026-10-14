@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/*
+ * Warm monochrome theme (taste-skill: minimalist-ui direction).
+ * Flat fills, hairline borders, no gradients, no heavy shadows.
+ * One warm accent hue (ochre) for "degraded", one deeper warm hue
+ * (terracotta) for "unreachable" — state is read through tone and
+ * typography, not saturated red/green alert colors.
+ */
+:root {
+  --background: #faf8f5;
+  --foreground: #1c1917;
+
+  --card: #ffffff;
+  --card-foreground: #1c1917;
+
+  --muted: #f0ece6;
+  --muted-foreground: #78716c;
+
+  --border: #e7e1d8;
+
+  --warn: #f4e8d8;
+  --warn-foreground: #7c4a12;
+  --warn-border: #e3cba0;
+
+  --danger: #f3e2da;
+  --danger-foreground: #86341c;
+  --danger-border: #e2bba8;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-border: var(--border);
+
+  --color-warn: var(--warn);
+  --color-warn-foreground: var(--warn-foreground);
+  --color-warn-border: var(--warn-border);
+
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-danger-border: var(--danger-border);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}

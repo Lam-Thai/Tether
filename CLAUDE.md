@@ -45,13 +45,24 @@ For the generic "ticket → tests → implementation" loop, use the `mattpocock-
 
 ## Commands
 
-- Root: `pnpm install` (also installs the Husky `pre-push` hook), `pnpm test` (Vitest, all projects), `pnpm typecheck`.
-- `git push` runs `pnpm test`, plus `uv run pytest` once `apps/api/pyproject.toml` exists. Don't bypass it with `--no-verify` unless the user asks.
+- Root: `pnpm install` (also installs the Husky `pre-push` hook), `pnpm test` (Vitest, all projects — tooling + `apps/web`), `pnpm typecheck` (root tooling).
+- `pnpm dev` runs both apps at once (`apps/web` on Next.js dev server + `apps/api` on `uvicorn --reload`, via `concurrently`). Requires local Postgres running first (see below).
+- `git push` runs `pnpm test`, plus `uv run pytest` in `apps/api`. Don't bypass it with `--no-verify` unless the user asks.
 
-Placeholders — filled in by the walking-skeleton slice (#2):
+Backend (`apps/api`, run from inside that directory or via `uv run --directory apps/api`):
 
-- Backend: `uv run pytest`, `uv run ruff check .`, `uv run alembic upgrade head`
-- Frontend: `pnpm lint`, `pnpm build`
+- `uv sync` — install dependencies into `apps/api/.venv`.
+- `uv run uvicorn main:app --reload` — run the dev server.
+- `uv run pytest` — tests. DB-touching tests read `DATABASE_URL` from the environment and fail (not skip) if it's unreachable.
+- `uv run ruff check .` — lint.
+- `uv run pyright` — type-check.
+- `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."` — migrations. Never run from app startup code.
+
+Frontend (`apps/web`, via `pnpm --filter web <script>` from the root, or directly inside the directory):
+
+- `pnpm --filter web dev` / `lint` / `typecheck` / `test` / `build`.
+
+Local Postgres for `apps/api`: `docker compose up -d` at the repo root (see `docker-compose.yml`), then point `apps/api/.env`'s `DATABASE_URL` at `postgresql://tether:tether@localhost:5432/tether`. A Neon dev branch works too — same `DATABASE_URL`, just point it at Neon's pooled connection string instead.
 
 ## Design
 
