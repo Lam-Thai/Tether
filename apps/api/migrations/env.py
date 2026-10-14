@@ -25,8 +25,15 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Read the DB URL from our own Settings (never hardcode it in alembic.ini),
-# normalized the same way the app's engine is.
-config.set_main_option("sqlalchemy.url", _normalize_database_url(settings.database_url))
+# normalized the same way the app's engine is. Alembic's Config stores this
+# in a ConfigParser, which applies %-interpolation on every later read
+# (get_main_option / get_section) — a literal `%` in the URL (e.g. a
+# URL-encoded password character) must be escaped as `%%` so it round-trips
+# unchanged instead of raising InterpolationSyntaxError.
+config.set_main_option(
+    "sqlalchemy.url",
+    _normalize_database_url(settings.database_url).replace("%", "%%"),
+)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

@@ -71,6 +71,9 @@ export async function getHealth(): Promise<HealthResult> {
   try {
     response = await fetch(`${normalizeBaseUrl(baseUrl)}/health`, {
       cache: "no-store",
+      // Matches the backend's own 5s statement_timeout (core/db.py) — a
+      // stalled request should fail closed, not hang the page forever.
+      signal: AbortSignal.timeout(5000),
     });
   } catch {
     return {
@@ -100,9 +103,16 @@ export async function getHealth(): Promise<HealthResult> {
     };
   }
 
-  if (body.status === "ok" && body.db === "connected") {
+  if (response.status === 200 && body.status === "ok" && body.db === "connected") {
     return { kind: "healthy", data: body };
   }
 
-  return { kind: "degraded", data: body };
+  if (response.status === 503 && body.status === "degraded" && body.db === "error") {
+    return { kind: "degraded", data: body };
+  }
+
+  return {
+    kind: "unreachable",
+    reason: "The API returned an unexpected response.",
+  };
 }

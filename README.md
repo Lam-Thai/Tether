@@ -13,7 +13,7 @@ Requirements:
 
 ```sh
 pnpm install              # installs JS/TS dependencies and the Husky git hooks
-docker compose up -d      # starts local Postgres (apps/api/.env's DATABASE_URL points here by default)
+docker compose up --wait  # starts local Postgres and waits for its healthcheck (apps/api/.env's DATABASE_URL points here by default)
 cp apps/api/.env.example apps/api/.env      # fill in DATABASE_URL etc.
 cp apps/web/.env.example apps/web/.env.local
 uv sync --directory apps/api               # installs Python dependencies

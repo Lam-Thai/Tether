@@ -29,6 +29,7 @@ describe("getHealth", () => {
     });
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/health", {
       cache: "no-store",
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -69,6 +70,32 @@ describe("getHealth", () => {
   it("returns unreachable when the response body doesn't match the health contract", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ unexpected: true }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getHealth();
+
+    expect(result.kind).toBe("unreachable");
+  });
+
+  it("returns unreachable when a 200 response carries a degraded-looking body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "degraded", db: "error", version: "1.2.3" }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getHealth();
+
+    expect(result.kind).toBe("unreachable");
+  });
+
+  it("returns unreachable when a non-200/503 status carries a healthy-looking body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "ok", db: "connected", version: "1.2.3" }), {
+        status: 500,
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
