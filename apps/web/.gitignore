@@ -1,0 +1,8 @@
+# This app's own ignores. See the root .gitignore for the shared rules
+# (node_modules/, .next/, coverage/, *.tsbuildinfo, .env*).
+
+# next.js generates this; it shouldn't be committed
+next-env.d.ts
+
+# vercel
+.vercel
