@@ -31,6 +31,7 @@ jobs:
       CORS_ORIGINS: https://example.com
       ENVIRONMENT: ci
       APP_VERSION: ci
+      CLERK_ISSUER: https://example.clerk.accounts.dev
     defaults:
       run:
         working-directory: apps/api
