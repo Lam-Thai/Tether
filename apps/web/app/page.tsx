@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { getHealth } from "@/lib/api/client";
 import { StatusView } from "@/components/status-view";
 
@@ -11,8 +13,16 @@ export default async function HomePage() {
   const result = await getHealth();
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background p-8">
+    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-8">
       <StatusView result={result} />
+      <div className="flex items-center gap-4 text-sm">
+        <Link href="/sign-in" className="text-foreground underline-offset-4 hover:underline">
+          Sign in
+        </Link>
+        <Link href="/sign-up" className="text-foreground underline-offset-4 hover:underline">
+          Sign up
+        </Link>
+      </div>
     </main>
   );
 }
