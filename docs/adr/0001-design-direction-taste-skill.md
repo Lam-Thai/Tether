@@ -1,6 +1,6 @@
 # 1. Design direction: minimalist-ui through taste-skill
 
-- Status: Accepted
+- Status: Superseded by [0002](0002-design-system-construtivismo-dinamico.md)
 - Date: 2026-10-13
 - Issue: #23
 
