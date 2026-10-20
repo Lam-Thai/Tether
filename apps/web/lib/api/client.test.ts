@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBusiness,
+  getBillingPlan,
+  openBillingPortal,
+  startCheckout,
+  syncCheckout,
+  type SubscriptionRead,
   getBusiness,
   getHealth,
   getMe,
@@ -9,6 +14,15 @@ import {
 } from "./client";
 
 const ORIGINAL_ENV = process.env.NEXT_PUBLIC_API_BASE_URL;
+
+const SUBSCRIPTION: SubscriptionRead = {
+  entitled: true,
+  status: "trialing",
+  trial_ends_at: "2026-11-03T00:00:00Z",
+  current_period_end: "2026-11-03T00:00:00Z",
+  cancel_at_period_end: false,
+  trial_available: false,
+};
 
 const BUSINESS: BusinessRead = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -147,7 +161,7 @@ describe("getMe", () => {
 
   it("returns ok with the caller's business when GET /me responds 200", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: "u1", email: "owner@acme.test", business: BUSINESS }), {
+      new Response(JSON.stringify({ id: "u1", email: "owner@acme.test", business: BUSINESS, subscription: SUBSCRIPTION }), {
         status: 200,
       }),
     );
@@ -157,7 +171,7 @@ describe("getMe", () => {
 
     expect(result).toEqual({
       kind: "ok",
-      data: { id: "u1", email: "owner@acme.test", business: BUSINESS },
+      data: { id: "u1", email: "owner@acme.test", business: BUSINESS, subscription: SUBSCRIPTION },
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.example.test/api/v1/me",
@@ -169,7 +183,7 @@ describe("getMe", () => {
 
   it("returns ok with business: null before onboarding", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: "u1", email: "owner@acme.test", business: null }), {
+      new Response(JSON.stringify({ id: "u1", email: "owner@acme.test", business: null, subscription: null }), {
         status: 200,
       }),
     );
@@ -179,7 +193,7 @@ describe("getMe", () => {
 
     expect(result).toEqual({
       kind: "ok",
-      data: { id: "u1", email: "owner@acme.test", business: null },
+      data: { id: "u1", email: "owner@acme.test", business: null, subscription: null },
     });
   });
 
@@ -441,5 +455,105 @@ describe("updateBusiness", () => {
     const result = await updateBusiness("token-123", BUSINESS.id, { name: "New name" });
 
     expect(result.kind).toBe("unreachable");
+  });
+});
+
+describe("billing client", () => {
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_API_BASE_URL = "https://api.example.test";
+  });
+
+  afterEach(() => {
+    process.env.NEXT_PUBLIC_API_BASE_URL = ORIGINAL_ENV;
+    vi.unstubAllGlobals();
+  });
+
+  function respond(status: number, body: unknown) {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const error = (code: string) => ({ error: { code, message: code } });
+
+  it("startCheckout posts the choice and returns the Stripe URL", async () => {
+    const fetchMock = respond(200, { url: "https://checkout.stripe.com/c/pay/cs_test_1" });
+
+    const result = await startCheckout("tok", "trial");
+
+    expect(result).toEqual({ kind: "ok", url: "https://checkout.stripe.com/c/pay/cs_test_1" });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://api.example.test/api/v1/billing/checkout");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ choice: "trial" });
+  });
+
+  it("startCheckout only follows redirects to Stripe's hosted pages", async () => {
+    for (const url of [
+      "javascript:alert(1)",
+      "http://checkout.stripe.com/c/pay/x",
+      "https://evil.example/checkout.stripe.com",
+      "https://checkout.stripe.com.evil.example/c/pay/x",
+    ]) {
+      respond(200, { url });
+      expect((await startCheckout("tok", "paid")).kind, url).toBe("unreachable");
+    }
+  });
+
+  it("startCheckout reports a busy billing row so the owner can retry", async () => {
+    respond(409, error("billing_busy"));
+    expect(await startCheckout("tok", "paid")).toEqual({ kind: "busy" });
+  });
+
+  it("startCheckout maps the two 409s by error code", async () => {
+    respond(409, error("trial_already_used"));
+    expect(await startCheckout("tok", "trial")).toEqual({ kind: "trial_already_used" });
+
+    respond(409, error("subscription_active"));
+    expect(await startCheckout("tok", "paid")).toEqual({ kind: "subscription_active" });
+  });
+
+  it("startCheckout maps 404 to no_business and 401 to unauthorized", async () => {
+    respond(404, error("business_not_found"));
+    expect(await startCheckout("tok", "trial")).toEqual({ kind: "no_business" });
+
+    respond(401, error("unauthorized"));
+    expect(await startCheckout("tok", "trial")).toEqual({ kind: "unauthorized" });
+  });
+
+  it("syncCheckout url-encodes the session id and treats 422 as not found", async () => {
+    const fetchMock = respond(422, error("validation_error"));
+
+    const result = await syncCheckout("tok", "cs_test/../x");
+
+    expect(result).toEqual({ kind: "not_found" });
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      "https://api.example.test/api/v1/billing/checkout/cs_test%2F..%2Fx/sync",
+    );
+  });
+
+  it("syncCheckout returns the subscription view", async () => {
+    respond(200, SUBSCRIPTION);
+    expect(await syncCheckout("tok", "cs_test_1")).toEqual({ kind: "ok", data: SUBSCRIPTION });
+  });
+
+  it("getBillingPlan returns the plan and rejects a malformed body", async () => {
+    const plan = { amount: 2900, currency: "usd", interval: "month", trial_days: 14, trial_available: true };
+    respond(200, plan);
+    expect(await getBillingPlan("tok")).toEqual({ kind: "ok", data: plan });
+
+    respond(200, { amount: "29" });
+    expect((await getBillingPlan("tok")).kind).toBe("unreachable");
+  });
+
+  it("openBillingPortal returns the portal URL or not_found", async () => {
+    respond(200, { url: "https://billing.stripe.com/p/session/x" });
+    expect(await openBillingPortal("tok")).toEqual({
+      kind: "ok",
+      url: "https://billing.stripe.com/p/session/x",
+    });
+
+    respond(404, error("billing_account_not_found"));
+    expect(await openBillingPortal("tok")).toEqual({ kind: "not_found" });
   });
 });

@@ -91,6 +91,7 @@
   --color-brand-red: var(--brand-red);
   --color-brand-blue: var(--brand-blue);
   --color-brand-yellow: var(--brand-yellow);
+  --color-brand-green: var(--brand-green);
 
   --font-sans: var(--font-oswald);
   --font-mono: var(--font-jetbrains-mono);

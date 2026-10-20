@@ -30,6 +30,12 @@ Every data-fetching page needs all three, not just the happy path — see `compo
 
 Vitest config is scoped to this package (`apps/web/vitest.config.ts`, `happy-dom` environment, `@vitejs/plugin-react`). Tests import `describe`/`it`/`expect` explicitly from `"vitest"` (no `globals: true`); `vitest.setup.ts` registers `@testing-library/jest-dom/vitest` matchers and an `afterEach(cleanup)` since globals are off. Test the typed API client against `global.fetch` (stub success / error-body / thrown-fetch / malformed-JSON cases), and test presentational components by passing each state of the client's result type as a prop rather than mocking the fetch at the component layer.
 
+## Routing and billing
+
+- Signed-in routing has one rule, `lib/billing/destinationFor(me)`: no business -> `/onboarding`, not entitled -> `/billing/plan`, entitled -> `/dashboard`. Every gated page or layout calls `GET /me` (cached per render via `lib/dashboard/current-me.ts`) and redirects with it. Middleware only adds defense in depth; the API enforces the same rule with a 402.
+- Payments are redirect-only: the API returns a Stripe Checkout or Portal URL and the client follows it (`https:` only, checked in `lib/api/client.ts`). No Stripe key or Stripe.js in this app.
+- Never show a plan as active from the URL: `/billing/return` only says so once `syncCheckout` / `getSubscription` report `entitled`.
+
 ## Pending (future slices)
 
 - Clerk integration: where auth state lives, how a page gets the current business.

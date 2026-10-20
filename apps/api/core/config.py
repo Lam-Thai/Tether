@@ -8,7 +8,7 @@ touching `os.environ` directly.
 import json
 from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -32,6 +32,41 @@ class Settings(BaseSettings):
     # Clerk's `azp` claim, restricted to the frontend origin(s) allowed to
     # mint tokens for this API. Empty means "don't check" (local dev).
     clerk_authorized_parties: Annotated[list[str], NoDecode] = []
+
+    # Stripe (integrations/stripe). Test-mode keys only outside production.
+    stripe_secret_key: str
+    stripe_webhook_secret: str
+    stripe_price_id: str
+    billing_trial_days: int = Field(default=14, ge=1, le=90)
+    # Public origin of apps/web; Checkout and Portal return URLs hang off it.
+    app_base_url: str
+
+    @field_validator("stripe_secret_key")
+    @classmethod
+    def _secret_key_is_a_stripe_key(cls, value: str) -> str:
+        if not value.startswith(("sk_", "rk_")):
+            raise ValueError("STRIPE_SECRET_KEY must be a Stripe secret or restricted key.")
+        return value
+
+    @field_validator("stripe_webhook_secret")
+    @classmethod
+    def _webhook_secret_is_a_signing_secret(cls, value: str) -> str:
+        # An empty secret would make HMAC verification forgeable by anyone.
+        if not value.startswith("whsec_") or len(value) <= len("whsec_"):
+            raise ValueError("STRIPE_WEBHOOK_SECRET must be a Stripe signing secret (whsec_...).")
+        return value
+
+    @model_validator(mode="after")
+    def _live_stripe_keys_only_in_production(self) -> "Settings":
+        is_live = self.stripe_secret_key.startswith(("sk_live_", "rk_live_"))
+        if is_live and self.environment != "production":
+            raise ValueError("A live Stripe key is only allowed when ENVIRONMENT=production.")
+        return self
+
+    @field_validator("app_base_url")
+    @classmethod
+    def _strip_trailing_slash(cls, value: str) -> str:
+        return value.rstrip("/")
 
     @field_validator("cors_origins", mode="before")
     @classmethod

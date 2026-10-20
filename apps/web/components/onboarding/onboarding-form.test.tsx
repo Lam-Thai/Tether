@@ -105,7 +105,7 @@ describe("OnboardingForm", () => {
       phone: null,
       contact_email: null,
     });
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/billing/plan"));
   });
 
   it("surfaces a 409 as a top-level banner instead of navigating", async () => {

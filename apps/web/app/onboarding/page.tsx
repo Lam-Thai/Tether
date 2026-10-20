@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 
 import { getMe } from "@/lib/api/client";
+import { destinationFor } from "@/lib/billing/destination";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { OnboardingForm } from "@/components/onboarding/onboarding-form";
 
@@ -23,7 +24,7 @@ export default async function OnboardingPage() {
     redirect("/sign-in");
   }
   if (me.kind === "ok" && me.data.business) {
-    redirect("/dashboard");
+    redirect(destinationFor(me.data));
   }
 
   return (

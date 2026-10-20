@@ -2,13 +2,13 @@
 
 import { useClerk } from "@clerk/nextjs";
 
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 
-export function SignOutButton() {
+export function SignOutButton({ variant = "inverse" }: { variant?: ButtonProps["variant"] }) {
   const { signOut } = useClerk();
 
   return (
-    <Button type="button" variant="inverse" size="sm" onClick={() => signOut({ redirectUrl: "/" })}>
+    <Button type="button" variant={variant} size="sm" onClick={() => signOut({ redirectUrl: "/" })}>
       Sign out
     </Button>
   );
