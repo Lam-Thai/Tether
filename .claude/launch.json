@@ -6,6 +6,13 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["dev"],
       "port": 3000
+    },
+    {
+      "name": "web-local-api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "web", "exec", "next", "dev", "--turbopack", "--port", "3001"],
+      "env": { "NEXT_PUBLIC_API_BASE_URL": "http://localhost:8000" },
+      "port": 3001
     }
   ]
 }
