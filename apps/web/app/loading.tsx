@@ -1,31 +1,34 @@
-// Next.js App Router convention: automatically used as the Suspense
-// fallback for this route segment while `page.tsx`'s async Server
-// Component awaits `getHealth()`. Shape mirrors the healthy-state layout
-// in `components/status-view.tsx` so there's no layout shift once data
-// resolves.
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// Next.js App Router convention: the Suspense fallback while `page.tsx`
+// awaits `getHealth()`. Mirrors the healthy-state layout of
+// `components/status-view.tsx` so nothing shifts once data resolves.
 export default function Loading() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background p-8">
-      <div className="mx-auto flex w-full max-w-xl flex-col gap-6">
-        <div className="flex flex-col gap-2">
-          <span className="font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase">
-            Tether status
-          </span>
-          <div className="h-8 w-64 animate-pulse rounded bg-border motion-reduce:animate-none" />
-          <div className="h-4 w-80 animate-pulse rounded bg-border motion-reduce:animate-none" />
+    <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1280px] flex-col px-6">
+      <div className="h-16" />
+      <main className="flex flex-1 items-start py-[clamp(3rem,8vw,6rem)]">
+        <div role="status" aria-busy="true" className="flex w-full max-w-3xl flex-col gap-8">
+          <span className="sr-only">Loading status</span>
+          <div className="flex flex-col gap-3">
+            <Eyebrow>Tether status</Eyebrow>
+            <Skeleton className="h-10 w-full max-w-md" />
+            <Skeleton className="h-5 w-full max-w-sm" />
+          </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr_1fr]">
+            {["API", "Database", "Version"].map((label) => (
+              <div
+                key={label}
+                className="flex flex-col gap-3 rounded-md border border-border bg-card p-5 shadow-card"
+              >
+                <Eyebrow>{label}</Eyebrow>
+                <Skeleton className="h-7 w-24" />
+              </div>
+            ))}
+          </div>
         </div>
-
-        <div className="grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-3">
-          {["API", "Database", "Version"].map((label) => (
-            <div key={label} className="flex flex-col gap-2 bg-card p-5">
-              <span className="font-mono text-xs tracking-[0.15em] text-muted-foreground uppercase">
-                {label}
-              </span>
-              <div className="h-5 w-20 animate-pulse rounded bg-border motion-reduce:animate-none" />
-            </div>
-          ))}
-        </div>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

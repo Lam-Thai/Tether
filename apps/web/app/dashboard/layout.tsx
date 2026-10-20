@@ -4,6 +4,7 @@ import { auth } from "@clerk/nextjs/server";
 import { getCurrentBusiness } from "@/lib/dashboard/current-business";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { SignOutButton } from "@/components/dashboard/sign-out-button";
+import { Wordmark } from "@/components/ui/construct";
 import { Eyebrow } from "@/components/ui/eyebrow";
 
 // This layout's whole job is deciding whether the signed-in owner has a
@@ -36,18 +37,23 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const businessName = business.kind === "ok" ? business.data.name : "Tether";
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <aside className="flex w-64 flex-col justify-between border-r border-border bg-card p-6">
+    <div className="flex min-h-[100dvh] flex-col bg-background md:flex-row">
+      <aside className="relative isolate flex flex-col gap-6 overflow-hidden bg-surface-dark p-6 text-surface-dark-foreground md:w-64 md:shrink-0 md:justify-between">
+        <div
+          aria-hidden
+          className="absolute -top-6 -right-10 -z-10 h-24 w-28 -rotate-12 bg-brand-red [clip-path:polygon(25%_0,100%_0,100%_100%,0_100%)]"
+        />
         <div className="flex flex-col gap-8">
+          <Wordmark inverse />
           <div className="flex flex-col gap-1">
-            <Eyebrow>Workspace</Eyebrow>
-            <p className="truncate text-sm font-semibold text-foreground">{businessName}</p>
+            <Eyebrow className="text-surface-dark-muted">Workspace</Eyebrow>
+            <p className="truncate text-lg font-semibold">{businessName}</p>
           </div>
           <DashboardNav />
         </div>
         <SignOutButton />
       </aside>
-      <main className="flex-1 p-8">{children}</main>
+      <main className="animate-enter flex-1 p-6 md:p-10">{children}</main>
     </div>
   );
 }

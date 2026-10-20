@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 
 import { getMe } from "@/lib/api/client";
+import { AuthShell } from "@/components/auth/auth-shell";
 import { OnboardingForm } from "@/components/onboarding/onboarding-form";
 
 // Always re-checks `GET /me` — this page's whole job is deciding whether
@@ -26,8 +27,8 @@ export default async function OnboardingPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background p-8">
+    <AuthShell>
       <OnboardingForm />
-    </main>
+    </AuthShell>
   );
 }

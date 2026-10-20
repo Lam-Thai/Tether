@@ -2,17 +2,12 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-/**
- * Flat card: hairline border, no shadow, no gradient — per the
- * minimalist-ui direction (taste-skill). Deliberately drops the
- * `shadow-sm` shadcn/ui ships by default.
- */
 function Card({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card"
       className={cn(
-        "bg-card text-card-foreground flex flex-col gap-4 rounded-xl border border-border",
+        "flex flex-col gap-4 rounded-md border border-border bg-card text-card-foreground shadow-card",
         className,
       )}
       {...props}
@@ -22,19 +17,20 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
 
 function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <div
-      data-slot="card-header"
-      className={cn("flex flex-col gap-1.5 p-6", className)}
-      {...props}
-    />
+    <div data-slot="card-header" className={cn("flex flex-col gap-2 p-6", className)} {...props} />
   );
 }
 
-function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
+/** Pass `as="h1"` when the card is the page's main content. */
+function CardTitle({
+  className,
+  as: Tag = "div",
+  ...props
+}: React.ComponentProps<"div"> & { as?: "div" | "h1" | "h2" | "h3" }) {
   return (
-    <div
+    <Tag
       data-slot="card-title"
-      className={cn("text-lg leading-none font-semibold tracking-tight", className)}
+      className={cn("text-h2 font-bold tracking-tight uppercase", className)}
       {...props}
     />
   );
@@ -44,16 +40,14 @@ function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-description"
-      className={cn("text-sm text-muted-foreground", className)}
+      className={cn("max-w-[72ch] text-base text-muted-foreground", className)}
       {...props}
     />
   );
 }
 
 function CardContent({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div data-slot="card-content" className={cn("px-6 pb-6", className)} {...props} />
-  );
+  return <div data-slot="card-content" className={cn("px-6 pb-6", className)} {...props} />;
 }
 
 export { Card, CardHeader, CardTitle, CardDescription, CardContent };

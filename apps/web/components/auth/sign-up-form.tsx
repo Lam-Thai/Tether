@@ -102,7 +102,7 @@ export function SignUpForm() {
     return (
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Check your email</CardTitle>
+          <CardTitle as="h1">Check your email</CardTitle>
           <CardDescription>Enter the 6-digit code we just sent you.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -113,7 +113,7 @@ export function SignUpForm() {
           >
             {formError && <FormError>{formError}</FormError>}
 
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="sign-up-code">Verification code</Label>
               <Input
                 id="sign-up-code"
@@ -138,14 +138,14 @@ export function SignUpForm() {
   return (
     <Card className="w-full max-w-sm">
       <CardHeader>
-        <CardTitle>Create your account</CardTitle>
+        <CardTitle as="h1">Create your account</CardTitle>
         <CardDescription>Set up Tether for your business.</CardDescription>
       </CardHeader>
       <CardContent>
         <form className="flex flex-col gap-4" onSubmit={createForm.handleSubmit(onCreate)} noValidate>
           {formError && <FormError>{formError}</FormError>}
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="sign-up-email">Email</Label>
             <Input id="sign-up-email" type="email" autoComplete="email" {...createForm.register("email")} />
             {createForm.formState.errors.email && (
@@ -153,7 +153,7 @@ export function SignUpForm() {
             )}
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="sign-up-password">Password</Label>
             <Input
               id="sign-up-password"
