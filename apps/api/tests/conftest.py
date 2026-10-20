@@ -15,10 +15,12 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete
 
 from core.app import create_app
+from core.billing import get_billing_gateway
 from core.config import settings
 from core.db import async_session_factory
 from core.tenant import get_signing_key_resolver
 from integrations.clerk.fake import build_fake_signing_key_resolver
+from integrations.stripe.fake import FakeBillingGateway
 from models.business import Business
 from models.user import User
 
@@ -67,15 +69,22 @@ def mint_token(rsa_keypair):
 
 
 @pytest.fixture
-def app(rsa_keypair):
-    """The FastAPI app with Clerk's JWKS fetch swapped for the in-memory
-    fake, so tests verify real signatures without any network call.
+def billing_gateway() -> FakeBillingGateway:
+    return FakeBillingGateway()
+
+
+@pytest.fixture
+def app(rsa_keypair, billing_gateway):
+    """The FastAPI app with Clerk's JWKS fetch and Stripe swapped for
+    in-memory fakes, so tests verify real signatures and billing flows
+    without any network call.
     """
     _, public_pem = rsa_keypair
     application = create_app()
     application.dependency_overrides[get_signing_key_resolver] = lambda: (
         build_fake_signing_key_resolver(public_pem)
     )
+    application.dependency_overrides[get_billing_gateway] = lambda: billing_gateway
     yield application
     application.dependency_overrides.clear()
 

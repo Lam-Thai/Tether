@@ -74,8 +74,9 @@ export function OnboardingForm() {
 
       switch (result.kind) {
         case "ok":
-          // Only navigate once the API confirms the business was created.
-          router.push("/dashboard");
+          // Only navigate once the API confirms the business was created. A new
+          // business has no plan yet, so the next stop is always plan selection.
+          router.push("/billing/plan");
           return;
         case "already_exists":
           setFormError("This account already has a business set up.");

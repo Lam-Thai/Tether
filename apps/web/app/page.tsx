@@ -1,38 +1,40 @@
-import Link from "next/link";
+import type { Metadata } from "next";
+import { auth } from "@clerk/nextjs/server";
 
-import { getHealth } from "@/lib/api/client";
-import { StatusView } from "@/components/status-view";
-import { buttonVariants } from "@/components/ui/button";
-import { Wordmark } from "@/components/ui/construct";
+import { ClosingCta, LandingFooter } from "@/components/landing/closing-footer";
+import { Hero } from "@/components/landing/hero";
+import { HowItWorks } from "@/components/landing/how-it-works";
+import { LandingHeader } from "@/components/landing/landing-header";
+import { Pricing } from "@/components/landing/pricing";
 
-// This page's data (via getHealth -> fetch(..., { cache: "no-store" })) is
-// a liveness check and must never be served from a static/prerendered
-// cache. `force-dynamic` makes that explicit instead of relying only on
-// Next's cache-based inference.
-export const dynamic = "force-dynamic";
+const description =
+  "Tether answers calls and chats, books real appointments into your Google Calendar, and texts you what it cannot handle.";
 
-export default async function HomePage() {
-  const result = await getHealth();
+export const metadata: Metadata = {
+  description,
+  openGraph: {
+    title: "Tether: AI receptionist for small businesses",
+    description,
+    type: "website",
+  },
+};
+
+// Static marketing content; the only per-request input is whether a Clerk
+// session exists, which swaps the signup CTA for "Go to dashboard".
+export default async function LandingPage() {
+  const { userId } = await auth();
+  const signedIn = userId !== null;
 
   return (
-    <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1280px] flex-col px-6">
-      <header className="flex h-16 items-center justify-between gap-4">
-        <Wordmark />
-        <nav aria-label="Account" className="flex items-center gap-4">
-          <Link
-            href="/sign-in"
-            className="text-base font-medium text-foreground underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          >
-            Sign in
-          </Link>
-          <Link href="/sign-up" className={buttonVariants({ size: "sm" })}>
-            Sign up
-          </Link>
-        </nav>
-      </header>
-      <main className="animate-enter flex flex-1 items-start py-[clamp(3rem,8vw,6rem)]">
-        <StatusView result={result} />
+    <>
+      <LandingHeader signedIn={signedIn} />
+      <main>
+        <Hero signedIn={signedIn} />
+        <HowItWorks />
+        <Pricing signedIn={signedIn} />
+        <ClosingCta signedIn={signedIn} />
       </main>
-    </div>
+      <LandingFooter />
+    </>
   );
 }

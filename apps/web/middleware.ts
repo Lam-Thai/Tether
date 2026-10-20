@@ -1,10 +1,15 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
 /**
- * Only `/dashboard` and `/onboarding` require an authenticated session.
- * Everything else (the status home page, sign-in, sign-up) stays public.
+ * Defense in depth only: every protected page also checks the session and
+ * `/me` itself, and the API enforces business + plan (402) on its own.
+ * Public: the landing page, `/status`, sign-in, sign-up.
  */
-const isProtectedRoute = createRouteMatcher(["/dashboard(.*)", "/onboarding(.*)"]);
+const isProtectedRoute = createRouteMatcher([
+  "/dashboard(.*)",
+  "/onboarding(.*)",
+  "/billing(.*)",
+]);
 
 export default clerkMiddleware(async (auth, request) => {
   if (isProtectedRoute(request)) {

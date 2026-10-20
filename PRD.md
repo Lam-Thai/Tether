@@ -79,7 +79,7 @@ The MVP will not include:
 
 * A native mobile application.
 * A complete CRM.
-* Payment processing.
+* Processing payments on behalf of businesses (e.g. customer deposits or booking payments). Owners' own Tether subscription is in scope, via Stripe-hosted Checkout (#28, ADR 0003).
 * Outbound sales calls.
 * Voice cloning.
 * Fully real-time, interruptible voice streaming.

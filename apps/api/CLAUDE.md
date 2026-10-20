@@ -19,7 +19,7 @@ tests/                # mirrors the layers above
 
 ## Settings
 
-`core.config.Settings` is the *only* place that reads environment variables. Every other module imports the `settings` singleton from `core.config` instead of touching `os.environ`. Required: `DATABASE_URL`, `CLERK_ISSUER` (e.g. `https://<slug>.clerk.accounts.dev`; `clerk_jwks_url` is derived from it, never set separately). Optional: `CORS_ORIGINS` (JSON array or comma-separated string), `CLERK_AUTHORIZED_PARTIES` (JSON array or comma-separated string of allowed `azp` origins — empty skips the check, for local dev), `ENVIRONMENT`, `APP_VERSION`. The app never reads `CLERK_SECRET_KEY`: RS256 verification only needs Clerk's public JWKS, so the backend has no Clerk secret at all.
+`core.config.Settings` is the *only* place that reads environment variables. Every other module imports the `settings` singleton from `core.config` instead of touching `os.environ`. Required: `DATABASE_URL`, `CLERK_ISSUER` (e.g. `https://<slug>.clerk.accounts.dev`; `clerk_jwks_url` is derived from it, never set separately). Required for billing: `STRIPE_SECRET_KEY` (test-mode `sk_test_`/`rk_test_` unless `ENVIRONMENT=production`; a live key elsewhere fails at startup), `STRIPE_WEBHOOK_SECRET` (`whsec_`, from `stripe listen` locally or the dashboard endpoint in deploys), `STRIPE_PRICE_ID`, `APP_BASE_URL` (the web origin Checkout and the Portal return to). Optional: `BILLING_TRIAL_DAYS` (default 14), `CORS_ORIGINS` (JSON array or comma-separated string), `CLERK_AUTHORIZED_PARTIES` (JSON array or comma-separated string of allowed `azp` origins — empty skips the check, for local dev), `ENVIRONMENT`, `APP_VERSION`. The app never reads `CLERK_SECRET_KEY`: RS256 verification only needs Clerk's public JWKS, so the backend has no Clerk secret at all.
 
 ## Auth and tenancy
 
@@ -48,10 +48,18 @@ Liveness/infra checks (`/health`) mount unversioned at the app root — they're 
 
 Async environment (`migrations/env.py`) reads `settings.database_url` through the same normalization `core.db` uses — never a hardcoded URL in `alembic.ini`. Workflow: change a SQLAlchemy model → `uv run alembic revision --autogenerate -m "..."` → hand-review the generated SQL (indexes on `business_id`, FKs, unique constraints, timestamps) → write and test the `downgrade()`. Never call `alembic upgrade head` from application startup code; it's a separate, explicit command.
 
+## Billing and entitlement
+
+- `services/billing.py` is the deep module (`start_checkout`, `sync_checkout`, `apply_event`, `open_portal`, `get_plan`, `summarize`, `access_for`). Stripe sits behind `integrations/stripe/port.py` (`BillingGateway`) with a real adapter (`adapter.py`) and `FakeBillingGateway` (`fake.py`); no Stripe SDK type leaves that package.
+- **Every business-feature router (Slice 4 onwards) depends on `core.billing.get_entitled_tenant`, not `get_tenant`.** It returns 402 `subscription_required` unless the business is `trialing`, `active` or `past_due`. Only onboarding, `/me`, `/business` and `/billing/*` stay on `get_tenant`.
+- Stripe is the source of truth. The webhook (`POST /api/v1/webhooks/stripe`, raw-body signature check, `stripe_events` dedupe) and the return-page sync both **re-fetch** the subscription from Stripe instead of trusting payloads, under a per-business row lock (`repositories/billing.py`).
+- Local webhooks: `stripe listen --forward-to localhost:8000/api/v1/webhooks/stripe`, then put the printed `whsec_...` in `STRIPE_WEBHOOK_SECRET`. Opt-in live smoke test: `STRIPE_LIVE_TESTS=1 uv run pytest -m live`.
+- No card data ever reaches Tether: Checkout and the Billing Portal are Stripe-hosted, and the web app holds no Stripe key at all.
+
 ## Still placeholders (land with the slice that needs them)
 
-- `UsageGuard` — not introduced yet; no outbound provider calls exist in this slice. `TenantContext` landed in slice 3 (`core/tenant.py`).
-- `integrations/clerk/` is the first provider client, behind `integrations/clerk/port.py` with a real JWKS adapter (`resolver.py`) and an in-memory fake (`fake.py`), per the root `CLAUDE.md`. Gemini/Twilio/Google Calendar still need their own.
+- `UsageGuard` — not introduced yet (#5). Until then Stripe calls rely on bounded SDK retries (`max_network_retries=2`), idempotency keys and a 15s per-call timeout; #5 must wrap `BillingGateway` too. `TenantContext` landed in slice 3 (`core/tenant.py`).
+- `integrations/clerk/` is the first provider client, behind `integrations/clerk/port.py` with a real JWKS adapter (`resolver.py`) and an in-memory fake (`fake.py`), per the root `CLAUDE.md`. `integrations/stripe/` (#28) follows the same shape. Gemini/Twilio/Google Calendar still need their own.
 
 ## Testing
 

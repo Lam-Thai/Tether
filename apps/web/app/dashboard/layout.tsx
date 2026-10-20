@@ -1,40 +1,42 @@
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 
-import { getCurrentBusiness } from "@/lib/dashboard/current-business";
+import { destinationFor } from "@/lib/billing/destination";
+import { getCurrentMe } from "@/lib/dashboard/current-me";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { SignOutButton } from "@/components/dashboard/sign-out-button";
+import { Callout } from "@/components/ui/callout";
 import { Wordmark } from "@/components/ui/construct";
 import { Eyebrow } from "@/components/ui/eyebrow";
 
-// This layout's whole job is deciding whether the signed-in owner has a
-// business yet, which must never be served from a cache.
+// Decides on every request whether the owner may be here at all (business
+// + trialing/active plan), so it must never be served from a cache.
 export const dynamic = "force-dynamic";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { getToken } = await auth();
   const token = await getToken();
 
-  // Middleware already protects `/dashboard(.*)`, so this should only be
-  // reachable with a session — but never assume that without checking.
+  // Middleware already protects `/dashboard(.*)`, but never assume that.
   if (!token) {
     redirect("/sign-in");
   }
 
-  const business = await getCurrentBusiness(token);
+  const me = await getCurrentMe(token);
 
-  if (business.kind === "not_found") {
-    redirect("/onboarding");
-  }
-
-  // A token that passed middleware but the API itself rejects (expired
-  // between the two checks, clock skew, revoked session) is the same
-  // "not actually signed in" case as the missing-token branch above.
-  if (business.kind === "unauthorized") {
+  // A token that passed middleware but the API rejects (expired between the
+  // two checks, revoked session) means "not actually signed in".
+  if (me.kind === "unauthorized") {
     redirect("/sign-in");
   }
+  if (me.kind === "ok") {
+    const destination = destinationFor(me.data);
+    if (destination !== "/dashboard") {
+      redirect(destination);
+    }
+  }
 
-  const businessName = business.kind === "ok" ? business.data.name : "Tether";
+  const businessName = me.kind === "ok" && me.data.business ? me.data.business.name : "Tether";
 
   return (
     <div className="flex min-h-[100dvh] flex-col bg-background md:flex-row">
@@ -53,7 +55,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </div>
         <SignOutButton />
       </aside>
-      <main className="animate-enter flex-1 p-6 md:p-10">{children}</main>
+      <main className="animate-enter flex-1 p-6 md:p-10">
+        {/* Without /me we can't confirm the plan, so no dashboard content. */}
+        {me.kind === "unreachable" ? (
+          <div className="max-w-3xl">
+            <Callout tone="danger" title="Can't load your workspace" headingLevel={1}>
+              {me.reason}
+            </Callout>
+          </div>
+        ) : (
+          children
+        )}
+      </main>
     </div>
   );
 }

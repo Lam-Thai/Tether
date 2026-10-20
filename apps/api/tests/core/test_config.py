@@ -3,6 +3,14 @@ from pydantic import ValidationError
 
 from core.config import Settings
 
+# The Stripe fields every successful Settings() needs; not under test here.
+STRIPE = {
+    "stripe_secret_key": "sk_test_placeholder",
+    "stripe_webhook_secret": "whsec_placeholder",
+    "stripe_price_id": "price_placeholder",
+    "app_base_url": "http://localhost:3000",
+}
+
 
 def test_missing_database_url_raises_clear_error(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -25,6 +33,7 @@ def test_missing_clerk_issuer_raises_clear_error(monkeypatch):
 def test_cors_origins_splits_comma_separated_string():
     settings = Settings(
         _env_file=None,  # pyright: ignore[reportCallIssue]
+        **STRIPE,
         database_url="postgresql://user:pass@localhost/db",
         clerk_issuer="https://example.clerk.accounts.dev",
         cors_origins="https://a.example,https://b.example",
@@ -38,6 +47,7 @@ def test_cors_origins_defaults_to_empty_list(monkeypatch):
 
     settings = Settings(
         _env_file=None,  # pyright: ignore[reportCallIssue]
+        **STRIPE,
         database_url="postgresql://user:pass@localhost/db",
         clerk_issuer="https://example.clerk.accounts.dev",
     )
@@ -48,6 +58,7 @@ def test_cors_origins_defaults_to_empty_list(monkeypatch):
 def test_clerk_authorized_parties_splits_comma_separated_string():
     settings = Settings(
         _env_file=None,  # pyright: ignore[reportCallIssue]
+        **STRIPE,
         database_url="postgresql://user:pass@localhost/db",
         clerk_issuer="https://example.clerk.accounts.dev",
         clerk_authorized_parties="https://a.example,https://b.example",
@@ -61,6 +72,7 @@ def test_clerk_authorized_parties_defaults_to_empty_list(monkeypatch):
 
     settings = Settings(
         _env_file=None,  # pyright: ignore[reportCallIssue]
+        **STRIPE,
         database_url="postgresql://user:pass@localhost/db",
         clerk_issuer="https://example.clerk.accounts.dev",
     )
@@ -71,8 +83,47 @@ def test_clerk_authorized_parties_defaults_to_empty_list(monkeypatch):
 def test_clerk_jwks_url_is_derived_from_issuer():
     settings = Settings(
         _env_file=None,  # pyright: ignore[reportCallIssue]
+        **STRIPE,
         database_url="postgresql://user:pass@localhost/db",
         clerk_issuer="https://example.clerk.accounts.dev/",
     )
 
     assert settings.clerk_jwks_url == "https://example.clerk.accounts.dev/.well-known/jwks.json"
+
+
+def _settings(**overrides):
+    values = {
+        "database_url": "postgresql://user:pass@localhost/db",
+        "clerk_issuer": "https://example.clerk.accounts.dev",
+        **STRIPE,
+        **overrides,
+    }
+    return Settings(_env_file=None, **values)  # pyright: ignore[reportCallIssue]
+
+
+def test_live_stripe_key_is_rejected_outside_production():
+    with pytest.raises(ValidationError, match="live Stripe key"):
+        _settings(stripe_secret_key="sk_live_abc", environment="local")
+
+
+def test_live_stripe_key_is_allowed_in_production():
+    assert _settings(stripe_secret_key="sk_live_abc", environment="production").environment == (
+        "production"
+    )
+
+
+def test_non_stripe_secret_key_is_rejected():
+    with pytest.raises(ValidationError, match="STRIPE_SECRET_KEY"):
+        _settings(stripe_secret_key="pk_test_publishable")
+
+
+def test_app_base_url_drops_trailing_slash():
+    assert _settings(app_base_url="https://tether.example/").app_base_url == (
+        "https://tether.example"
+    )
+
+
+@pytest.mark.parametrize("secret", ["", "whsec_", "sk_test_wrong_kind", "not-a-secret"])
+def test_webhook_secret_must_be_a_stripe_signing_secret(secret):
+    with pytest.raises(ValidationError, match="STRIPE_WEBHOOK_SECRET"):
+        _settings(stripe_webhook_secret=secret)

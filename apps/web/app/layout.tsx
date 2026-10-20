@@ -16,8 +16,12 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Tether status",
-  description: "Live health status for the Tether API and database.",
+  title: {
+    default: "Tether: AI receptionist for small businesses",
+    template: "%s | Tether",
+  },
+  description:
+    "Tether answers calls and chats, books real appointments into your Google Calendar, and texts you what it cannot handle.",
 };
 
 export default function RootLayout({

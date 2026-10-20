@@ -17,12 +17,27 @@ docker compose up --wait  # starts local Postgres and waits for its healthcheck 
 cp apps/api/.env.example apps/api/.env      # fill in DATABASE_URL etc.
 cp apps/web/.env.example apps/web/.env.local
 uv sync --directory apps/api               # installs Python dependencies
-uv run --directory apps/api alembic upgrade head   # run the (currently empty) baseline migration
+uv run --directory apps/api alembic upgrade head   # apply all migrations
 
 pnpm dev       # runs apps/web (Next.js) and apps/api (uvicorn --reload) together
 ```
 
-Open http://localhost:3000 — it should show `API: healthy · Database: connected`.
+Open http://localhost:3000 for the landing page, and http://localhost:3000/status for `API: healthy · Database: connected`.
+
+### Billing (Stripe test mode)
+
+`apps/api` won't start without the Stripe settings (see `apps/api/.env.example`). Use **test-mode** keys only; a live key is rejected unless `ENVIRONMENT=production`.
+
+1. In the Stripe Dashboard (test mode), copy the secret key into `STRIPE_SECRET_KEY`, and create a recurring monthly price; put its id in `STRIPE_PRICE_ID`.
+2. Set `APP_BASE_URL=http://localhost:3000`.
+3. Forward webhooks to the local API and copy the `whsec_...` it prints into `STRIPE_WEBHOOK_SECRET`:
+
+   ```sh
+   stripe login
+   stripe listen --forward-to localhost:8000/api/v1/webhooks/stripe
+   ```
+
+Pay with test card `4242 4242 4242 4242` (any future date, any CVC). The free trial needs no card.
 
 Other root commands:
 

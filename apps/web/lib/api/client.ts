@@ -144,11 +144,35 @@ export interface BusinessInput {
   contact_email?: string | null;
 }
 
+/** Billing access for the caller's business (`GET /billing/subscription`, `GET /me`). */
+export interface SubscriptionRead {
+  entitled: boolean;
+  /** Stripe's subscription status, or `null` before any subscription exists. */
+  status: string | null;
+  trial_ends_at: string | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+  trial_available: boolean;
+}
+
+/** `GET /billing/plan`: the price comes from Stripe, in minor units (cents). */
+export interface PlanRead {
+  amount: number;
+  currency: string;
+  interval: string;
+  trial_days: number;
+  trial_available: boolean;
+}
+
+export type PlanChoice = "trial" | "paid";
+
 /** The exact JSON contract returned by `GET /me`. */
 export interface MeRead {
   id: string;
   email: string;
   business: BusinessRead | null;
+  /** `null` until the caller has a business. */
+  subscription: SubscriptionRead | null;
 }
 
 export type MeResult =
@@ -198,6 +222,63 @@ function isBusinessRead(value: unknown): value is BusinessRead {
   );
 }
 
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isSubscriptionRead(value: unknown): value is SubscriptionRead {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+
+  return (
+    typeof candidate.entitled === "boolean" &&
+    isNullableString(candidate.status) &&
+    isNullableString(candidate.trial_ends_at) &&
+    isNullableString(candidate.current_period_end) &&
+    typeof candidate.cancel_at_period_end === "boolean" &&
+    typeof candidate.trial_available === "boolean"
+  );
+}
+
+function isPlanRead(value: unknown): value is PlanRead {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+
+  return (
+    typeof candidate.amount === "number" &&
+    typeof candidate.currency === "string" &&
+    typeof candidate.interval === "string" &&
+    typeof candidate.trial_days === "number" &&
+    typeof candidate.trial_available === "boolean"
+  );
+}
+
+// Checkout and the Billing Portal (test mode uses the same hosts).
+const STRIPE_REDIRECT_HOSTS = new Set(["checkout.stripe.com", "billing.stripe.com"]);
+
+/** Only follow redirects to Stripe's own hosted pages, even though they come from our API. */
+function isHttpsRedirect(value: unknown): value is { url: string } {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const url = (value as Record<string, unknown>).url;
+  if (typeof url !== "string") {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && STRIPE_REDIRECT_HOSTS.has(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function isMeRead(value: unknown): value is MeRead {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -208,7 +289,8 @@ function isMeRead(value: unknown): value is MeRead {
   return (
     typeof candidate.id === "string" &&
     typeof candidate.email === "string" &&
-    (candidate.business === null || isBusinessRead(candidate.business))
+    (candidate.business === null || isBusinessRead(candidate.business)) &&
+    (candidate.subscription === null || isSubscriptionRead(candidate.subscription))
   );
 }
 
@@ -238,7 +320,11 @@ type ApiFetchOutcome =
  * `{ kind: "unreachable" }` so each endpoint function only has to switch on
  * HTTP status codes it actually expects.
  */
-async function fetchApi(path: string, init: RequestInit): Promise<ApiFetchOutcome> {
+async function fetchApi(
+  path: string,
+  init: RequestInit,
+  timeoutMs = 5000,
+): Promise<ApiFetchOutcome> {
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
   if (!baseUrl) {
@@ -252,7 +338,7 @@ async function fetchApi(path: string, init: RequestInit): Promise<ApiFetchOutcom
   try {
     response = await fetch(`${normalizeBaseUrl(baseUrl)}/api/v1${path}`, {
       cache: "no-store",
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(timeoutMs),
       ...init,
     });
   } catch {
@@ -400,4 +486,110 @@ export async function updateBusiness(
   }
 
   return { kind: "unreachable", reason: "The API returned an unexpected response." };
+}
+
+// Billing. These calls reach Stripe through the API, so they get a longer
+// timeout than plain reads.
+const BILLING_TIMEOUT_MS = 20000;
+
+export type PlanResult =
+  | { kind: "ok"; data: PlanRead }
+  | { kind: "no_business" }
+  | { kind: "unauthorized" }
+  | { kind: "unreachable"; reason: string };
+
+export type SubscriptionResult =
+  | { kind: "ok"; data: SubscriptionRead }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "unreachable"; reason: string };
+
+export type CheckoutResult =
+  | { kind: "ok"; url: string }
+  | { kind: "subscription_active" }
+  | { kind: "trial_already_used" }
+  | { kind: "busy" }
+  | { kind: "no_business" }
+  | { kind: "unauthorized" }
+  | { kind: "unreachable"; reason: string };
+
+export type PortalResult =
+  | { kind: "ok"; url: string }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "unreachable"; reason: string };
+
+function errorCode(body: unknown): string | null {
+  return isApiErrorBody(body) ? body.error.code : null;
+}
+
+const UNEXPECTED = { kind: "unreachable", reason: "The API returned an unexpected response." } as const;
+
+/** Calls `GET /api/v1/billing/plan`. */
+export async function getBillingPlan(token: string): Promise<PlanResult> {
+  const outcome = await fetchApi("/billing/plan", { headers: authHeaders(token) }, BILLING_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 404) return { kind: "no_business" };
+  if (outcome.status === 200 && isPlanRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/billing/checkout`; on success, redirect the browser to `url`. */
+export async function startCheckout(token: string, choice: PlanChoice): Promise<CheckoutResult> {
+  const outcome = await fetchApi(
+    "/billing/checkout",
+    { method: "POST", headers: jsonAuthHeaders(token), body: JSON.stringify({ choice }) },
+    BILLING_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 404) return { kind: "no_business" };
+  if (outcome.status === 409) {
+    const code = errorCode(outcome.body);
+    if (code === "trial_already_used") return { kind: "trial_already_used" };
+    if (code === "billing_busy") return { kind: "busy" };
+    return { kind: "subscription_active" };
+  }
+  if (outcome.status === 200 && isHttpsRedirect(outcome.body)) {
+    return { kind: "ok", url: outcome.body.url };
+  }
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/billing/checkout/{sessionId}/sync` after Stripe redirects back. */
+export async function syncCheckout(token: string, sessionId: string): Promise<SubscriptionResult> {
+  const outcome = await fetchApi(
+    `/billing/checkout/${encodeURIComponent(sessionId)}/sync`,
+    { method: "POST", headers: authHeaders(token) },
+    BILLING_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  // 422 is a malformed id: from the owner's point of view, the same as unknown.
+  if (outcome.status === 404 || outcome.status === 422) return { kind: "not_found" };
+  if (outcome.status === 200 && isSubscriptionRead(outcome.body)) {
+    return { kind: "ok", data: outcome.body };
+  }
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/billing/portal`; on success, redirect the browser to `url`. */
+export async function openBillingPortal(token: string): Promise<PortalResult> {
+  const outcome = await fetchApi(
+    "/billing/portal",
+    { method: "POST", headers: authHeaders(token) },
+    BILLING_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 200 && isHttpsRedirect(outcome.body)) {
+    return { kind: "ok", url: outcome.body.url };
+  }
+  return UNEXPECTED;
 }

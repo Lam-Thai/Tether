@@ -3,7 +3,8 @@ autogenerate and `Base.metadata.create_all` (tests) as soon as anything
 imports `models` or `models.base`.
 """
 
+from models.billing import StripeEvent, Subscription
 from models.business import Business
 from models.user import User
 
-__all__ = ["Business", "User"]
+__all__ = ["Business", "StripeEvent", "Subscription", "User"]
