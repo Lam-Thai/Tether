@@ -17,8 +17,10 @@ Convention for data-fetching pages: Server Component does the fetch via the clie
 ## shadcn/ui + Tailwind conventions
 
 - `components/ui/*` holds shadcn-style primitives (`cn()` in `lib/utils.ts`, `class-variance-authority` for variants). `components.json` records the CLI config (`new-york` style, `@/components`, `@/lib`, `@/hooks` aliases) so `pnpm dlx shadcn add <component>` drops files in the right place.
-- Tailwind v4, CSS-first config: tokens live in `app/globals.css` under `:root` + `@theme inline` (warm monochrome palette — see root `CLAUDE.md` `## Design`). No `tailwind.config.ts`.
-- Design direction is `taste-skill:minimalist-ui`: flat cards (hairline `border-border`, no `shadow-*`), no gradients, one warm accent per non-happy state (`warn` = ochre, `danger` = terracotta) instead of saturated red/green alerts. Invoke `taste-skill:design-taste-frontend` before touching any UI.
+- Tailwind v4, CSS-first config: tokens live in `app/globals.css` under `:root` + `@theme inline`, implementing `DESIGN.md` (see root `CLAUDE.md` `## Design`). No `tailwind.config.ts`.
+- Use semantic tokens (`bg-primary`, `text-muted-foreground`, `border-input`, `bg-surface-dark`, ...), never raw hex in components. Fonts: Oswald (`font-sans`), JetBrains Mono (`font-mono`, for technical values).
+- States: `Callout` (`components/ui/callout.tsx`) for empty / warning / error panels, `FormError` / `FieldError` for forms, `Skeleton` for loading. Every state pairs color with a Lucide icon and text. Icons come from `lucide-react` only.
+- Invoke `taste-skill:design-taste-frontend` before touching any UI.
 
 ## Loading / error / empty states
 

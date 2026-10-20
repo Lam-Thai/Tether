@@ -1,20 +1,22 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { JetBrains_Mono, Oswald } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const oswald = Oswald({
+  variable: "--font-oswald",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
   subsets: ["latin"],
+  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
-  title: "Tether — Status",
+  title: "Tether status",
   description: "Live health status for the Tether API and database.",
 };
 
@@ -25,10 +27,9 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider>
-      <html lang="en">
-        <body
-          className={`${geistSans.variable} ${geistMono.variable} bg-background text-foreground antialiased`}
-        >
+      {/* Font variables live on <html> so :root-level --font-sans can resolve them. */}
+      <html lang="en" className={`${oswald.variable} ${jetbrainsMono.variable}`}>
+        <body className="bg-background text-foreground antialiased">
           {children}
         </body>
       </html>

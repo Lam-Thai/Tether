@@ -1,6 +1,6 @@
 import type { HealthResult } from "@/lib/api/client";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Callout } from "@/components/ui/callout";
 import { Eyebrow } from "@/components/ui/eyebrow";
 
 interface StatusViewProps {
@@ -16,24 +16,16 @@ export function StatusView({ result }: StatusViewProps) {
   if (result.kind === "unreachable") {
     return (
       <PageShell>
-        <Card className="border-danger-border bg-danger">
-          <CardHeader>
-            <Eyebrow className="text-danger-foreground/70">Tether status</Eyebrow>
-            <CardTitle className="text-danger-foreground">Can&apos;t reach the API</CardTitle>
-            <CardDescription className="text-danger-foreground/80">
-              {result.reason}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-danger-foreground/80">
-              Check that{" "}
-              <code className="rounded bg-danger-border/40 px-1 py-0.5 font-mono text-xs">
-                NEXT_PUBLIC_API_BASE_URL
-              </code>{" "}
-              points at a running deployment, then reload this page.
-            </p>
-          </CardContent>
-        </Card>
+        <Callout tone="danger" title="Can't reach the API" headingLevel={1}>
+          <p>{result.reason}</p>
+          <p className="mt-2">
+            Check that{" "}
+            <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground">
+              NEXT_PUBLIC_API_BASE_URL
+            </code>{" "}
+            points at a running deployment, then reload this page.
+          </p>
+        </Callout>
       </PageShell>
     );
   }
@@ -43,24 +35,24 @@ export function StatusView({ result }: StatusViewProps) {
 
   return (
     <PageShell>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-3">
         <Eyebrow>Tether status</Eyebrow>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+        <h1 className="text-h1 font-bold tracking-tight uppercase">
           {isHealthy ? "API: healthy · Database: connected" : "Database unavailable"}
         </h1>
-        <p className="max-w-md text-sm text-muted-foreground">
+        <p className="max-w-[72ch] text-base text-muted-foreground">
           {isHealthy
             ? "The API is reachable and the database is responding to queries."
             : "The API is reachable, but it could not reach the database."}
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-3">
-        <StatCell label="API" value="Reachable" tone="neutral" />
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr_1fr]">
+        <StatCell label="API" value="Reachable" tone="success" />
         <StatCell
           label="Database"
           value={data.db === "connected" ? "Connected" : "Error"}
-          tone={data.db === "connected" ? "neutral" : "warn"}
+          tone={data.db === "connected" ? "success" : "warning"}
         />
         <StatCell label="Version" value={data.version} tone="neutral" mono />
       </div>
@@ -69,7 +61,7 @@ export function StatusView({ result }: StatusViewProps) {
 }
 
 function PageShell({ children }: { children: React.ReactNode }) {
-  return <div className="mx-auto flex w-full max-w-xl flex-col gap-6">{children}</div>;
+  return <div className="flex w-full max-w-3xl flex-col gap-8">{children}</div>;
 }
 
 function StatCell({
@@ -84,10 +76,8 @@ function StatCell({
   mono?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-2 bg-card p-5">
-      <span className="font-mono text-xs tracking-[0.15em] text-muted-foreground uppercase">
-        {label}
-      </span>
+    <div className="flex flex-col gap-3 rounded-md border border-border bg-card p-5 shadow-card">
+      <Eyebrow>{label}</Eyebrow>
       <Badge tone={tone} className={mono ? "font-mono tracking-normal normal-case" : undefined}>
         {value}
       </Badge>

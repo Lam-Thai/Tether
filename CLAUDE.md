@@ -66,13 +66,14 @@ Local Postgres for `apps/api`: `docker compose up -d` at the repo root (see `doc
 
 ## Design
 
-UI in `apps/web` follows one direction, set by the `taste-skill` plugin (enabled in `.claude/settings.json`). See `docs/adr/0001-design-direction-taste-skill.md`.
+All UI in `apps/web` (marketing and product) follows one design system: **Construtivismo Dinâmico Tech**, defined in `apps/web/DESIGN.md`. See `docs/adr/0002-design-system-construtivismo-dinamico.md`, which supersedes ADR 0001.
 
-- Before writing or changing any UI, invoke `taste-skill:design-taste-frontend`. It is the anti-slop gate and runs the pre-flight check.
-- Direction: `taste-skill:minimalist-ui`. Warm monochrome, typographic contrast, flat bento grids, no gradients, no heavy shadows. Use one direction only; don't mix styles.
-- Redesigns or audits of existing screens: `taste-skill:redesign-existing-projects`.
-- Don't use `gpt-taste`, `industrial-brutalist-ui`, `image-to-code`, or the `imagegen-*` skills for app UI.
-- taste-skill sits on top of shadcn/ui + Tailwind. It decides tokens, spacing, type and states; it doesn't replace the component library.
+- Before writing or changing any UI, invoke `taste-skill:design-taste-frontend`. It is the anti-slop gate and runs the pre-flight check, but the direction comes from `DESIGN.md`, not from a taste-skill style.
+- `DESIGN.md`'s **Resolved decisions** table overrides the spec text wherever they disagree (contrast fixes, no pure black, light mode only). Add a new visual need as a token or a decision there, never as a one-off hex value in a component.
+- Redesigns or audits of existing screens: `taste-skill:redesign-existing-projects`, against `DESIGN.md`.
+- Don't use `minimalist-ui`, `gpt-taste`, `industrial-brutalist-ui`, `image-to-code`, or the `imagegen-*` skills for app UI.
+- The design system sits on top of shadcn/ui + Tailwind. It decides tokens, spacing, type and states; it doesn't replace the component library.
+- `tooling/repo-hygiene.test.ts` fails CI on `h-screen`, pure black, gradients, or emoji in `apps/web/{app,components}`.
 
 ## Agent skills
 

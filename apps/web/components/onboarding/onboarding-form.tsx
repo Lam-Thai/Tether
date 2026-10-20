@@ -98,7 +98,7 @@ export function OnboardingForm() {
   return (
     <Card className="w-full max-w-lg">
       <CardHeader>
-        <CardTitle>Set up your business</CardTitle>
+        <CardTitle as="h1">Set up your business</CardTitle>
         <CardDescription>
           Tell Tether about your business so it can start answering as you.
         </CardDescription>
@@ -107,25 +107,25 @@ export function OnboardingForm() {
         <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)} noValidate>
           {formError && <FormError>{formError}</FormError>}
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="business-name">Business name</Label>
             <Input id="business-name" {...register("name")} />
             {errors.name && <FieldError>{errors.name.message}</FieldError>}
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="business-industry">Industry</Label>
             <Input id="business-industry" {...register("industry")} />
             {errors.industry && <FieldError>{errors.industry.message}</FieldError>}
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="business-address">Address</Label>
             <Input id="business-address" {...register("address")} />
             {errors.address && <FieldError>{errors.address.message}</FieldError>}
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="business-timezone">Timezone</Label>
             <Select id="business-timezone" {...register("timezone")}>
               <option value="">Select a timezone…</option>
@@ -138,13 +138,13 @@ export function OnboardingForm() {
             {errors.timezone && <FieldError>{errors.timezone.message}</FieldError>}
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="business-phone">Phone (optional)</Label>
             <Input id="business-phone" type="tel" {...register("phone")} />
             {errors.phone && <FieldError>{errors.phone.message}</FieldError>}
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="business-contact-email">Contact email (optional)</Label>
             <Input id="business-contact-email" type="email" {...register("contact_email")} />
             {errors.contact_email && <FieldError>{errors.contact_email.message}</FieldError>}

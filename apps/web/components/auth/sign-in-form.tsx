@@ -66,20 +66,20 @@ export function SignInForm() {
   return (
     <Card className="w-full max-w-sm">
       <CardHeader>
-        <CardTitle>Sign in</CardTitle>
+        <CardTitle as="h1">Sign in</CardTitle>
         <CardDescription>Access your Tether workspace.</CardDescription>
       </CardHeader>
       <CardContent>
         <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)} noValidate>
           {formError && <FormError>{formError}</FormError>}
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="sign-in-email">Email</Label>
             <Input id="sign-in-email" type="email" autoComplete="email" {...register("email")} />
             {errors.email && <FieldError>{errors.email.message}</FieldError>}
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="sign-in-password">Password</Label>
             <Input
               id="sign-in-password"
