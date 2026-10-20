@@ -1,7 +1,7 @@
 import type { HealthResult } from "@/lib/api/client";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 interface StatusViewProps {
   result: HealthResult;
@@ -70,19 +70,6 @@ export function StatusView({ result }: StatusViewProps) {
 
 function PageShell({ children }: { children: React.ReactNode }) {
   return <div className="mx-auto flex w-full max-w-xl flex-col gap-6">{children}</div>;
-}
-
-function Eyebrow({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <span
-      className={cn(
-        "font-mono text-xs tracking-[0.2em] text-muted-foreground uppercase",
-        className,
-      )}
-    >
-      {children}
-    </span>
-  );
 }
 
 function StatCell({

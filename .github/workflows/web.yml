@@ -14,6 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NEXT_PUBLIC_API_BASE_URL: https://example.com
+      # Dummy, syntactically-valid Clerk test keys (not real credentials) —
+      # `@clerk/nextjs` requires both to be present for `next build` to
+      # succeed, even though this CI job never talks to Clerk.
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
+      CLERK_SECRET_KEY: sk_test_ZXhhbXBsZS1zZWNyZXQta2V5LWZvci1jaS1vbmx5LTAwMDAwMDAwMDA
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
