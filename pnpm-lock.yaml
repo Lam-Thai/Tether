@@ -186,10 +186,10 @@ importers:
     dependencies:
       '@clerk/nextjs':
         specifier: ^7.9.15
-        version: 7.9.15(next@15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.0(react@19.1.0))(react@19.1.0))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+        version: 7.9.15(next@15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.10(react@19.1.10))(react@19.1.10))(react-dom@19.1.10(react@19.1.10))(react@19.1.10)
       '@hookform/resolvers':
         specifier: ^5.9.1
-        version: 5.9.1(react-hook-form@7.90.0(@types/react@19.3.0)(react@19.1.0))(zod@4.6.7)
+        version: 5.9.1(react-hook-form@7.90.0(@types/react@19.3.0)(react@19.1.10))(zod@4.6.7)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -198,16 +198,16 @@ importers:
         version: 2.1.1
       next:
         specifier: 15.5.27
-        version: 15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+        version: 15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.10(react@19.1.10))(react@19.1.10)
       react:
-        specifier: 19.1.0
-        version: 19.1.0
+        specifier: 19.1.10
+        version: 19.1.10
       react-dom:
-        specifier: 19.1.0
-        version: 19.1.0(react@19.1.0)
+        specifier: 19.1.10
+        version: 19.1.10(react@19.1.10)
       react-hook-form:
         specifier: ^7.90.0
-        version: 7.90.0(@types/react@19.3.0)(react@19.1.0)
+        version: 7.90.0(@types/react@19.3.0)(react@19.1.10)
       tailwind-merge:
         specifier: ^3.7.0
         version: 3.7.0
@@ -232,7 +232,7 @@ importers:
         version: 7.0.1(@testing-library/dom@10.4.2)(vitest@5.0.4(@types/node@24.19.2)(happy-dom@21.0.1)(vite@8.3.4(@types/node@24.19.2)(jiti@2.7.0)))
       '@testing-library/react':
         specifier: ^16.3.3
-        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.1.10(react@19.1.10))(react@19.1.10)
       '@testing-library/user-event':
         specifier: ^14.6.8
         version: 14.6.8(@testing-library/dom@10.4.2)
@@ -2303,10 +2303,10 @@ packages:
   queue-microtask@1.2.3:
     resolution: {integrity: sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==}
 
-  react-dom@19.1.0:
-    resolution: {integrity: sha512-Xs1hdnE+DyKgeHJeJznQmYMIBG3TKIHJJT95Q58nHLSrElKlGQqDTR2HQ9fx5CN/Gk6Vh/kupBTDLU11/nDk/g==}
+  react-dom@19.1.10:
+    resolution: {integrity: sha512-EDzJj/XjpSk+4biljInEj7y4f1qb+Hnl3kYvSqArStcAAgTHAj9pJM03Hi69JJZmVsyN/de2hOAouPxLMYEDbA==}
     peerDependencies:
-      react: ^19.1.0
+      react: ^19.1.10
 
   react-hook-form@7.90.0:
     resolution: {integrity: sha512-+NdG0FLzCPhFOp2NNxaUYLF9fyZhNjx9FTBBSYWF71/l6BBlmIc/j6xlp3DbaHWLJbIG7Zd8oznA19xJClU97w==}
@@ -2324,8 +2324,8 @@ packages:
   react-is@17.0.2:
     resolution: {integrity: sha512-w2GsyukL62IJnlaff/nRegPQR94C/XXamvMWmSHRJ4y7Ts/4ocGRmTHvOs8PSE6pB3dWOrD/nueuU5sduBsQ4w==}
 
-  react@19.1.0:
-    resolution: {integrity: sha512-FS+XFBNvn3GTAWq26joslQgWNoFu08F4kl0J4CgdNKADkdSGXQyTCnKteIAJy96Br6YbpEU1LSzV5dYtjMkMDg==}
+  react@19.1.10:
+    resolution: {integrity: sha512-xLes4RnWjC02mmkdHO2GPNjO0le6RMBPLYWKMaMf4jUIMFjTqrYBobxWAh8rU0pjfefJ6OLdef9zbYj+7iXH9Q==}
     engines: {node: '>=0.10.0'}
 
   redent@3.0.0:
@@ -2880,42 +2880,42 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@clerk/backend@3.23.2(react-dom@19.1.0(react@19.1.0))(react@19.1.0)':
+  '@clerk/backend@3.23.2(react-dom@19.1.10(react@19.1.10))(react@19.1.10)':
     dependencies:
-      '@clerk/shared': 4.40.0(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      '@clerk/shared': 4.40.0(react-dom@19.1.10(react@19.1.10))(react@19.1.10)
       standardwebhooks: 1.1.1
       tslib: 2.8.1
     transitivePeerDependencies:
       - react
       - react-dom
 
-  '@clerk/nextjs@7.9.15(next@15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.0(react@19.1.0))(react@19.1.0))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)':
+  '@clerk/nextjs@7.9.15(next@15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.10(react@19.1.10))(react@19.1.10))(react-dom@19.1.10(react@19.1.10))(react@19.1.10)':
     dependencies:
-      '@clerk/backend': 3.23.2(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      '@clerk/react': 6.17.8(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      '@clerk/shared': 4.40.0(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      next: 15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      react: 19.1.0
-      react-dom: 19.1.0(react@19.1.0)
+      '@clerk/backend': 3.23.2(react-dom@19.1.10(react@19.1.10))(react@19.1.10)
+      '@clerk/react': 6.17.8(react-dom@19.1.10(react@19.1.10))(react@19.1.10)
+      '@clerk/shared': 4.40.0(react-dom@19.1.10(react@19.1.10))(react@19.1.10)
+      next: 15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.10(react@19.1.10))(react@19.1.10)
+      react: 19.1.10
+      react-dom: 19.1.10(react@19.1.10)
       server-only: 0.0.1
       tslib: 2.8.1
 
-  '@clerk/react@6.17.8(react-dom@19.1.0(react@19.1.0))(react@19.1.0)':
+  '@clerk/react@6.17.8(react-dom@19.1.10(react@19.1.10))(react@19.1.10)':
     dependencies:
-      '@clerk/shared': 4.40.0(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
-      react: 19.1.0
-      react-dom: 19.1.0(react@19.1.0)
+      '@clerk/shared': 4.40.0(react-dom@19.1.10(react@19.1.10))(react@19.1.10)
+      react: 19.1.10
+      react-dom: 19.1.10(react@19.1.10)
       tslib: 2.8.1
 
-  '@clerk/shared@4.40.0(react-dom@19.1.0(react@19.1.0))(react@19.1.0)':
+  '@clerk/shared@4.40.0(react-dom@19.1.10(react@19.1.10))(react@19.1.10)':
     dependencies:
       '@tanstack/query-core': 5.104.2
       dequal: 2.0.3
       glob-to-regexp: 0.4.1
       js-cookie: 3.0.8
     optionalDependencies:
-      react: 19.1.0
-      react-dom: 19.1.0(react@19.1.0)
+      react: 19.1.10
+      react-dom: 19.1.10(react@19.1.10)
 
   '@emnapi/runtime@1.11.3':
     dependencies:
@@ -2968,10 +2968,10 @@ snapshots:
       '@eslint/core': 0.17.0
       levn: 0.4.1
 
-  '@hookform/resolvers@5.9.1(react-hook-form@7.90.0(@types/react@19.3.0)(react@19.1.0))(zod@4.6.7)':
+  '@hookform/resolvers@5.9.1(react-hook-form@7.90.0(@types/react@19.3.0)(react@19.1.10))(zod@4.6.7)':
     dependencies:
       '@standard-schema/utils': 0.3.0
-      react-hook-form: 7.90.0(@types/react@19.3.0)(react@19.1.0)
+      react-hook-form: 7.90.0(@types/react@19.3.0)(react@19.1.10)
     optionalDependencies:
       zod: 4.6.7
 
@@ -3310,12 +3310,12 @@ snapshots:
     optionalDependencies:
       vitest: 5.0.4(@types/node@24.19.2)(happy-dom@21.0.1)(vite@8.3.4(@types/node@24.19.2)(jiti@2.7.0))
 
-  '@testing-library/react@16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)':
+  '@testing-library/react@16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.1.10(react@19.1.10))(react@19.1.10)':
     dependencies:
       '@babel/runtime': 7.29.10
       '@testing-library/dom': 10.4.2
-      react: 19.1.0
-      react-dom: 19.1.0(react@19.1.0)
+      react: 19.1.10
+      react-dom: 19.1.10(react@19.1.10)
     optionalDependencies:
       '@types/react': 19.3.0
       '@types/react-dom': 19.3.0(@types/react@19.3.0)
@@ -4503,15 +4503,15 @@ snapshots:
 
   natural-compare@1.4.0: {}
 
-  next@15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.0(react@19.1.0))(react@19.1.0):
+  next@15.5.27(@babel/core@7.29.7(supports-color@7.2.0))(@types/node@24.19.2)(react-dom@19.1.10(react@19.1.10))(react@19.1.10):
     dependencies:
       '@next/env': 15.5.27
       '@swc/helpers': 0.5.15
       caniuse-lite: 1.0.30001816
       postcss: 8.4.31
-      react: 19.1.0
-      react-dom: 19.1.0(react@19.1.0)
-      styled-jsx: 5.1.6(@babel/core@7.29.7(supports-color@7.2.0))(react@19.1.0)
+      react: 19.1.10
+      react-dom: 19.1.10(react@19.1.10)
+      styled-jsx: 5.1.6(@babel/core@7.29.7(supports-color@7.2.0))(react@19.1.10)
     optionalDependencies:
       '@next/swc-darwin-arm64': 15.5.27
       '@next/swc-darwin-x64': 15.5.27
@@ -4646,14 +4646,14 @@ snapshots:
 
   queue-microtask@1.2.3: {}
 
-  react-dom@19.1.0(react@19.1.0):
+  react-dom@19.1.10(react@19.1.10):
     dependencies:
-      react: 19.1.0
+      react: 19.1.10
       scheduler: 0.26.0
 
-  react-hook-form@7.90.0(@types/react@19.3.0)(react@19.1.0):
+  react-hook-form@7.90.0(@types/react@19.3.0)(react@19.1.10):
     dependencies:
-      react: 19.1.0
+      react: 19.1.10
     optionalDependencies:
       '@types/react': 19.3.0
 
@@ -4661,7 +4661,7 @@ snapshots:
 
   react-is@17.0.2: {}
 
-  react@19.1.0: {}
+  react@19.1.10: {}
 
   redent@3.0.0:
     dependencies:
@@ -4926,10 +4926,10 @@ snapshots:
 
   strip-json-comments@3.1.1: {}
 
-  styled-jsx@5.1.6(@babel/core@7.29.7(supports-color@7.2.0))(react@19.1.0):
+  styled-jsx@5.1.6(@babel/core@7.29.7(supports-color@7.2.0))(react@19.1.10):
     dependencies:
       client-only: 0.0.1
-      react: 19.1.0
+      react: 19.1.10
     optionalDependencies:
       '@babel/core': 7.29.7(supports-color@7.2.0)
 
