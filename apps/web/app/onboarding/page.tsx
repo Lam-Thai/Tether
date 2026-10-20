@@ -13,11 +13,16 @@ export default async function OnboardingPage() {
   const { getToken } = await auth();
   const token = await getToken();
 
-  if (token) {
-    const me = await getMe(token);
-    if (me.kind === "ok" && me.data.business) {
-      redirect("/dashboard");
-    }
+  if (!token) {
+    redirect("/sign-in");
+  }
+
+  const me = await getMe(token);
+  if (me.kind === "unauthorized") {
+    redirect("/sign-in");
+  }
+  if (me.kind === "ok" && me.data.business) {
+    redirect("/dashboard");
   }
 
   return (
