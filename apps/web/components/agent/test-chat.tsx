@@ -16,6 +16,7 @@ import {
 import { AGENT_LIMITS, testMessageSchema } from "@/lib/validation/agent";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Callout } from "@/components/ui/callout";
 import { FieldError, FormError } from "@/components/ui/form-error";
 import { Label } from "@/components/ui/label";
 import { controlClasses } from "@/components/ui/input";
@@ -25,6 +26,11 @@ const CHAT_PATH = "/dashboard/agent";
 const SESSION_EXPIRED = "Your session has expired. Please sign in again.";
 export const FALLBACK_NOTE =
   "The receptionist could not answer properly. This is a fallback message.";
+
+export const USAGE_LIMITED_NOTE =
+  "Today's AI limit is reached, so replies use the safe fallback until 00:00 UTC.";
+export const CONCURRENCY_NOTE =
+  "Too many conversations are active right now. End one, or try again in a few minutes.";
 
 /** What the server could (or could not) restore from `?chat=`. */
 export type ChatLoad =
@@ -37,6 +43,7 @@ type ChatError =
   | { kind: "subscription_required" }
   | { kind: "retry"; text: string }
   | { kind: "busy" }
+  | { kind: "concurrency_limited" }
   | { kind: "retry_end"; text: string };
 
 export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoad }) {
@@ -51,6 +58,8 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
   const [pending, setPending] = useState(false);
   const [ending, setEnding] = useState(false);
   const [error, setError] = useState<ChatError | null>(null);
+  // From the latest turn response only; not persisted, so a reload does not show it.
+  const [usageLimited, setUsageLimited] = useState(false);
   const [notice, setNotice] = useState<string | null>(
     chat.kind === "unavailable"
       ? chat.reason === "not_found"
@@ -95,6 +104,7 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
     setDraft("");
     setError(null);
     setNotice(null);
+    setUsageLimited(false);
     router.replace(CHAT_PATH, { scroll: false });
   }
 
@@ -120,6 +130,7 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
           setInteractionId(turn.interaction_id);
           setMessages((current) => [...current, ...turn.messages]);
           setEnded(turn.ended);
+          setUsageLimited(turn.usage_limited);
           setDraft("");
           if (isNewChat) {
             router.replace(`${CHAT_PATH}?chat=${turn.interaction_id}`, { scroll: false });
@@ -131,6 +142,9 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
           return;
         case "busy":
           setError({ kind: "busy" });
+          return;
+        case "concurrency_limited":
+          setError({ kind: "concurrency_limited" });
           return;
         case "not_found":
           setError({ kind: "message", text: "This chat could not be found. Start a new chat." });
@@ -260,6 +274,29 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
         </div>
 
         <div className="flex flex-col gap-3 border-t border-border px-6 py-4">
+          {usageLimited && (
+            <Callout tone="warning" title="AI limit reached" headingLevel={3} compact>
+              {USAGE_LIMITED_NOTE}{" "}
+              <Link href="/dashboard/settings/usage" className="font-medium underline">
+                View usage
+              </Link>
+            </Callout>
+          )}
+          {error?.kind === "concurrency_limited" && (
+            <Callout
+              tone="warning"
+              title="Too many conversations"
+              headingLevel={3}
+              compact
+              action={
+                <button type="button" onClick={send} className="text-sm font-medium underline">
+                  Retry
+                </button>
+              }
+            >
+              {CONCURRENCY_NOTE}
+            </Callout>
+          )}
           {error?.kind === "message" && <FormError>{error.text}</FormError>}
           {error?.kind === "subscription_required" && (
             <FormError>

@@ -10,8 +10,14 @@ conversation correct:
 - Gemini proposes, the backend validates. The raw reply is parsed against
   `AgentTurn`; a bad reply, or one asking for a tool that isn't registered,
   is invalid and is never acted on. One retry, then a fixed fallback line.
-  The fallback strings below are the only agent text that does not come
+  The fallback lines below are the only agent text that does not come
   from the model or from the owner's greeting.
+- Every model call goes through `UsageGuard.metered`, inside `retry_bounded`
+  (so each attempt is metered). A reached limit means no model call at all:
+  the turn answers with the quota fallback, which points the customer to the
+  business's own contact details, and the interaction is flagged for a human.
+  It is never retried. A new conversation is admitted only while the
+  concurrency limits allow it.
 - A row lock on the interaction is taken only after the model call, just to
   allocate message sequence numbers and merge state. It is never held across
   the (slow) model call.
@@ -32,13 +38,30 @@ from typing import Any, Literal, Protocol
 from pydantic import ValidationError
 
 from core.errors import AppError
+from core.retry import RetryPolicy, retry_bounded
 from core.tenant import Tenant
-from integrations.llm.port import LLMClient, LLMUnavailableError, ModelMessage, ModelRequest
+from integrations.llm.port import (
+    LLM_RETRY,
+    LLMClient,
+    LLMUnavailableError,
+    ModelMessage,
+    ModelReply,
+    ModelRequest,
+    is_retryable,
+)
+from models.business import Business
 from models.interaction import Interaction, InteractionMessage
 from schemas.agent_turn import AgentTurn
 from services.agent import AgentStore, load_agent, require_business
 from services.prompt_builder import BusinessFacts, Channel, Persona, PromptContext, Tone, build
 from services.tools import ToolRegistry
+from services.usage import (
+    ActiveCounts,
+    LimitExceededError,
+    UsageGuard,
+    UsageKind,
+    UsageUnavailableError,
+)
 
 logger = logging.getLogger("tether.conversation")
 
@@ -47,7 +70,23 @@ PROVIDER_FALLBACK = "Sorry, I'm having trouble responding right now. Please try 
 FALLBACK_INTENT = "UNKNOWN"
 MAX_RECORDED_FAILURES = 50
 
-FailureKind = Literal["invalid_output", "provider_unavailable"]
+FailureKind = Literal["invalid_output", "provider_unavailable", "usage_limited"]
+
+
+def quota_fallback(business: Business) -> str:
+    """The fixed reply when a usage limit is reached (PRD §9.4): no model call,
+    and a human follow-up through the business's own contact details. It
+    promises nothing the backend hasn't done (no callback is scheduled)."""
+    contacts = [c for c in (business.phone, business.contact_email) if c]
+    if contacts:
+        return (
+            "Sorry, I can't help with that right now. Please reach the team directly "
+            f"at {' or '.join(contacts)} and someone will help you."
+        )
+    return (
+        "Sorry, I can't help with that right now. "
+        f"Please contact {business.name} directly and someone will help you."
+    )
 
 
 class InteractionNotFoundError(AppError):
@@ -61,6 +100,13 @@ class InteractionEndedError(AppError):
 
 
 class ConversationStore(AgentStore, Protocol):
+    async def lock_admission_and_count(
+        self, business_id: uuid.UUID, idle_minutes: int
+    ) -> tuple[int, int]:
+        """(all businesses, this business) recently active interactions, counted
+        under a lock held until the transaction ends (call before creating one)."""
+        ...
+
     async def create_interaction(self, business_id: uuid.UUID, channel: str) -> Interaction: ...
     async def get_interaction(
         self, business_id: uuid.UUID, interaction_id: uuid.UUID, channel: str
@@ -98,6 +144,8 @@ class TurnResult:
     status: str
     ended: bool
     fallback: bool
+    # The reply is the quota fallback: a usage limit was reached, no model call made.
+    usage_limited: bool
     # Created by this turn: the greeting (new chat), the customer's message, the reply.
     messages: tuple[MessageView, ...]
 
@@ -117,6 +165,7 @@ class _Outcome:
     turn: AgentTurn | None
     fallback_text: str
     failures: list[dict[str, str]]
+    usage_limited: bool = False
 
 
 def _view(message: InteractionMessage, state: dict[str, Any] | None) -> MessageView:
@@ -143,12 +192,17 @@ class ConversationEngine:
         tools: ToolRegistry,
         history_limit: int,
         turn_timeout_seconds: float,
+        *,
+        usage: UsageGuard,
+        llm_retry: RetryPolicy = LLM_RETRY,
     ) -> None:
         self._store = store
         self._llm = llm
         self._tools = tools
         self._history_limit = history_limit
         self._turn_timeout = turn_timeout_seconds
+        self._usage = usage
+        self._llm_retry = llm_retry
 
     async def handle_turn(
         self, tenant: Tenant, interaction_id: uuid.UUID | None, utterance: str, channel: Channel
@@ -157,6 +211,10 @@ class ConversationEngine:
         created: list[InteractionMessage] = []
 
         if interaction_id is None:
+            everyone, mine = await self._store.lock_admission_and_count(
+                business.id, self._usage.interaction_idle_minutes
+            )
+            self._usage.check_admission(ActiveCounts(all_businesses=everyone, business=mine))
             interaction = await self._store.create_interaction(business.id, channel)
             agent = await load_agent(self._store, business)
             # The owner's greeting opens the conversation, verbatim, as agent message 1.
@@ -202,7 +260,7 @@ class ConversationEngine:
         # interaction and greeting are durable from here on, whatever happens next.
         business_id, interaction_id = business.id, interaction.id
         await self._store.checkpoint()
-        outcome = await self._generate(request)
+        outcome = await self._generate(request, business, interaction_id)
 
         reply_text = outcome.turn.response_text if outcome.turn else outcome.fallback_text
         intent = outcome.turn.intent if outcome.turn else FALLBACK_INTENT
@@ -236,6 +294,7 @@ class ConversationEngine:
             status=locked.status,
             ended=False,
             fallback=outcome.turn is None,
+            usage_limited=outcome.usage_limited,
             messages=tuple(_view(m, locked.state) for m in created),
         )
 
@@ -280,19 +339,51 @@ class ConversationEngine:
             raise InteractionEndedError("This conversation has ended.")
         return interaction
 
-    async def _generate(self, request: ModelRequest) -> _Outcome:
-        """All model work for one turn, under a single deadline (retry included)."""
+    async def _call_model(
+        self, request: ModelRequest, business_id: uuid.UUID, interaction_id: uuid.UUID
+    ) -> ModelReply:
+        """One metered model call; transient provider failures retried per `LLM_RETRY`."""
+
+        async def attempt() -> ModelReply:
+            async with self._usage.metered(
+                UsageKind.GEMINI_REQUEST, business_id=business_id, interaction_id=interaction_id
+            ) as meter:
+                try:
+                    reply = await self._llm.generate(request)
+                except LLMUnavailableError as exc:
+                    meter.record(tokens_in=exc.tokens_in, tokens_out=exc.tokens_out)
+                    raise
+                meter.record(tokens_in=reply.tokens_in, tokens_out=reply.tokens_out)
+                return reply
+
+        # `LimitExceededError` is not retryable: a reached limit ends the turn at once.
+        return await retry_bounded(attempt, self._llm_retry, is_retryable)
+
+    async def _generate(
+        self, request: ModelRequest, business: Business, interaction_id: uuid.UUID
+    ) -> _Outcome:
+        """All model work for one turn, under a single deadline (retries included)."""
         failures: list[dict[str, str]] = []
         try:
             async with asyncio.timeout(self._turn_timeout) as deadline:
-                for attempt in range(2):  # the first try plus at most one retry
+                for attempt in range(2):  # the first try plus at most one invalid-output retry
                     try:
-                        raw = await self._llm.generate(request)
+                        reply = await self._call_model(request, business.id, interaction_id)
+                    except LimitExceededError as exc:
+                        failures.append(
+                            _failure("usage_limited", f"{exc.kind.value}:{exc.scope}")
+                        )
+                        return _Outcome(
+                            None, quota_fallback(business), failures, usage_limited=True
+                        )
                     except LLMUnavailableError:
-                        # The adapter already retried within its bounds; the engine does not.
                         failures.append(_failure("provider_unavailable", "llm_unavailable"))
                         return _Outcome(None, PROVIDER_FALLBACK, failures)
-                    turn, reason = self._validate(raw)
+                    except UsageUnavailableError:
+                        # Limits can't be checked: fail closed, no model call.
+                        failures.append(_failure("provider_unavailable", "usage_unavailable"))
+                        return _Outcome(None, PROVIDER_FALLBACK, failures)
+                    turn, reason = self._validate(reply.text)
                     if turn is not None:
                         return _Outcome(turn, "", failures)
                     failures.append(_failure("invalid_output", reason))
@@ -324,6 +415,13 @@ class ConversationEngine:
             state["failures"] = failures[-MAX_RECORDED_FAILURES:]
         if outcome.turn is None:
             state["fallback_messages"] = [*state.get("fallback_messages", []), reply_sequence]
+            if outcome.usage_limited:
+                # The customer was told to reach the team: flag it for a human.
+                state["requires_human"] = True
+                state["usage_limited_messages"] = [
+                    *state.get("usage_limited_messages", []),
+                    reply_sequence,
+                ]
             if outcome.fallback_text == INVALID_OUTPUT_FALLBACK:
                 state["clarification_attempts"] = int(state.get("clarification_attempts", 0)) + 1
         else:

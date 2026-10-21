@@ -3,8 +3,9 @@
 Tests script the model turn by turn: each `generate` call pops the next
 scripted reply (raw text, a dict serialized to JSON, or an exception to
 raise). Every request is recorded so tests can assert on the assembled
-prompt. Running out of script fails the test loudly instead of inventing a
-reply.
+prompt, and `len(requests)` is the number of provider calls made. Token
+counts are a fixed, fake 100 in / 20 out per reply. Running out of script
+fails the test loudly instead of inventing a reply.
 """
 
 import json
@@ -12,7 +13,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from integrations.llm.port import ModelRequest
+from integrations.llm.port import ModelReply, ModelRequest
+
+FAKE_TOKENS_IN = 100
+FAKE_TOKENS_OUT = 20
 
 Scripted = str | dict[str, Any] | Exception
 
@@ -25,16 +29,15 @@ class FakeLLMClient:
     def queue(self, *replies: Scripted) -> None:
         self.script.extend(replies)
 
-    async def generate(self, request: ModelRequest) -> str:
+    async def generate(self, request: ModelRequest) -> ModelReply:
         self.requests.append(request)
         if not self.script:
             raise AssertionError("FakeLLMClient: no scripted reply left for this call.")
         reply = self.script.popleft()
         if isinstance(reply, Exception):
             raise reply
-        if isinstance(reply, dict):
-            return json.dumps(reply)
-        return reply
+        text = json.dumps(reply) if isinstance(reply, dict) else reply
+        return ModelReply(text=text, tokens_in=FAKE_TOKENS_IN, tokens_out=FAKE_TOKENS_OUT)
 
 
 def agent_turn(

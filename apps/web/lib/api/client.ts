@@ -636,6 +636,8 @@ export interface TurnRead {
   ended: boolean;
   /** True when the model failed and `reply_text` is one of the fixed fallback messages. */
   fallback: boolean;
+  /** True when the fallback is the daily-quota one. Absent on older responses (read as false). */
+  usage_limited: boolean;
   /** Messages created by this turn (the greeting first on a new chat). */
   messages: MessageRead[];
 }
@@ -678,6 +680,8 @@ export type TestTurnResult =
   | { kind: "ended" }
   /** 409 `interaction_busy`: another send or a lock timeout; the chat is still open. */
   | { kind: "busy" }
+  /** 429 `concurrency_limited`: too many active chats to start a new one. */
+  | { kind: "concurrency_limited" }
   | { kind: "not_found" }
   | { kind: "unauthorized" }
   | { kind: "subscription_required" }
@@ -736,6 +740,7 @@ function isTurnRead(value: unknown): value is TurnRead {
     typeof value.status === "string" &&
     typeof value.ended === "boolean" &&
     typeof value.fallback === "boolean" &&
+    (value.usage_limited === undefined || typeof value.usage_limited === "boolean") &&
     isMessageList(value.messages)
   );
 }
@@ -823,11 +828,21 @@ export async function sendTestMessage(
   if (outcome.status === 409) {
     return errorCode(outcome.body) === "interaction_busy" ? { kind: "busy" } : { kind: "ended" };
   }
+  if (outcome.status === 429) {
+    return errorCode(outcome.body) === "concurrency_limited" ? { kind: "concurrency_limited" } : UNEXPECTED;
+  }
   if (outcome.status === 422) {
     return { kind: "validation", ...validationFrom(outcome.body, "That message cannot be sent.") };
   }
   if (outcome.status === 200 && isTurnRead(outcome.body)) {
-    return { kind: "ok", data: { ...outcome.body, messages: withFallbackFlags(outcome.body.messages) } };
+    return {
+      kind: "ok",
+      data: {
+        ...outcome.body,
+        usage_limited: outcome.body.usage_limited === true,
+        messages: withFallbackFlags(outcome.body.messages),
+      },
+    };
   }
   return UNEXPECTED;
 }
@@ -865,5 +880,84 @@ export async function endTestChat(token: string, id: string): Promise<Transcript
   if (outcome.status === 200 && isTranscriptRead(outcome.body)) {
     return { kind: "ok", data: { ...outcome.body, messages: withFallbackFlags(outcome.body.messages) } };
   }
+  return UNEXPECTED;
+}
+
+// Usage limits (`GET /usage`).
+
+/** Meter kinds the UI has a label for; the API may send others. */
+export type UsageMeterKind = "gemini_request" | "tts_request" | "call" | "sms" | (string & {});
+
+export interface UsageMeter {
+  kind: UsageMeterKind;
+  used: number;
+  limit: number;
+  /** The platform-wide daily cap is exhausted, even if this business has room. */
+  global_limit_reached: boolean;
+}
+
+export interface UsageRead {
+  window: { timezone: string; starts_at: string; resets_at: string };
+  meters: UsageMeter[];
+  gemini_tokens: number;
+  failed_requests: number;
+  /** Decimal string in USD. An estimate, never a billed amount. */
+  estimated_cost_usd: string;
+  concurrency: { active: number; limit: number; idle_minutes: number; global_limit_reached: boolean };
+  max_call_duration_seconds: number;
+}
+
+export type UsageResult =
+  | { kind: "ok"; data: UsageRead }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isUsageMeter(value: unknown): value is UsageMeter {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.kind === "string" &&
+    isCount(value.used) &&
+    isCount(value.limit) &&
+    typeof value.global_limit_reached === "boolean"
+  );
+}
+
+function isUsageRead(value: unknown): value is UsageRead {
+  if (!isRecord(value)) return false;
+  const w = value.window;
+  const c = value.concurrency;
+  return (
+    isRecord(w) &&
+    typeof w.timezone === "string" &&
+    typeof w.starts_at === "string" &&
+    typeof w.resets_at === "string" &&
+    Array.isArray(value.meters) &&
+    value.meters.every(isUsageMeter) &&
+    isCount(value.gemini_tokens) &&
+    isCount(value.failed_requests) &&
+    typeof value.estimated_cost_usd === "string" &&
+    Number.isFinite(Number(value.estimated_cost_usd)) &&
+    isRecord(c) &&
+    isCount(c.active) &&
+    isCount(c.limit) &&
+    isCount(c.idle_minutes) &&
+    typeof c.global_limit_reached === "boolean" &&
+    isCount(value.max_call_duration_seconds)
+  );
+}
+
+/** Calls `GET /api/v1/usage`: today's metered usage against the business's limits. */
+export async function getUsage(token: string): Promise<UsageResult> {
+  const outcome = await fetchApi("/usage", { headers: authHeaders(token) }, AGENT_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isUsageRead(outcome.body)) return { kind: "ok", data: outcome.body };
   return UNEXPECTED;
 }

@@ -7,6 +7,7 @@ from models.agent import Agent
 from models.billing import StripeEvent, Subscription
 from models.business import Business
 from models.interaction import Interaction, InteractionMessage
+from models.usage import UsageCounter, UsageEvent
 from models.user import User
 
 __all__ = [
@@ -16,5 +17,7 @@ __all__ = [
     "InteractionMessage",
     "StripeEvent",
     "Subscription",
+    "UsageCounter",
+    "UsageEvent",
     "User",
 ]

@@ -26,7 +26,7 @@ Tether is an AI receptionist for small businesses: it answers calls and chats, b
 - No secrets in frontend code, and no Gemini or Twilio calls from the frontend.
 - Model IDs and usage limits come from settings and are never hardcoded.
 - Use synthetic data only and never commit real customer data.
-- Every outbound provider call goes through `UsageGuard` and uses bounded retries.
+- Every outbound provider call goes through `UsageGuard` (`services/usage.py`) and uses bounded retries (`core/retry.py` `retry_bounded`). Every new provider adapter **must** be metered: call it inside `usage.metered(kind, business_id=...)`, with `retry_bounded` wrapped *around* `metered` so each attempt is reserved and counted. On `LimitExceededError`, answer with a safe fallback and never retry.
 
 ## How we build
 

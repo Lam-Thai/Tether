@@ -66,6 +66,8 @@ class TurnRead(BaseModel):
     status: Literal["active", "ended"]
     ended: bool
     fallback: bool
+    # The reply is the quota fallback: a daily usage limit was reached.
+    usage_limited: bool
     messages: list[MessageRead] = Field(default_factory=list)
 
 

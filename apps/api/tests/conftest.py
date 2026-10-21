@@ -2,9 +2,10 @@
 touches business-scoped data.
 """
 
+import random
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -20,13 +21,16 @@ from core.config import settings
 from core.db import async_session_factory
 from core.llm import get_llm_client
 from core.tenant import get_signing_key_resolver
+from core.usage import SqlUsageStore, cost_rates, get_usage_guard, usage_limits
 from integrations.clerk.fake import build_fake_signing_key_resolver
 from integrations.llm.fake import FakeLLMClient
 from integrations.stripe.fake import FakeBillingGateway
 from integrations.stripe.port import SubscriptionInfo
 from models.billing import Subscription
 from models.business import Business
+from models.usage import UsageCounter, UsageEvent
 from models.user import User
+from services.usage import DailyLimit, UsageGuard, UsageKind, UsageLimits
 
 
 @pytest.fixture(scope="session")
@@ -82,8 +86,73 @@ def llm() -> FakeLLMClient:
     return FakeLLMClient()
 
 
+@dataclass
+class UsageHarness:
+    """The `UsageGuard` the test app uses: real Postgres store, generous limits,
+    and a clock pinned to a far-future UTC day unique to this test, so tests
+    never share counters with each other or eat the dev database's real global
+    quota. Tighten limits per test with `set_daily(...)` / `set_concurrency(...)`.
+    """
+
+    day: datetime
+    limits: UsageLimits = field(
+        default_factory=lambda: replace(
+            usage_limits(settings),
+            daily={
+                kind: DailyLimit(per_day=1_000_000, per_business_per_day=1_000_000)
+                for kind in usage_limits(settings).daily
+            },
+            max_concurrent_interactions=1_000_000,
+            max_concurrent_interactions_per_business=1_000_000,
+        )
+    )
+
+    def guard(self) -> UsageGuard:
+        return UsageGuard(
+            SqlUsageStore(async_session_factory),
+            self.limits,
+            cost_rates(settings),
+            clock=lambda: self.day,
+        )
+
+    def set_daily(self, kind: UsageKind, *, per_day: int, per_business_per_day: int) -> None:
+        daily = dict(self.limits.daily)
+        daily[kind] = DailyLimit(per_day, per_business_per_day)
+        self.limits = replace(self.limits, daily=daily)
+
+    def set_concurrency(self, *, total: int, per_business: int) -> None:
+        self.limits = replace(
+            self.limits,
+            max_concurrent_interactions=total,
+            max_concurrent_interactions_per_business=per_business,
+        )
+
+
 @pytest.fixture
-def app(rsa_keypair, billing_gateway, llm):
+async def usage() -> AsyncIterator[UsageHarness]:
+    start = datetime(2200, 1, 1, 12, tzinfo=UTC)
+    harness = UsageHarness(day=start + timedelta(days=random.randrange(1_000_000)))
+    yield harness
+    # Business-scoped rows cascade with the test businesses; the global ones don't.
+    async with async_session_factory() as session:
+        await session.execute(
+            delete(UsageCounter).where(
+                UsageCounter.business_id.is_(None),
+                UsageCounter.window_date == harness.day.date(),
+            )
+        )
+        await session.execute(
+            delete(UsageEvent).where(
+                UsageEvent.business_id.is_(None),
+                UsageEvent.created_at >= harness.day - timedelta(days=1),
+                UsageEvent.created_at < harness.day + timedelta(days=1),
+            )
+        )
+        await session.commit()
+
+
+@pytest.fixture
+def app(rsa_keypair, billing_gateway, llm, usage):
     """The FastAPI app with Clerk's JWKS fetch and Stripe swapped for
     in-memory fakes, so tests verify real signatures and billing flows
     without any network call.
@@ -95,6 +164,8 @@ def app(rsa_keypair, billing_gateway, llm):
     )
     application.dependency_overrides[get_billing_gateway] = lambda: billing_gateway
     application.dependency_overrides[get_llm_client] = lambda: llm
+    # Built per request, so a test can tighten `usage` limits between calls.
+    application.dependency_overrides[get_usage_guard] = usage.guard
     yield application
     application.dependency_overrides.clear()
 

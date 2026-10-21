@@ -10,7 +10,7 @@ Tether's issues are tracer-bullet vertical slices, not horizontal layers. This s
 ## Steps
 
 1. **Read the issue.** `gh issue view <n>`. Note the Outcome (the demo that must work end to end) and the Definition of Done.
-2. **List the layers touched.** Name every one of `apps/web`, `apps/api/api`, `services`, `repositories`, `models`, `integrations` the slice needs. If it's only one layer, stop and flag it — see "Not actually vertical" below.
+2. **List the layers touched.** Name every one of `apps/web`, `apps/api/api`, `services`, `repositories`, `models`, `integrations` the slice needs. If it's only one layer, stop and flag it — see "Not actually vertical" below. If it touches `integrations` (any outbound provider call), plan that part with the `provider-adapter` skill.
 3. **Design the deep module's interface first.** Before any test or implementation, write down the interface of the slice's central module (the method signatures it exposes, not its internals). Call the `codebase-design` skill for the interface/depth/seam vocabulary if the shape is unclear. A shallow interface here is a sign the slice needs re-cutting, not more code.
 4. **Confirm the slice is genuinely vertical.** It should be demoable end to end (a user or caller action produces an observable, correct result) by the time the PR is open — not "the API half, frontend later."
 5. **Hand off to the implementation loop.** Use the plugin's `tdd` skill for the red/green cycle, seam by seam, against the interface from step 3.
@@ -28,5 +28,6 @@ A slice touching exactly one layer (a pure UI tweak, a backend-only internal ref
 - [ ] The deep module's interface is written down before any test.
 - [ ] The slice is demoable end to end, matching the issue's Outcome.
 - [ ] Tests exist at the module boundary, plus a cross-tenant test if business data is touched.
+- [ ] Every provider call in the slice is metered (`provider-adapter`).
 - [ ] `CLAUDE.md` / skills updated if a convention changed.
 - [ ] PR links the issue with `Closes #<n>`.
