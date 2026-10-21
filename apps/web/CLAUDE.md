@@ -35,6 +35,15 @@ Vitest config is scoped to this package (`apps/web/vitest.config.ts`, `happy-dom
 - Signed-in routing has one rule, `lib/billing/destinationFor(me)`: no business -> `/onboarding`, not entitled -> `/billing/plan`, entitled -> `/dashboard`. Every gated page or layout calls `GET /me` (cached per render via `lib/dashboard/current-me.ts`) and redirects with it. Middleware only adds defense in depth; the API enforces the same rule with a 402.
 - Payments are redirect-only: the API returns a Stripe Checkout or Portal URL and the client follows it (`https:` only, checked in `lib/api/client.ts`). No Stripe key or Stripe.js in this app.
 - Never show a plan as active from the URL: `/billing/return` only says so once `syncCheckout` / `getSubscription` report `entitled`.
+- Pages under `/dashboard/*` rely on the dashboard layout's `destinationFor` gate; they handle their own 401/402 results only as a backstop (redirect), never re-implement the gate.
+
+## Agent builder and test chat
+
+- `/dashboard/agent` is the server-loaded page; `components/agent/*` are client components that receive typed server results as props and keep local state after mount.
+- The test chat's interaction id lives in `?chat=<uuid>` (`router.replace` after the first send), so a reload restores the transcript from Postgres. Never keep conversation state in `localStorage`.
+- Never render an agent reply the API didn't return, and never invent or pad one: no optimistic agent text, no fake typing delay. The customer's message joins the transcript only once the turn response confirms it. A fallback reply is shown as a fallback (`message.fallback`), never as a normal answer.
+- After an unknown outcome (timeout/unreachable) on a send, re-fetch the transcript before offering Retry, so a committed turn isn't sent twice. 409 means either `interaction_ended` (show New chat) or `interaction_busy` (keep the draft, retry); branch on `error.code`.
+- Feature Zod schemas and limits live in `lib/validation/<feature>.ts` and mirror the API's; PATCH forms send only the changed fields.
 
 ## Pending (future slices)
 

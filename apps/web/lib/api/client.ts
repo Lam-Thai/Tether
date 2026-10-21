@@ -593,3 +593,277 @@ export async function openBillingPortal(token: string): Promise<PortalResult> {
   }
   return UNEXPECTED;
 }
+
+// Agent persona and the owner's private test chat (`/agent`, `/agent/test`).
+// The test chat calls Gemini through the API, so it gets the longest timeout.
+const AGENT_TIMEOUT_MS = 10000;
+const TURN_TIMEOUT_MS = 45000;
+
+export type AgentTone = "friendly" | "professional" | "concise";
+
+export interface AgentRead {
+  id: string;
+  name: string;
+  tone: AgentTone;
+  greeting: string;
+  custom_instructions: string;
+  active: boolean;
+  updated_at: string;
+}
+
+/** `PATCH /agent` body: send only the fields that changed. */
+export interface AgentUpdate {
+  name?: string;
+  tone?: AgentTone;
+  greeting?: string;
+  custom_instructions?: string;
+}
+
+export interface MessageRead {
+  sequence_number: number;
+  speaker: "agent" | "customer";
+  text: string;
+  created_at: string;
+  /** True when this agent message is one of the fixed fallback replies. */
+  fallback: boolean;
+}
+
+export interface TurnRead {
+  interaction_id: string;
+  reply_text: string;
+  intent: string;
+  status: string;
+  ended: boolean;
+  /** True when the model failed and `reply_text` is one of the fixed fallback messages. */
+  fallback: boolean;
+  /** Messages created by this turn (the greeting first on a new chat). */
+  messages: MessageRead[];
+}
+
+export interface TranscriptRead {
+  interaction_id: string;
+  status: string;
+  ended: boolean;
+  started_at: string;
+  ended_at: string | null;
+  messages: MessageRead[];
+}
+
+export interface TestMessageInput {
+  interactionId?: string | null;
+  message: string;
+}
+
+/** Field name -> message, when the API's 422 envelope carries per-field errors. */
+export type FieldErrors = Record<string, string>;
+
+export type AgentResult =
+  | { kind: "ok"; data: AgentRead }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "not_found" }
+  | { kind: "unreachable"; reason: string };
+
+export type UpdateAgentResult =
+  | { kind: "ok"; data: AgentRead }
+  | { kind: "validation"; message: string; fieldErrors: FieldErrors }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "not_found" }
+  | { kind: "unreachable"; reason: string };
+
+export type TestTurnResult =
+  | { kind: "ok"; data: TurnRead }
+  | { kind: "validation"; message: string; fieldErrors: FieldErrors }
+  | { kind: "ended" }
+  /** 409 `interaction_busy`: another send or a lock timeout; the chat is still open. */
+  | { kind: "busy" }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type TranscriptResult =
+  | { kind: "ok"; data: TranscriptRead }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isAgentRead(value: unknown): value is AgentRead {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    (value.tone === "friendly" || value.tone === "professional" || value.tone === "concise") &&
+    typeof value.greeting === "string" &&
+    typeof value.custom_instructions === "string" &&
+    typeof value.active === "boolean" &&
+    typeof value.updated_at === "string"
+  );
+}
+
+function isMessageRead(value: unknown): value is MessageRead {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.sequence_number === "number" &&
+    (value.speaker === "agent" || value.speaker === "customer") &&
+    typeof value.text === "string" &&
+    typeof value.created_at === "string" &&
+    // Older responses have no flag; it is normalized to false below.
+    (value.fallback === undefined || typeof value.fallback === "boolean")
+  );
+}
+
+function withFallbackFlags(messages: MessageRead[]): MessageRead[] {
+  return messages.map((m) => ({ ...m, fallback: m.fallback === true }));
+}
+
+function isMessageList(value: unknown): value is MessageRead[] {
+  return Array.isArray(value) && value.every(isMessageRead);
+}
+
+function isTurnRead(value: unknown): value is TurnRead {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.interaction_id === "string" &&
+    typeof value.reply_text === "string" &&
+    typeof value.intent === "string" &&
+    typeof value.status === "string" &&
+    typeof value.ended === "boolean" &&
+    typeof value.fallback === "boolean" &&
+    isMessageList(value.messages)
+  );
+}
+
+function isTranscriptRead(value: unknown): value is TranscriptRead {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.interaction_id === "string" &&
+    typeof value.status === "string" &&
+    typeof value.ended === "boolean" &&
+    typeof value.started_at === "string" &&
+    isNullableString(value.ended_at) &&
+    isMessageList(value.messages)
+  );
+}
+
+/**
+ * The contract's 422 envelope is `{error: {code, message}}`. If the API also
+ * adds `error.fields` (field -> message), surface it; otherwise only the
+ * message is available.
+ */
+function validationFrom(body: unknown, fallbackMessage: string) {
+  const message = isApiErrorBody(body) ? body.error.message : fallbackMessage;
+  const fieldErrors: FieldErrors = {};
+  if (isRecord(body) && isRecord(body.error) && isRecord(body.error.fields)) {
+    for (const [field, value] of Object.entries(body.error.fields)) {
+      if (typeof value === "string") fieldErrors[field] = value;
+    }
+  }
+  return { message, fieldErrors };
+}
+
+/** Calls `GET /api/v1/agent` (the API creates the default agent on first read). */
+export async function getAgent(token: string): Promise<AgentResult> {
+  const outcome = await fetchApi("/agent", { headers: authHeaders(token) }, AGENT_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 200 && isAgentRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `PATCH /api/v1/agent`. */
+export async function updateAgent(token: string, patch: AgentUpdate): Promise<UpdateAgentResult> {
+  const outcome = await fetchApi(
+    "/agent",
+    { method: "PATCH", headers: jsonAuthHeaders(token), body: JSON.stringify(patch) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 422) {
+    return { kind: "validation", ...validationFrom(outcome.body, "The agent details are invalid.") };
+  }
+  if (outcome.status === 200 && isAgentRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/**
+ * Calls `POST /api/v1/agent/test`. Omit `interactionId` to start a new chat;
+ * the API persists the greeting and returns it in `messages`.
+ */
+export async function sendTestMessage(
+  token: string,
+  input: TestMessageInput,
+): Promise<TestTurnResult> {
+  const body: { message: string; interaction_id?: string } = { message: input.message };
+  if (input.interactionId) body.interaction_id = input.interactionId;
+
+  const outcome = await fetchApi(
+    "/agent/test",
+    { method: "POST", headers: jsonAuthHeaders(token), body: JSON.stringify(body) },
+    TURN_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 409) {
+    return errorCode(outcome.body) === "interaction_busy" ? { kind: "busy" } : { kind: "ended" };
+  }
+  if (outcome.status === 422) {
+    return { kind: "validation", ...validationFrom(outcome.body, "That message cannot be sent.") };
+  }
+  if (outcome.status === 200 && isTurnRead(outcome.body)) {
+    return { kind: "ok", data: { ...outcome.body, messages: withFallbackFlags(outcome.body.messages) } };
+  }
+  return UNEXPECTED;
+}
+
+/** Calls `GET /api/v1/agent/test/{id}`. A malformed id (422) is treated as unknown. */
+export async function getTestTranscript(token: string, id: string): Promise<TranscriptResult> {
+  const outcome = await fetchApi(
+    `/agent/test/${encodeURIComponent(id)}`,
+    { headers: authHeaders(token) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404 || outcome.status === 422) return { kind: "not_found" };
+  if (outcome.status === 200 && isTranscriptRead(outcome.body)) {
+    return { kind: "ok", data: { ...outcome.body, messages: withFallbackFlags(outcome.body.messages) } };
+  }
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/agent/test/{id}/end` (idempotent). */
+export async function endTestChat(token: string, id: string): Promise<TranscriptResult> {
+  const outcome = await fetchApi(
+    `/agent/test/${encodeURIComponent(id)}/end`,
+    { method: "POST", headers: authHeaders(token) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404 || outcome.status === 422) return { kind: "not_found" };
+  if (outcome.status === 200 && isTranscriptRead(outcome.body)) {
+    return { kind: "ok", data: { ...outcome.body, messages: withFallbackFlags(outcome.body.messages) } };
+  }
+  return UNEXPECTED;
+}

@@ -12,15 +12,19 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from core.app import create_app
 from core.billing import get_billing_gateway
 from core.config import settings
 from core.db import async_session_factory
+from core.llm import get_llm_client
 from core.tenant import get_signing_key_resolver
 from integrations.clerk.fake import build_fake_signing_key_resolver
+from integrations.llm.fake import FakeLLMClient
 from integrations.stripe.fake import FakeBillingGateway
+from integrations.stripe.port import SubscriptionInfo
+from models.billing import Subscription
 from models.business import Business
 from models.user import User
 
@@ -74,7 +78,12 @@ def billing_gateway() -> FakeBillingGateway:
 
 
 @pytest.fixture
-def app(rsa_keypair, billing_gateway):
+def llm() -> FakeLLMClient:
+    return FakeLLMClient()
+
+
+@pytest.fixture
+def app(rsa_keypair, billing_gateway, llm):
     """The FastAPI app with Clerk's JWKS fetch and Stripe swapped for
     in-memory fakes, so tests verify real signatures and billing flows
     without any network call.
@@ -85,6 +94,7 @@ def app(rsa_keypair, billing_gateway):
         build_fake_signing_key_resolver(public_pem)
     )
     application.dependency_overrides[get_billing_gateway] = lambda: billing_gateway
+    application.dependency_overrides[get_llm_client] = lambda: llm
     yield application
     application.dependency_overrides.clear()
 
@@ -145,3 +155,51 @@ async def two_tenants(app, mint_token) -> AsyncIterator[tuple[TenantFixture, Ten
             )
         )
         await session.commit()
+
+
+@pytest.fixture
+async def entitled_tenants(
+    app, billing_gateway, two_tenants
+) -> tuple[TenantFixture, TenantFixture]:
+    """`two_tenants`, each with a trial started through the fake billing gateway,
+    so business-feature routes (which require an entitled plan) are reachable.
+    Cleanup is the business delete in `two_tenants`, which cascades to the
+    subscription, agent, interactions and messages.
+    """
+
+    async def _start_trial(client: AsyncClient, tenant: TenantFixture) -> None:
+        headers = {"Authorization": f"Bearer {tenant.token}"}
+        response = await client.post(
+            "/api/v1/billing/checkout", json={"choice": "trial"}, headers=headers
+        )
+        assert response.status_code == 200, response.text
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(Subscription).where(Subscription.business_id == tenant.business_id)
+                )
+            ).scalar_one()
+        assert row.stripe_customer_id and row.pending_checkout_session_id
+        now = datetime.now(UTC)
+        billing_gateway.complete_checkout(
+            row.pending_checkout_session_id,
+            SubscriptionInfo(
+                id=billing_gateway.new_subscription_id(),
+                customer_id=row.stripe_customer_id,
+                status="trialing",
+                price_id="price_fake",
+                trial_start=now,
+                trial_end=now + timedelta(days=14),
+                current_period_end=now + timedelta(days=14),
+                cancel_at_period_end=False,
+            ),
+        )
+        sync = await client.post(
+            f"/api/v1/billing/checkout/{row.pending_checkout_session_id}/sync", headers=headers
+        )
+        assert sync.status_code == 200, sync.text
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for tenant in two_tenants:
+            await _start_trial(client, tenant)
+    return two_tenants

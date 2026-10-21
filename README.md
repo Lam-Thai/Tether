@@ -39,6 +39,16 @@ Open http://localhost:3000 for the landing page, and http://localhost:3000/statu
 
 Pay with test card `4242 4242 4242 4242` (any future date, any CVC). The free trial needs no card.
 
+### AI receptionist (Gemini)
+
+The test chat at `/dashboard/agent` calls real Gemini through `apps/api`. Create a key in [Google AI Studio](https://aistudio.google.com/apikey) and set `GEMINI_API_KEY` in `apps/api/.env` (see `apps/api/.env.example` for the model and timeout settings). Without a key the API still starts locally, but every reply is the "having trouble responding" fallback. Keep `ENVIRONMENT=local` locally; `production` requires the key and is only for the deployed API.
+
+Optional live smoke test against real Gemini:
+
+```sh
+uv run --directory apps/api pytest -m live
+```
+
 Other root commands:
 
 ```sh

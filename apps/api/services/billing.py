@@ -131,8 +131,7 @@ def access_for(subscription: Subscription | None) -> Access:
 def _trial_used(subscription: Subscription) -> bool:
     # The trial is for new customers: any past subscription rules it out.
     return (
-        subscription.trial_started_at is not None
-        or subscription.stripe_subscription_id is not None
+        subscription.trial_started_at is not None or subscription.stripe_subscription_id is not None
     )
 
 
@@ -168,9 +167,7 @@ def _apply_subscription(row: Subscription, info: SubscriptionInfo) -> None:
         row.trial_started_at = info.trial_start
 
 
-async def _sync_from_session(
-    row: Subscription, gateway: BillingGateway, session_id: str
-) -> None:
+async def _sync_from_session(row: Subscription, gateway: BillingGateway, session_id: str) -> None:
     session = await gateway.retrieve_checkout_session(session_id)
     if session.status == "complete" and session.subscription_id:
         _apply_subscription(row, await gateway.retrieve_subscription(session.subscription_id))
