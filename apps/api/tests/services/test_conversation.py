@@ -282,6 +282,20 @@ async def test_entities_are_merged_across_turns(store, llm):
     assert state["requires_human"] is True
 
 
+async def test_blank_entity_does_not_overwrite_earlier_value(store, llm):
+    tenant = _tenant()
+    engine = _engine(store, llm)
+    llm.queue(
+        agent_turn("a", entities={"customer_name": "Sam"}),
+        agent_turn("b", entities={"customer_name": "   "}),
+    )
+
+    first = await engine.handle_turn(tenant, None, "x", "test_chat")
+    await engine.handle_turn(tenant, first.interaction_id, "y", "test_chat")
+
+    assert store.interactions[first.interaction_id].state["entities"] == {"customer_name": "Sam"}
+
+
 async def test_ended_interaction_is_409_and_end_is_idempotent(store, llm):
     tenant = _tenant()
     engine = _engine(store, llm)

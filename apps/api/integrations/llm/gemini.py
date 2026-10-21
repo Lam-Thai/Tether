@@ -28,8 +28,10 @@ logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 2
 _RETRY_DELAY_SECONDS = 0.5
 _TEMPERATURE = 0.4
-# Headroom for thinking tokens on 2.5 models plus a <=1000 char reply and entities.
+# Thinking tokens count against max_output_tokens on 2.5 models, so cap thinking
+# well below it to leave room for a <=1000 char reply and entities.
 _MAX_OUTPUT_TOKENS = 2048
+_THINKING_BUDGET_TOKENS = 1024
 
 
 def response_schema_for_gemini() -> dict[str, Any]:
@@ -128,6 +130,7 @@ class GeminiClient:
             response_schema=response_schema_for_gemini(),
             temperature=_TEMPERATURE,
             max_output_tokens=_MAX_OUTPUT_TOKENS,
+            thinking_config=types.ThinkingConfig(thinking_budget=_THINKING_BUDGET_TOKENS),
         )
         contents = _contents(request.messages)
         last_reason = "unknown"

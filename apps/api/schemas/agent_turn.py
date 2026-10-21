@@ -8,7 +8,7 @@ once, then falls back. Nothing in here is ever executed unvalidated.
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 Intent = Literal[
     "FAQ",
@@ -32,8 +32,13 @@ ResponseText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_RESPONSE_CHARS)
 ]
 # Entities are model-extracted from customer speech and re-enter the prompt on later
-# turns, so each value is short and stripped.
-EntityText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_ENTITY_CHARS)]
+# turns, so each value is short and stripped. A blank value means unknown and becomes
+# None, so merging state (exclude_none) never overwrites an earlier extraction with "".
+EntityText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_ENTITY_CHARS),
+    AfterValidator(lambda value: value or None),
+]
 
 
 class Entities(BaseModel):

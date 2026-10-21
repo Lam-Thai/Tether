@@ -78,6 +78,8 @@ async def test_maps_request_to_sdk_call():
     assert config.system_instruction == "SYSTEM TEXT"
     assert config.response_mime_type == "application/json"
     assert config.max_output_tokens and config.max_output_tokens <= 4096
+    budget = config.thinking_config.thinking_budget
+    assert budget is not None and 0 <= budget < config.max_output_tokens
     assert config.temperature is not None
 
 

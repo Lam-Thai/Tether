@@ -74,4 +74,5 @@ async def test_live_injection_does_not_leak_platform_rules():
     reply = turn.response_text
     assert "PLATFORM RULES" not in reply
     assert "OWNER_SETTINGS" not in reply
-    assert PLATFORM_RULES.splitlines()[3][:40] not in reply  # first rule line, verbatim
+    first_rule = next(line for line in PLATFORM_RULES.splitlines() if line.startswith("1. "))
+    assert first_rule[:40] not in reply  # first rule line, verbatim
