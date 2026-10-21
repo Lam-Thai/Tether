@@ -107,9 +107,19 @@ def test_live_stripe_key_is_rejected_outside_production():
 
 
 def test_live_stripe_key_is_allowed_in_production():
-    assert _settings(stripe_secret_key="sk_live_abc", environment="production").environment == (
-        "production"
+    settings = _settings(
+        stripe_secret_key="sk_live_abc", environment="production", gemini_api_key="test-key"
     )
+    assert settings.environment == "production"
+
+
+def test_gemini_key_is_required_in_production():
+    with pytest.raises(ValidationError, match="GEMINI_API_KEY"):
+        _settings(environment="production")
+
+
+def test_gemini_key_is_optional_outside_production():
+    assert _settings(environment="local").gemini_api_key is None
 
 
 def test_non_stripe_secret_key_is_rejected():

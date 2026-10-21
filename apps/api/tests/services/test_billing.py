@@ -383,9 +383,7 @@ async def test_webhook_whose_subscription_belongs_to_another_customer_is_ignored
     assert row.stripe_subscription_id is None
 
 
-async def test_completed_session_whose_subscription_has_another_customer_is_ignored(
-    store, gateway
-):
+async def test_completed_session_whose_subscription_has_another_customer_is_ignored(store, gateway):
     tenant, row = await _open_paid_checkout(store, gateway)
     session_id = row.pending_checkout_session_id
     assert session_id is not None

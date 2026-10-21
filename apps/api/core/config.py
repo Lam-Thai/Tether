@@ -8,7 +8,7 @@ touching `os.environ` directly.
 import json
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -41,6 +41,19 @@ class Settings(BaseSettings):
     # Public origin of apps/web; Checkout and Portal return URLs hang off it.
     app_base_url: str
 
+    # Gemini (integrations/llm). The key is optional so CI and local tests run on
+    # the fake; production refuses to start without it. Never hardcode the model.
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = "gemini-2.5-flash"
+    # Per attempt; the adapter makes at most 2 attempts.
+    gemini_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    # How many recent messages each turn sends to the model (PRD §9.1).
+    conversation_history_limit: int = Field(default=20, ge=2, le=100)
+    # Hard ceiling on all model work in one turn (invalid-output retry included).
+    # Past it the turn answers with the provider fallback. Keep it well under the
+    # web client's turn timeout and the API's serverless function limit.
+    conversation_turn_timeout_seconds: float = Field(default=25.0, gt=0, le=120)
+
     @field_validator("stripe_secret_key")
     @classmethod
     def _secret_key_is_a_stripe_key(cls, value: str) -> str:
@@ -61,6 +74,14 @@ class Settings(BaseSettings):
         is_live = self.stripe_secret_key.startswith(("sk_live_", "rk_live_"))
         if is_live and self.environment != "production":
             raise ValueError("A live Stripe key is only allowed when ENVIRONMENT=production.")
+        return self
+
+    @model_validator(mode="after")
+    def _gemini_key_required_in_production(self) -> "Settings":
+        if self.environment == "production" and not (
+            self.gemini_api_key and self.gemini_api_key.get_secret_value()
+        ):
+            raise ValueError("GEMINI_API_KEY is required when ENVIRONMENT=production.")
         return self
 
     @field_validator("app_base_url")

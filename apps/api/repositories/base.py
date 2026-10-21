@@ -24,7 +24,9 @@ from sqlalchemy import Select, select
 
 
 class HasBusinessId(Protocol):
-    business_id: object
+    # Read-only, so a mapped `Mapped[UUID]` column satisfies it.
+    @property
+    def business_id(self) -> object: ...
 
 
 def business_scoped_select[ModelT: HasBusinessId](
