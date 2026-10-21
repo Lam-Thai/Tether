@@ -72,6 +72,19 @@ describe("UsagePanel", () => {
     expect(screen.queryByText(GLOBAL_CONCURRENCY_MESSAGE)).not.toBeInTheDocument();
   });
 
+  it("keeps the reply-fallback warning to the AI-reply meter", () => {
+    render(
+      <UsagePanel
+        usage={{
+          kind: "ok",
+          data: usage({ meters: [meter("gemini_request", 3, 50), meter("sms", 0, 0, true)] }),
+        }}
+      />,
+    );
+    expect(screen.queryByText(GLOBAL_LIMIT_MESSAGE)).not.toBeInTheDocument();
+    expect(screen.getByText("Max call length")).toBeInTheDocument();
+  });
+
   it("explains a platform concurrency cap without claiming replies fall back", () => {
     render(
       <UsagePanel

@@ -128,8 +128,11 @@ export function UsagePanel({ usage }: { usage: UsageResult }) {
 
 function UsageOverview({ data }: { data: UsageRead }) {
   const local = useLocalResetTime(data.window.resets_at);
-  // Daily caps fall back until reset; the concurrency cap only refuses new chats.
-  const globalReached = data.meters.some((m) => m.global_limit_reached);
+  // Only the AI-reply cap makes replies fall back; other meters show their own
+  // "Platform limit" badge, and the concurrency cap only refuses new chats.
+  const globalReached = data.meters.some(
+    (m) => m.kind === "gemini_request" && m.global_limit_reached,
+  );
   const globalBusy = data.concurrency.global_limit_reached;
   const empty = isEmptyDay(data);
 
@@ -212,7 +215,7 @@ function UsageOverview({ data }: { data: UsageRead }) {
                 label="Active conversations"
                 value={`${data.concurrency.active} of ${data.concurrency.limit}`}
               />
-              <Stat label="Longest call" value={formatDuration(data.max_call_duration_seconds)} />
+              <Stat label="Max call length" value={formatDuration(data.max_call_duration_seconds)} />
             </dl>
           </CardContent>
         </Card>
