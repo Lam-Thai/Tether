@@ -23,7 +23,7 @@ vi.mock("@/lib/api/client", () => ({
 }));
 
 import type { MessageRead, TranscriptRead, TurnRead } from "@/lib/api/client";
-import { FALLBACK_NOTE, TestChat } from "./test-chat";
+import { CONCURRENCY_NOTE, FALLBACK_NOTE, TestChat, USAGE_LIMITED_NOTE } from "./test-chat";
 
 const ID = "22222222-2222-4222-8222-222222222222";
 
@@ -43,6 +43,7 @@ function turn(overrides: Partial<TurnRead> = {}): TurnRead {
     status: "active",
     ended: false,
     fallback: false,
+    usage_limited: false,
     messages: [
       msg(1, "agent", "Hi, thanks for contacting Acme!"),
       msg(2, "customer", "When do you open?"),
@@ -246,6 +247,62 @@ describe("TestChat", () => {
     sendMock.mockResolvedValueOnce({ kind: "ok", data: turn({ messages: [msg(3, "customer", "Second try"), msg(4, "agent", "Done.")] }) });
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("Done.")).toBeInTheDocument();
+  });
+
+  it("shows the quota notice with a usage link when the latest turn is usage limited", async () => {
+    sendMock.mockResolvedValueOnce({
+      kind: "ok",
+      data: turn({
+        fallback: true,
+        usage_limited: true,
+        messages: [msg(1, "customer", "Hi"), { ...msg(2, "agent", "Sorry."), fallback: true }],
+      }),
+    });
+    const user = userEvent.setup();
+    render(<TestChat agentName="Riley" chat={{ kind: "none" }} />);
+    expect(screen.queryByText(USAGE_LIMITED_NOTE, { exact: false })).not.toBeInTheDocument();
+
+    await type(user, "Hi");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(USAGE_LIMITED_NOTE, { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View usage" })).toHaveAttribute(
+      "href",
+      "/dashboard/settings/usage",
+    );
+  });
+
+  it("clears the quota notice once a later turn is not usage limited", async () => {
+    sendMock.mockResolvedValueOnce({ kind: "ok", data: turn({ usage_limited: true, fallback: true }) });
+    const user = userEvent.setup();
+    render(<TestChat agentName="Riley" chat={{ kind: "none" }} />);
+    await type(user, "Hi");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText(USAGE_LIMITED_NOTE, { exact: false });
+
+    sendMock.mockResolvedValueOnce({ kind: "ok", data: turn({ messages: [msg(4, "agent", "Back.")] }) });
+    await type(user, "Again");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Back.")).toBeInTheDocument();
+    expect(screen.queryByText(USAGE_LIMITED_NOTE, { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps the draft and shows a notice when too many conversations are active", async () => {
+    sendMock.mockResolvedValueOnce({ kind: "concurrency_limited" });
+    const user = userEvent.setup();
+    render(<TestChat agentName="Riley" chat={{ kind: "none" }} />);
+
+    await type(user, "Hello there");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(CONCURRENCY_NOTE)).toBeInTheDocument();
+    expect(screen.getByLabelText("Message")).toHaveValue("Hello there");
+    expect(screen.queryByText("This chat has ended.")).not.toBeInTheDocument();
+
+    sendMock.mockResolvedValueOnce({ kind: "ok", data: turn() });
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("We open at nine.")).toBeInTheDocument();
+    expect(screen.queryByText(CONCURRENCY_NOTE)).not.toBeInTheDocument();
   });
 
   it("recovers from the transcript instead of offering a resend when the turn was committed", async () => {

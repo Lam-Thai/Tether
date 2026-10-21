@@ -36,5 +36,6 @@ Only ask if the answer isn't already clear from the issue or the existing code â
 - [ ] No direct provider calls, no secrets, no raw `fetch` bypassing the typed client.
 - [ ] Success UI only renders after a confirmed backend response.
 - [ ] Component follows existing shadcn/ui + Tailwind conventions rather than introducing a new pattern.
+- [ ] Copy uses plain hyphens, colons or two sentences in place of em/en dashes.
 
 Use the `web-feature` skill (`.claude/skills/`) for the step-by-step on a new page or section.

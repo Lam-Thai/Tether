@@ -41,6 +41,12 @@ class Interaction(Base):
         CheckConstraint("channel IN ('test_chat', 'voice')", name="ck_interactions_channel"),
         CheckConstraint("status IN ('active', 'ended')", name="ck_interactions_status"),
         Index("ix_interactions_business_id_created_at", "business_id", "created_at"),
+        # Concurrency admission counts recently active interactions (`services/usage.py`).
+        Index(
+            "ix_interactions_active_updated_at",
+            "updated_at",
+            postgresql_where=text("status = 'active'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

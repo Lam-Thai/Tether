@@ -25,6 +25,9 @@ from repositories.base import business_scoped_select
 LOCK_TIMEOUT = "3s"
 _LOCK_NOT_AVAILABLE = "55P03"
 _QUERY_CANCELED = "57014"
+# Transaction-level advisory lock that serializes new-interaction admission
+# (count active, then insert) across all businesses. Arbitrary but fixed.
+_ADMISSION_LOCK_KEY = 7_301_105_001
 
 
 class InteractionBusyError(AppError):
@@ -41,6 +44,40 @@ async def create_interaction(
     session.add(interaction)
     await session.flush()
     return interaction
+
+
+async def count_recent_active(
+    session: AsyncSession, business_id: uuid.UUID, idle_minutes: int
+) -> tuple[int, int]:
+    """(all businesses, this business): active interactions touched in the last
+    `idle_minutes`. Abandoned chats past that window stop counting."""
+    cutoff = func.now() - func.make_interval(0, 0, 0, 0, 0, idle_minutes)
+    result = await session.execute(
+        select(
+            func.count(),
+            func.count().filter(Interaction.business_id == business_id),
+        ).where(Interaction.status == "active", Interaction.updated_at > cutoff)
+    )
+    everyone, mine = result.one()
+    return int(everyone), int(mine)
+
+
+async def lock_admission_and_count(
+    session: AsyncSession, business_id: uuid.UUID, idle_minutes: int
+) -> tuple[int, int]:
+    """`count_recent_active` under the admission lock, held until the transaction
+    ends. Create the new interaction in the same transaction so the count and
+    the insert can't interleave with another admission."""
+    await session.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
+    try:
+        await session.execute(select(func.pg_advisory_xact_lock(_ADMISSION_LOCK_KEY)))
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) in (_LOCK_NOT_AVAILABLE, _QUERY_CANCELED):
+            raise InteractionBusyError(
+                "Too many conversations are starting at once. Try again shortly."
+            ) from exc
+        raise
+    return await count_recent_active(session, business_id, idle_minutes)
 
 
 async def get_interaction(
@@ -133,6 +170,11 @@ class SqlConversationStore:
 
     async def create_interaction(self, business_id: uuid.UUID, channel: str) -> Interaction:
         return await create_interaction(self._session, business_id, channel)
+
+    async def lock_admission_and_count(
+        self, business_id: uuid.UUID, idle_minutes: int
+    ) -> tuple[int, int]:
+        return await lock_admission_and_count(self._session, business_id, idle_minutes)
 
     async def get_interaction(
         self, business_id: uuid.UUID, interaction_id: uuid.UUID, channel: str

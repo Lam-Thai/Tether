@@ -38,6 +38,7 @@ const TURN: TurnRead = {
   status: "active",
   ended: false,
   fallback: false,
+  usage_limited: false,
   messages: [MESSAGE],
 };
 

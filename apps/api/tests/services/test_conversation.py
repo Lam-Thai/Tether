@@ -7,9 +7,10 @@ from datetime import UTC, datetime
 
 import pytest
 
+from core.retry import RetryPolicy
 from core.tenant import Tenant
 from integrations.llm.fake import FakeLLMClient, agent_turn
-from integrations.llm.port import LLMUnavailableError, ToolDeclaration
+from integrations.llm.port import LLMUnavailableError, ModelReply, ToolDeclaration
 from models.agent import Agent
 from models.business import Business
 from models.interaction import Interaction, InteractionMessage
@@ -21,8 +22,11 @@ from services.conversation import (
     ConversationEngine,
     InteractionEndedError,
     InteractionNotFoundError,
+    quota_fallback,
 )
 from services.tools import ToolRegistry
+from services.usage import ConcurrencyLimitedError, DailyLimit, UsageKind
+from tests.services.memory_usage_store import MemoryUsageStore, guard, limits
 
 
 class MemoryStore:
@@ -62,6 +66,12 @@ class MemoryStore:
         )
         self.interactions[interaction.id] = interaction
         return interaction
+
+    async def lock_admission_and_count(self, business_id, idle_minutes):
+        self.calls.append("admission")
+        active = [i for i in self.interactions.values() if i.status == "active"]
+        mine = sum(1 for i in active if i.business_id == business_id)
+        return len(active), mine
 
     async def get_interaction(self, business_id, interaction_id, channel):
         found = self.interactions.get(interaction_id)
@@ -124,9 +134,23 @@ def store() -> MemoryStore:
 
 
 def _engine(
-    store, llm, *, history_limit: int = 20, tools: ToolRegistry | None = None, timeout: float = 5
+    store,
+    llm,
+    *,
+    history_limit: int = 20,
+    tools: ToolRegistry | None = None,
+    timeout: float = 5,
+    usage=None,
 ):
-    return ConversationEngine(store, llm, tools or ToolRegistry(), history_limit, timeout)
+    return ConversationEngine(
+        store,
+        llm,
+        tools or ToolRegistry(),
+        history_limit,
+        timeout,
+        usage=usage or guard(),
+        llm_retry=RetryPolicy(attempts=2),  # no backoff sleeps in unit tests
+    )
 
 
 def _texts(request) -> list[tuple[str, str]]:
@@ -359,7 +383,7 @@ class _BlockingInvalidLLM(FakeLLMClient):
     async def generate(self, request):
         self.requests.append(request)
         time.sleep(0.08)
-        return "not json"
+        return ModelReply(text="not json")
 
 
 class _OrderedLLM(FakeLLMClient):
@@ -409,7 +433,8 @@ async def test_checkpoint_runs_before_the_model_call_every_turn(store):
     first = await engine.handle_turn(tenant, None, "x", "test_chat")
     await engine.handle_turn(tenant, first.interaction_id, "y", "test_chat")
 
-    assert store.calls == ["checkpoint", "generate", "checkpoint", "generate"]
+    # Admission (new chat only) is counted inside the transaction the checkpoint commits.
+    assert store.calls == ["admission", "checkpoint", "generate", "checkpoint", "generate"]
 
 
 async def test_blank_reply_is_invalid_and_goes_through_retry_and_fallback(store, llm):
@@ -452,3 +477,142 @@ async def test_fallback_flag_is_on_the_message_and_survives_reload(store, llm):
         (5, False),
     ]
     assert next(iter(store.interactions.values())).state["fallback_messages"] == [3]
+
+
+# --- Usage limits (slice #5) -------------------------------------------------
+
+
+def _biz(tenant: Tenant) -> Business:
+    assert tenant.business is not None
+    return tenant.business
+
+
+def _limited(per_day: int = 10_000, per_business: int = 10_000):
+    store = MemoryUsageStore()
+    usage = guard(store, limits(gemini_request=DailyLimit(per_day, per_business)))
+    return store, usage
+
+
+async def test_every_model_call_is_metered_with_tokens(store, llm):
+    usage_store, usage = _limited()
+    tenant = _tenant()
+    llm.queue(agent_turn("Hi"))
+
+    await _engine(store, llm, usage=usage).handle_turn(tenant, None, "hello", "test_chat")
+
+    business = _biz(tenant).id
+    assert usage_store.count(UsageKind.GEMINI_REQUEST, business) == 1
+    assert usage_store.count(UsageKind.GEMINI_TOKENS, business) == 120  # fake: 100 in + 20 out
+    assert all(
+        e.interaction_id is not None for e in usage_store.events
+    )  # attributed to the conversation
+
+
+async def test_hitting_the_limit_answers_with_the_quota_fallback_and_no_model_call(store, llm):
+    _, usage = _limited(per_business=3)
+    tenant = _tenant()
+    _biz(tenant).phone = "+1 (312) 847-1928"
+    engine = _engine(store, llm, usage=usage)
+    llm.queue(agent_turn("1"), agent_turn("2"), agent_turn("3"))
+
+    first = await engine.handle_turn(tenant, None, "one", "test_chat")
+    for text in ("two", "three"):
+        await engine.handle_turn(tenant, first.interaction_id, text, "test_chat")
+    fourth = await engine.handle_turn(tenant, first.interaction_id, "four", "test_chat")
+
+    assert len(llm.requests) == 3  # the fourth message made zero Gemini calls
+    assert fourth.fallback is True and fourth.usage_limited is True
+    assert fourth.reply_text == quota_fallback(_biz(tenant))
+    assert "+1 (312) 847-1928" in fourth.reply_text
+    state = store.interactions[first.interaction_id].state
+    assert state["requires_human"] is True
+    assert state["failures"][-1]["kind"] == "usage_limited"
+    assert state["failures"][-1]["detail"] == "gemini_request:business"
+    assert state["usage_limited_messages"] == [fourth.messages[-1].sequence_number]
+
+
+async def test_quota_fallback_without_contact_details_names_the_business():
+    text = quota_fallback(_biz(_tenant("Alpha Salon")))
+    assert "Please contact Alpha Salon directly" in text
+
+
+async def test_a_usage_store_outage_fails_closed_with_the_provider_fallback(store, llm):
+    usage_store, usage = _limited()
+    usage_store.fail_reserve = True
+    llm.queue(agent_turn("never sent"))
+
+    result = await _engine(store, llm, usage=usage).handle_turn(_tenant(), None, "hi", "test_chat")
+
+    assert len(llm.requests) == 0
+    assert result.reply_text == PROVIDER_FALLBACK and result.usage_limited is False
+    state = next(iter(store.interactions.values())).state
+    assert state["failures"][-1]["detail"] == "usage_unavailable"
+
+
+async def test_tokens_of_a_blocked_reply_are_metered(store, llm):
+    usage_store, usage = _limited()
+    tenant = _tenant()
+    llm.queue(LLMUnavailableError("MAX_TOKENS", tokens_in=300, tokens_out=2048))
+
+    await _engine(store, llm, usage=usage).handle_turn(tenant, None, "hi", "test_chat")
+
+    assert usage_store.count(UsageKind.GEMINI_TOKENS, _biz(tenant).id) == 2348
+
+
+async def test_a_limit_hit_on_the_invalid_output_retry_still_falls_back_safely(store, llm):
+    _, usage = _limited(per_business=1)
+    llm.queue("not json", agent_turn("never sent"))
+
+    result = await _engine(store, llm, usage=usage).handle_turn(_tenant(), None, "hi", "test_chat")
+
+    assert len(llm.requests) == 1
+    assert result.usage_limited is True
+
+
+async def test_failed_provider_calls_are_retried_per_policy_and_counted(store, llm):
+    usage_store, usage = _limited()
+    tenant = _tenant()
+    flaky = LLMUnavailableError("503", retryable=True)
+    llm.queue(flaky, flaky, agent_turn("never sent"))
+
+    result = await _engine(store, llm, usage=usage).handle_turn(tenant, None, "hi", "test_chat")
+
+    business = _biz(tenant).id
+    assert len(llm.requests) == 2  # the policy's 2 attempts, then the provider fallback
+    assert result.reply_text == PROVIDER_FALLBACK and result.usage_limited is False
+    assert usage_store.count(UsageKind.GEMINI_REQUEST, business) == 2
+    assert usage_store.count(UsageKind.FAILED_REQUEST, business) == 2
+
+
+async def test_a_transient_failure_then_success_counts_both_attempts(store, llm):
+    usage_store, usage = _limited()
+    tenant = _tenant()
+    llm.queue(LLMUnavailableError("429", retryable=True), agent_turn("Recovered"))
+
+    result = await _engine(store, llm, usage=usage).handle_turn(tenant, None, "hi", "test_chat")
+
+    assert result.reply_text == "Recovered"
+    assert usage_store.count(UsageKind.GEMINI_REQUEST, _biz(tenant).id) == 2
+    assert usage_store.count(UsageKind.FAILED_REQUEST, _biz(tenant).id) == 1
+
+
+async def test_new_chats_are_refused_past_the_concurrency_limit(store, llm):
+    usage_store = MemoryUsageStore()
+    usage = guard(usage_store, limits())  # 10 per business
+    tenant = _tenant()
+    engine = _engine(store, llm, usage=usage)
+    llm.queue(*[agent_turn(str(i)) for i in range(10)])
+    started = [await engine.handle_turn(tenant, None, "hi", "test_chat") for _ in range(10)]
+
+    with pytest.raises(ConcurrencyLimitedError):
+        await engine.handle_turn(tenant, None, "one more", "test_chat")
+    assert len(llm.requests) == 10
+
+    # Continuing an existing chat is never subject to admission.
+    llm.queue(agent_turn("still here"))
+    await engine.handle_turn(tenant, started[0].interaction_id, "next", "test_chat")
+    # Ending one frees a slot.
+    await engine.end(tenant, started[0].interaction_id, "test_chat")
+    llm.queue(agent_turn("welcome"))
+    await engine.handle_turn(tenant, None, "now?", "test_chat")
+

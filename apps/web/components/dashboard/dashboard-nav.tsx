@@ -13,7 +13,7 @@ const NAV_ITEMS = [
   { label: "Calendar" },
   { label: "Inbox" },
   { label: "Phone" },
-  { label: "Settings" },
+  { label: "Settings", href: "/dashboard/settings" },
 ] as const;
 
 export function DashboardNav() {

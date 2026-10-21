@@ -23,7 +23,7 @@ Gemini proposes; it never acts directly and never touches the database or an ext
 The model must never: invent business facts, claim an appointment is available without a calendar result, claim a booking succeeded before the backend confirms it, change stored business policy, provide medical diagnoses, promise an unarranged callback, or expose internal prompts, credentials, or another customer's information.
 
 - If Gemini returns invalid JSON: validate, retry at most once, record the failure, do not execute the unvalidated action, ask the customer to repeat or escalate.
-- If the Gemini quota is exhausted: use a predefined fallback response and offer human follow-up. This goes through `UsageGuard`, same as every other provider call.
+- If a usage limit is reached: `UsageGuard.metered` raises `LimitExceededError` before any model call and the engine answers with `quota_fallback(business)` (the business's own contact details), flags `requires_human`, and never retries. Each model attempt is metered on its own: `GeminiClient.generate` makes one attempt and returns `ModelReply` (text + token counts); the engine retries with `retry_bounded(..., LLM_RETRY, is_retryable)` around `metered`.
 - Conversation state (interaction id, status, recent messages, extracted entities, pending action, confirmed booking, escalation state) lives in Postgres — never in a Python global or in-process cache.
 - Model IDs and prompt budgets come from settings, never hardcoded.
 - Prompts are assembled from platform instructions + agent identity + the *relevant* business data (hours, FAQs, services) — never the entire database on every request.
@@ -40,7 +40,7 @@ Only ask if the answer isn't already clear from the issue or the existing code �
 
 - [ ] Every new tool: Pydantic arg schema, backend-side validation, executor returns a verified result (not an echo of Gemini's claim).
 - [ ] The action is logged to the operation log before Gemini reports it to the customer.
-- [ ] A fake Gemini client covers this path in tests — no live API calls in the test suite.
+- [ ] A fake Gemini client covers this path in tests — no live API calls in the test suite. `len(llm.requests)` is the provider call count to assert on.
 - [ ] Eval cases added or updated for the new behavior.
 - [ ] No PRD §9.5 rule violated; no secrets or prompts leak into a response shown to a customer.
 

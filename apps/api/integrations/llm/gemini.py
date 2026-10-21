@@ -2,13 +2,16 @@
 
 Policy
 - Model id, key and timeout come only from the constructor (settings).
-- At most 2 attempts per `generate` (1 retry), and only for transient failures:
-  timeouts, network errors, HTTP 408, 429 and 5xx. Anything else fails immediately.
+- One provider attempt per `generate`; the SDK's own retries are off. The
+  caller retries with `core.retry.retry_bounded` + `LLM_RETRY` around
+  `UsageGuard.metered`, so every attempt is reserved and counted.
 - Every provider failure, and any empty / blocked / safety-stopped / truncated
-  reply, becomes `LLMUnavailableError` with a short reason. Prompts, customer
-  text and model output are never logged or put in the exception message.
-- Issue #5: `UsageGuard` must wrap this client (quota, budget, rate limits), as
-  `apps/api/CLAUDE.md` already says for Stripe. Retries here stay bounded.
+  reply, becomes `LLMUnavailableError` with a short reason. Only transient
+  failures (timeouts, network errors, HTTP 408, 429 and 5xx) are `retryable`.
+  Prompts, customer text and model output are never logged or put in the
+  exception message.
+- Token counts come from the response's `usage_metadata` (thinking tokens
+  count as output); missing counts are reported as 0.
 """
 
 import asyncio
@@ -20,13 +23,11 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from integrations.llm.port import LLMUnavailableError, ModelMessage, ModelRequest
+from integrations.llm.port import LLMUnavailableError, ModelMessage, ModelReply, ModelRequest
 from schemas.agent_turn import Entities, Intent
 
 logger = logging.getLogger(__name__)
 
-MAX_ATTEMPTS = 2
-_RETRY_DELAY_SECONDS = 0.5
 _TEMPERATURE = 0.4
 # Thinking tokens count against max_output_tokens on 2.5 models, so cap thinking
 # well below it to leave room for a <=1000 char reply and entities.
@@ -69,6 +70,19 @@ def _is_transient(exc: Exception) -> bool:
     if isinstance(exc, genai_errors.APIError):
         return exc.code in (408, 429)
     return isinstance(exc, TimeoutError | httpx.TransportError)
+
+
+def _token_counts(response: Any) -> tuple[int, int]:
+    usage = getattr(response, "usage_metadata", None)
+
+    def count(name: str) -> int:
+        value = getattr(usage, name, None)
+        return value if isinstance(value, int) and value > 0 else 0
+
+    return (
+        count("prompt_token_count"),
+        count("candidates_token_count") + count("thoughts_token_count"),
+    )
 
 
 def _contents(messages: tuple[ModelMessage, ...]) -> list[types.Content]:
@@ -122,7 +136,7 @@ class GeminiClient:
             )
         return self._sdk
 
-    async def generate(self, request: ModelRequest) -> str:
+    async def generate(self, request: ModelRequest) -> ModelReply:
         sdk = self._client()
         config = types.GenerateContentConfig(
             system_instruction=request.system_instruction,
@@ -132,30 +146,25 @@ class GeminiClient:
             max_output_tokens=_MAX_OUTPUT_TOKENS,
             thinking_config=types.ThinkingConfig(thinking_budget=_THINKING_BUDGET_TOKENS),
         )
-        contents = _contents(request.messages)
-        last_reason = "unknown"
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                response = await asyncio.wait_for(
-                    sdk.aio.models.generate_content(
-                        model=self._model, contents=contents, config=config
-                    ),
-                    timeout=self._timeout_seconds + 1,
-                )
-                return _reply_text(response)
-            except LLMUnavailableError:
-                raise
-            except Exception as exc:
-                last_reason = type(exc).__name__
-                transient = _is_transient(exc)
-                logger.warning(
-                    "gemini call failed (attempt %d/%d, %s, transient=%s)",
-                    attempt,
-                    MAX_ATTEMPTS,
-                    last_reason,
-                    transient,
-                )
-                if not transient or attempt == MAX_ATTEMPTS:
-                    break
-                await asyncio.sleep(_RETRY_DELAY_SECONDS)
-        raise LLMUnavailableError(f"Gemini call failed ({last_reason}).")
+        try:
+            response = await asyncio.wait_for(
+                sdk.aio.models.generate_content(
+                    model=self._model, contents=_contents(request.messages), config=config
+                ),
+                timeout=self._timeout_seconds + 1,
+            )
+        except Exception as exc:
+            reason = type(exc).__name__
+            transient = _is_transient(exc)
+            logger.warning("gemini call failed (%s, transient=%s)", reason, transient)
+            raise LLMUnavailableError(
+                f"Gemini call failed ({reason}).", retryable=transient
+            ) from exc
+        tokens_in, tokens_out = _token_counts(response)
+        try:
+            text = _reply_text(response)
+        except LLMUnavailableError as exc:
+            # A blocked or truncated reply still spent tokens: report them.
+            exc.tokens_in, exc.tokens_out = tokens_in, tokens_out
+            raise
+        return ModelReply(text=text, tokens_in=tokens_in, tokens_out=tokens_out)

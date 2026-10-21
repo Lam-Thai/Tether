@@ -6,6 +6,7 @@ touching `os.environ` directly.
 """
 
 import json
+from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -53,6 +54,26 @@ class Settings(BaseSettings):
     # Past it the turn answers with the provider fallback. Keep it well under the
     # web client's turn timeout and the API's serverless function limit.
     conversation_turn_timeout_seconds: float = Field(default=25.0, gt=0, le=120)
+
+    # Usage limits (services/usage.py, PRD §14.5). "Per day" is the UTC day; a
+    # global cap covers all businesses together. 0 blocks the feature entirely.
+    gemini_requests_per_day: int = Field(default=200, ge=0)
+    gemini_requests_per_business_per_day: int = Field(default=50, ge=0)
+    tts_requests_per_day: int = Field(default=50, ge=0)
+    tts_requests_per_business_per_day: int = Field(default=10, ge=0)
+    calls_per_day: int = Field(default=50, ge=0)
+    calls_per_business_per_day: int = Field(default=10, ge=0)
+    sms_per_day: int = Field(default=50, ge=0)
+    sms_per_business_per_day: int = Field(default=10, ge=0)
+    max_call_duration_seconds: int = Field(default=600, ge=30, le=3600)
+    max_concurrent_interactions: int = Field(default=20, ge=0)
+    max_concurrent_interactions_per_business: int = Field(default=5, ge=0)
+    # An active interaction idle this long stops counting toward concurrency.
+    interaction_idle_minutes: int = Field(default=15, ge=1, le=240)
+    # Estimated cost only (free tier may bill nothing). Defaults: Gemini 2.5
+    # Flash paid-tier list price; update alongside GEMINI_MODEL.
+    gemini_input_usd_per_million_tokens: Decimal = Field(default=Decimal("0.30"), ge=0)
+    gemini_output_usd_per_million_tokens: Decimal = Field(default=Decimal("2.50"), ge=0)
 
     @field_validator("stripe_secret_key")
     @classmethod

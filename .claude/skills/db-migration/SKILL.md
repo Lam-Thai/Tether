@@ -14,6 +14,9 @@ description: Change the database schema in apps/api. Use when adding, altering, 
    - `created_at` / `updated_at` present and defaulted where the table needs them.
    - Foreign keys pointing at the right table, with the right `ON DELETE` behavior.
    - Unique constraints that should exist (e.g., one active calendar connection per business) actually generated.
+   - An index on every FK column with `ON DELETE SET NULL` / `CASCADE` (autogenerate omits it; deletes then scan the table).
+   - A uniqueness rule over a nullable column ("one global row where `business_id IS NULL`") needs partial unique indexes, and every `ON CONFLICT` against them needs the matching `index_where` (see `models/usage.py`, `repositories/usage.py`).
+   - A value list enforced by a check constraint (e.g. usage kinds) changes only through a migration that rewrites the constraint.
 4. **Write and test the downgrade.** `alembic downgrade -1` must actually run, not just exist as an empty stub. If the upgrade is destructive (dropping a column with data), write the backfill or data-preserving path before writing the downgrade.
 5. **Never run migrations on app startup.** They run as an explicit step in deploy/CI, not inside the FastAPI app factory.
 

@@ -1,6 +1,7 @@
 """`GeminiClient` against a stub SDK client: no network, no key.
 
-Covers the request mapping, the no-key path, and the bounded-retry policy.
+Covers the request mapping, the no-key path, token counts, and which failures
+are flagged retryable (the adapter itself makes exactly one attempt).
 """
 
 from types import SimpleNamespace
@@ -11,7 +12,6 @@ import pytest
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from integrations.llm import gemini
 from integrations.llm.gemini import GeminiClient
 from integrations.llm.port import LLMUnavailableError, ModelMessage, ModelRequest
 from schemas.agent_turn import AgentTurn
@@ -37,11 +37,17 @@ def stub_sdk(*outcomes: Any) -> tuple[SimpleNamespace, StubModels]:
     return SimpleNamespace(aio=SimpleNamespace(models=models)), models
 
 
-def reply(text: str | None = OK_JSON, finish: str = "STOP", block: str | None = None):
+def reply(
+    text: str | None = OK_JSON,
+    finish: str = "STOP",
+    block: str | None = None,
+    usage: Any = None,
+):
     return SimpleNamespace(
         text=text,
         candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name=finish))],
         prompt_feedback=SimpleNamespace(block_reason=block) if block else None,
+        usage_metadata=usage,
     )
 
 
@@ -59,14 +65,9 @@ REQUEST = ModelRequest(
 )
 
 
-@pytest.fixture(autouse=True)
-def no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(gemini, "_RETRY_DELAY_SECONDS", 0)
-
-
 async def test_maps_request_to_sdk_call():
     sdk, models = stub_sdk(reply())
-    assert await client(sdk).generate(REQUEST) == OK_JSON
+    assert (await client(sdk).generate(REQUEST)).text == OK_JSON
 
     (call,) = models.calls
     assert call["model"] == "model-from-settings"
@@ -118,10 +119,11 @@ async def test_empty_blocked_or_stopped_replies_are_unavailable(outcome: Any):
     assert len(models.calls) == 1  # not retried
 
 
-async def test_non_transient_error_is_not_retried():
+async def test_non_transient_error_is_not_retryable():
     sdk, models = stub_sdk(genai_errors.ClientError(400, {"error": {"message": "bad"}}))
-    with pytest.raises(LLMUnavailableError):
+    with pytest.raises(LLMUnavailableError) as raised:
         await client(sdk).generate(REQUEST)
+    assert raised.value.retryable is False
     assert len(models.calls) == 1
 
 
@@ -135,17 +137,35 @@ async def test_non_transient_error_is_not_retried():
         httpx.ConnectError("boom"),
     ],
 )
-async def test_transient_error_is_retried_once_then_succeeds(transient: Exception):
+async def test_transient_errors_are_retryable_but_never_retried_here(transient: Exception):
     sdk, models = stub_sdk(transient, reply())
-    assert await client(sdk).generate(REQUEST) == OK_JSON
-    assert len(models.calls) == 2
-
-
-async def test_retries_are_bounded_to_two_attempts():
-    err = genai_errors.ServerError(500, {"error": {"message": "down"}})
-    sdk, models = stub_sdk(err, err, err)
     with pytest.raises(LLMUnavailableError) as raised:
         await client(sdk).generate(REQUEST)
-    assert len(models.calls) == 2
+    assert raised.value.retryable is True
+    assert len(models.calls) == 1  # the caller owns retries (retry_bounded + UsageGuard)
     assert "SYSTEM TEXT" not in str(raised.value)
     assert "hours" not in str(raised.value)
+
+
+async def test_reports_token_counts_with_thinking_as_output():
+    usage = SimpleNamespace(
+        prompt_token_count=120, candidates_token_count=30, thoughts_token_count=12
+    )
+    sdk, _ = stub_sdk(reply(usage=usage))
+    result = await client(sdk).generate(REQUEST)
+    assert (result.tokens_in, result.tokens_out) == (120, 42)
+
+
+async def test_a_truncated_reply_still_reports_the_tokens_it_spent():
+    usage = SimpleNamespace(prompt_token_count=90, candidates_token_count=2048)
+    sdk, _ = stub_sdk(reply(finish="MAX_TOKENS", usage=usage))
+    with pytest.raises(LLMUnavailableError) as raised:
+        await client(sdk).generate(REQUEST)
+    assert (raised.value.tokens_in, raised.value.tokens_out) == (90, 2048)
+    assert raised.value.retryable is False
+
+
+async def test_missing_token_counts_are_zero():
+    sdk, _ = stub_sdk(reply(usage=SimpleNamespace(prompt_token_count=None)))
+    result = await client(sdk).generate(REQUEST)
+    assert (result.tokens_in, result.tokens_out) == (0, 0)

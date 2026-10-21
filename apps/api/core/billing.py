@@ -13,14 +13,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import settings
 from core.db import get_session
 from core.tenant import Tenant, get_tenant
+from core.usage import get_usage_guard
 from integrations.stripe import BillingGateway, StripeBillingGateway
 from repositories.billing import SqlBillingStore
 from services.billing import BillingConfig, SubscriptionRequiredError, access_for
+from services.billing_metering import MeteredBillingGateway
 from services.business import BusinessNotFoundError
 
-# One client per process; tests override `get_billing_gateway`.
-_gateway = StripeBillingGateway(
-    api_key=settings.stripe_secret_key, webhook_secret=settings.stripe_webhook_secret
+# One client per process, every Stripe call metered through `UsageGuard`;
+# tests override `get_billing_gateway`.
+_gateway = MeteredBillingGateway(
+    StripeBillingGateway(
+        api_key=settings.stripe_secret_key, webhook_secret=settings.stripe_webhook_secret
+    ),
+    get_usage_guard(),
 )
 
 

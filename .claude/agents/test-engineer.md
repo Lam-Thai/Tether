@@ -23,6 +23,8 @@ Two categories this repo requires on top of ordinary coverage:
 - **Tenant isolation**: for any endpoint or service touching business data, a test that business A cannot read or write business B's data, even if it supplies B's ID directly.
 - **Failure paths**: provider timeout, invalid/malformed AI output, quota exhausted, webhook retried — assert the system degrades safely rather than just testing the happy path.
 
+Usage limits: unit-test with `tests/services/memory_usage_store.py` (`MemoryUsageStore`, `guard()`, `limits()`); in DB/API tests tighten the `usage` fixture (`usage.set_daily(...)`, `usage.set_concurrency(...)`), which pins its own UTC day so counters never leak between tests. Assert provider call counts from the fake (`len(llm.requests)`). Each DB test pays ~15s of tenant setup on Neon, so assert a whole flow per test; skip retry backoff with `RetryPolicy(attempts=2)` (unit) or by patching `asyncio.sleep` (API).
+
 ## Before you start
 
 Only ask if the answer isn't already clear from the issue or the diff — don't ask what you can reasonably infer.

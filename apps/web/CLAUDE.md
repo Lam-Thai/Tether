@@ -45,6 +45,14 @@ Vitest config is scoped to this package (`apps/web/vitest.config.ts`, `happy-dom
 - After an unknown outcome (timeout/unreachable) on a send, re-fetch the transcript before offering Retry, so a committed turn isn't sent twice. 409 means either `interaction_ended` (show New chat) or `interaction_busy` (keep the draft, retry); branch on `error.code`.
 - Feature Zod schemas and limits live in `lib/validation/<feature>.ts` and mirror the API's; PATCH forms send only the changed fields.
 
+## Usage limits
+
+- `/dashboard/settings/usage` follows the server page → presentational component pattern (`components/settings/usage-panel.tsx`). `GET /usage` carries this business's meters only; platform-wide state arrives as `global_limit_reached` flags and drives a warning, never a number.
+- Meter `kind` is an open string: label known kinds, derive a label for the rest from the string.
+- `usage_limited` (turn response) and `concurrency_limited` (429 on a new chat) are state from the latest response only; a reload doesn't restore them.
+- Render viewer-local times with `useSyncExternalStore` and a `null` server snapshot (no hydration mismatch); the `react-hooks/set-state-in-effect` lint rule rejects the effect + `setState` version.
+- Money arrives as a decimal string: format client-side and label it as an estimate.
+
 ## Pending (future slices)
 
 - Clerk integration: where auth state lives, how a page gets the current business.

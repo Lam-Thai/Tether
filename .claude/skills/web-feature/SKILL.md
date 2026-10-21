@@ -20,3 +20,5 @@ description: Build a page or section in apps/web. Use when adding a new UI page,
 - [ ] Form validation via Zod, matching the backend schema.
 - [ ] Success state only rendered after a confirmed API response.
 - [ ] No secrets or provider calls in frontend code.
+- [ ] Copy uses plain hyphens, colons or two sentences in place of em/en dashes.
+- [ ] Any meter or progress bar has `role="meter"` (or equivalent) and states used/limit in text.
