@@ -56,7 +56,7 @@ async def test_business_limit_falls_back_with_zero_model_calls_for_that_tenant_o
     assert fourth.status_code == 200, fourth.text
     body = fourth.json()
     assert body["fallback"] is True and body["usage_limited"] is True
-    assert "reach the team directly" in body["reply_text"]
+    assert body["reply_text"].endswith("directly and someone will help you.")
     assert len(llm.requests) == 3  # the 4th message made no Gemini call
 
     # Another tenant is unaffected by tenant A's per-business limit.
