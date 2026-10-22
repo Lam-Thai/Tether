@@ -149,3 +149,67 @@ async def test_each_tenant_only_sees_their_own_business_via_get(app, two_tenants
     assert response_a.json()["id"] == str(tenant_a.business_id)
     assert response_b.json()["id"] == str(tenant_b.business_id)
     assert response_a.json()["id"] != response_b.json()["id"]
+
+
+async def test_create_defaults_currency_and_rejects_bad_input(app, mint_token):
+    token = mint_token(subject=f"user_{uuid.uuid4().hex}")
+    headers = {"Authorization": f"Bearer {token}"}
+    valid = {
+        "name": "Alpha Salon",
+        "industry": "Salon",
+        "address": "123 Main St",
+        "timezone": "America/New_York",
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for bad in (
+            {**valid, "currency": "ZZZ"},
+            {**valid, "currency": "US"},
+            {**valid, "contact_email": "not-an-email"},
+            {**valid, "name": "   "},
+            {**valid, "owner_id": str(uuid.uuid4())},
+        ):
+            response = await client.post("/api/v1/business", json=bad, headers=headers)
+            assert response.status_code == 422, bad
+        created = await client.post(
+            "/api/v1/business",
+            json={**valid, "currency": "eur", "contact_email": " hi@alpha.example "},
+            headers=headers,
+        )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["currency"] == "EUR"
+    assert created.json()["contact_email"] == "hi@alpha.example"
+
+
+async def test_patch_validates_and_clears_optional_contacts(app, two_tenants):
+    tenant_a, _ = two_tenants
+    url = f"/api/v1/business/{tenant_a.business_id}"
+    headers = {"Authorization": f"Bearer {tenant_a.token}"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for bad in (
+            {"currency": "ZZZ"},
+            {"contact_email": "nope"},
+            {"name": "  "},
+            {"name": None},
+            {"timezone": None},
+            {"currency": None},
+            {"owner_id": str(uuid.uuid4())},
+        ):
+            response = await client.patch(url, json=bad, headers=headers)
+            assert response.status_code == 422, bad
+        set_ = await client.patch(
+            url, json={"phone": "+15555550123", "currency": "gbp"}, headers=headers
+        )
+        cleared = await client.patch(
+            url, json={"phone": None, "contact_email": ""}, headers=headers
+        )
+
+    assert set_.status_code == 200 and (set_.json()["phone"], set_.json()["currency"]) == (
+        "+15555550123",
+        "GBP",
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["phone"] is None and cleared.json()["contact_email"] is None
+    assert cleared.json()["currency"] == "GBP"  # untouched by the later patch

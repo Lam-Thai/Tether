@@ -21,6 +21,7 @@ from services.tools import (
     ToolContext,
     ToolExecutor,
     ToolRegistry,
+    ToolRejection,
     ToolResult,
 )
 from tests.services.memory_faq_store import MemoryFaqStore, MemoryOperationLog
@@ -271,6 +272,37 @@ async def test_a_round_executes_at_most_the_cap_and_rejects_the_rest():
     assert outcomes[-1].for_model == {"error": "too_many_calls"}
     assert [r["status"] for r in log.rows] == [o.status for o in outcomes]
     assert log.rows[-1]["result"] == {"reason": "too_many_calls"}
+
+
+async def test_an_executor_rejection_is_rejected_logged_by_name_and_rolled_back():
+    events: list[str] = []
+    secret = "CUSTOMER-SECRET-VALUE"
+
+    @asynccontextmanager
+    async def savepoint():
+        try:
+            yield
+        except BaseException:
+            events.append("rolled_back")
+            raise
+
+    async def run(ctx, args):
+        raise ToolRejection("out_of_range", fields=["code"], details={"latest": "Z9"})
+
+    log = MemoryOperationLog()
+    tool = Tool(name="lookup", description="d", args=LookupArgs, run=run)
+    executor = ToolExecutor(ToolRegistry.of([tool]), log, isolate=savepoint)
+    ctx = ToolContext(tenant=_tenant(), interaction_id=uuid.uuid4())
+
+    outcome = await executor.execute(ctx, ToolCall(name="lookup", arguments={"code": secret}))
+
+    assert outcome.status == "rejected"
+    assert outcome.for_model == {"error": "out_of_range", "fields": ["code"], "latest": "Z9"}
+    assert not outcome.evidence.sources and outcome.faqs == ()
+    (row,) = log.rows
+    assert row["arguments"] == {"argument_names": ["code"]}
+    assert row["result"] == {"reason": "out_of_range", "fields": ["code"], "latest": "Z9"}
+    assert secret not in str(log.rows) and events == ["rolled_back"]
 
 
 # --- search_faq ----------------------------------------------------------------

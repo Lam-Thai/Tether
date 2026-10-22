@@ -67,8 +67,10 @@ def response_schema_for_gemini(tools: Sequence[ToolDeclaration] = ()) -> dict[st
     is an array of `{name, arguments}` where `name` is one of the declared
     tools and `arguments` has one property per parameter name across all of
     them (the union), each nullable, since one shape has to fit every tool.
-    The executor treats a null argument as "not given". Without tools,
-    `tool_calls` is left out so the model can't emit one.
+    The executor treats a null argument as "not given". A name two tools share
+    must have one type (a clash fails loudly); if they describe it differently
+    the description is dropped (each tool's own is in the prompt's TOOLS list).
+    Without tools, `tool_calls` is left out so the model can't emit one.
     """
     nullable_string: dict[str, Any] = {"type": "STRING", "nullable": True}
     properties: dict[str, Any] = {
@@ -102,6 +104,11 @@ def _tool_calls_schema(tools: Sequence[ToolDeclaration]) -> dict[str, Any]:
             known = arguments.setdefault(name, converted)
             if known["type"] != converted["type"]:
                 raise ValueError(f"Tool parameter {name!r} is declared with two different types.")
+            first, other = known.get("description"), converted.get("description")
+            if first and other and first != other:
+                # Two tools describe it differently (search_faq's and get_services's
+                # `query`): neither wording fits both, and each tool's own is in TOOLS.
+                del known["description"]
     item: dict[str, Any] = {"name": {"type": "STRING", "enum": [tool.name for tool in tools]}}
     if arguments:  # Gemini rejects an OBJECT with no properties
         item["arguments"] = {"type": "OBJECT", "properties": arguments}

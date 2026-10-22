@@ -18,6 +18,7 @@ import {
 } from "@/lib/api/client";
 import { FAQ_LIMITS, faqFormSchema, type FaqFormValues } from "@/lib/validation/faq";
 import { Dialog } from "@/components/agent/faq-dialog";
+import { SESSION_EXPIRED, Switch, commonFailure } from "@/components/agent/section-shared";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -26,24 +27,6 @@ import { FieldError, FormError } from "@/components/ui/form-error";
 import { Input, controlClasses } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-
-const SESSION_EXPIRED = "Your session has expired. Please sign in again.";
-
-const PLAN_REQUIRED = (
-  <>
-    Your plan is not active.{" "}
-    <Link href="/billing/plan" className="font-medium underline">
-      Choose a plan
-    </Link>
-  </>
-);
-
-/** Messages for the failure kinds every action shares. */
-function commonFailure(kind: string, reason?: string): ReactNode {
-  if (kind === "unauthorized") return SESSION_EXPIRED;
-  if (kind === "subscription_required") return PLAN_REQUIRED;
-  return reason ?? "Something went wrong. Please try again.";
-}
 
 function toFormValues(faq: FaqRead | null): FaqFormValues {
   return {
@@ -74,50 +57,6 @@ function Counter({ length, max }: { length: number; max: number }) {
     >
       {length}/{max}
     </p>
-  );
-}
-
-function Switch({
-  checked,
-  pending,
-  label,
-  onToggle,
-}: {
-  checked: boolean;
-  pending: boolean;
-  label: string;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      aria-busy={pending || undefined}
-      disabled={pending}
-      onClick={onToggle}
-      className="inline-flex h-11 items-center gap-2 rounded-md px-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait"
-    >
-      <span
-        aria-hidden
-        className={cn(
-          "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border border-input transition-colors duration-200 motion-reduce:transition-none",
-          checked ? "bg-foreground" : "bg-muted",
-          pending && "opacity-60",
-        )}
-      >
-        <span
-          className={cn(
-            "inline-block size-4 rounded-full transition-transform duration-200 motion-reduce:transition-none",
-            checked ? "translate-x-6 bg-card" : "translate-x-1 bg-foreground",
-          )}
-        />
-      </span>
-      <span aria-hidden className="w-7 text-sm font-medium">
-        {checked ? "On" : "Off"}
-      </span>
-    </button>
   );
 }
 

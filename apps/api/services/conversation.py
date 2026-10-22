@@ -5,8 +5,10 @@ conversation correct:
 
 - Stateless between calls. Everything the next turn needs (messages, entities,
   failures) is read from the store; nothing is cached in the process.
-- The owner's persona is reloaded from the store on every turn, so an edit
-  applies to the very next message with no restart.
+- The owner's persona, and with a `BusinessDirectory` the business profile and
+  opening hours, are reloaded on every turn, so an edit applies to the very
+  next message with no restart. Hours go in the prompt (today's local date,
+  the weekly hours, the next 7 days); services only through `get_services`.
 - Gemini proposes, the backend validates. The raw reply is parsed against
   `AgentTurn`; a bad reply, or one asking for a tool that isn't registered,
   is invalid and is never acted on. One retry per turn, then a fixed
@@ -19,12 +21,14 @@ conversation correct:
   `MAX_TOOL_ROUNDS` rounds; a model that still asks for tools after that
   gets the no-info fallback. So one turn makes at most
   `MAX_TOOL_ROUNDS + 2` model calls (rounds, the final reply, one retry).
-- Grounding guard. A final reply with intent `FAQ`, `BUSINESS_HOURS` or
-  `PRICE_INQUIRY` (`GROUNDED_INTENTS`) must cite `sources`, and
-  every cited id (whatever the intent) must be an FAQ that `search_faq`
-  returned in this turn. Otherwise the reply is replaced by the no-info
+- Grounding guard (`services/grounding.py`). Every cited source must be
+  valid in this turn (an FAQ or service a tool returned, `business_hours`
+  when hours are listed, `business_profile`); a reply with a fact-stating
+  intent (`GROUNDED_INTENTS`) must cite one of a kind that backs it; and every
+  money amount and duration in the reply must match a service or FAQ
+  retrieved in this turn. Otherwise the reply is replaced by the no-info
   fallback and the interaction is flagged for a human. Earlier turns never
-  ground a later one: the owner may have edited or disabled the FAQ since.
+  ground a later one: the owner may have edited or disabled the fact since.
 - The fallback lines below (invalid output, provider, `quota_fallback`,
   `no_info_fallback`) are the only agent text that does not come from the
   model or from the owner's greeting. The last two point the customer to the
@@ -50,7 +54,7 @@ No FastAPI or SQLAlchemy imports: the router passes a `ConversationStore`
 import asyncio
 import logging
 import uuid
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -74,8 +78,18 @@ from models.business import Business
 from models.interaction import Interaction, InteractionMessage
 from schemas.agent_turn import AgentTurn
 from services.agent import AgentStore, load_agent, require_business
+from services.directory import BusinessDirectory
+from services.grounding import TurnEvidence, grounding_problem
 from services.knowledge import FaqSnippet
-from services.prompt_builder import BusinessFacts, Channel, Persona, PromptContext, Tone, build
+from services.prompt_builder import (
+    BusinessFacts,
+    Channel,
+    HoursFacts,
+    Persona,
+    PromptContext,
+    Tone,
+    build,
+)
 from services.tools import OperationLog, ToolContext, ToolExecutor, ToolOutcome, ToolRegistry
 from services.usage import (
     ActiveCounts,
@@ -95,10 +109,8 @@ MAX_RECORDED_FAILURES = 50
 MAX_TOOL_ROUNDS = 3
 # Distinct FAQs kept per turn (FAQ RESULTS and the ids the guard accepts), bounding the prompt.
 MAX_FAQS_PER_TURN = 10
-# Intents whose answer states facts that only FAQs hold (BUSINESS FACTS has no hours,
-# prices or policies), so the reply must cite FAQs retrieved this turn. LOCATION is
-# answerable from BUSINESS FACTS; the hours/services slices extend this with their tools.
-GROUNDED_INTENTS = frozenset({"FAQ", "BUSINESS_HOURS", "PRICE_INQUIRY"})
+# Local dates from today in the prompt's BUSINESS HOURS; later ones via `get_business_info`.
+PROMPT_HOURS_DAYS = 7
 
 FailureKind = Literal[
     "invalid_output",
@@ -251,7 +263,10 @@ class ConversationEngine:
         *,
         usage: UsageGuard,
         llm_retry: RetryPolicy = LLM_RETRY,
+        directory: BusinessDirectory | None = None,
     ) -> None:
+        """Without a `directory` the prompt has no BUSINESS HOURS, and BUSINESS FACTS
+        comes from the tenant's business row (no currency)."""
         self._store = store
         self._llm = llm
         self._tools = tools
@@ -259,6 +274,7 @@ class ConversationEngine:
         self._turn_timeout = turn_timeout_seconds
         self._usage = usage
         self._llm_retry = llm_retry
+        self._directory = directory
 
     async def handle_turn(
         self, tenant: Tenant, interaction_id: uuid.UUID | None, utterance: str, channel: Channel
@@ -288,6 +304,7 @@ class ConversationEngine:
             for row in history_rows
         ]
         history.append(ModelMessage(role="user", text=utterance))
+        facts, hours = await self._business_facts(tenant, business)
 
         context = PromptContext(
             persona=Persona(
@@ -296,14 +313,8 @@ class ConversationEngine:
                 greeting=agent.greeting,
                 custom_instructions=agent.custom_instructions,
             ),
-            business=BusinessFacts(
-                name=business.name,
-                industry=business.industry,
-                address=business.address,
-                timezone=business.timezone,
-                phone=business.phone,
-                contact_email=business.contact_email,
-            ),
+            business=facts,
+            hours=hours,
             channel=channel,
             history=history,
             state=dict(interaction.state or {}),
@@ -384,6 +395,39 @@ class ConversationEngine:
             messages=tuple(_view(row, interaction.state) for row in rows),
         )
 
+    async def _business_facts(
+        self, tenant: Tenant, business: Business
+    ) -> tuple[BusinessFacts, HoursFacts | None]:
+        """This turn's BUSINESS FACTS and BUSINESS HOURS, read fresh every turn and
+        before the first checkpoint (so inside the turn's first transaction)."""
+        if self._directory is None:
+            facts = BusinessFacts(
+                name=business.name,
+                industry=business.industry,
+                address=business.address,
+                timezone=business.timezone,
+                phone=business.phone,
+                contact_email=business.contact_email,
+            )
+            return facts, None
+        profile = self._directory.profile(tenant)
+        facts = BusinessFacts(
+            name=profile.name,
+            industry=profile.industry,
+            address=profile.address,
+            timezone=profile.timezone,
+            phone=profile.phone,
+            contact_email=profile.contact_email,
+            currency=profile.currency,
+        )
+        today = self._directory.today(tenant)
+        hours = HoursFacts(
+            today=today,
+            weekly=await self._directory.weekly_hours(tenant),
+            upcoming=await self._directory.schedule(tenant, today, PROMPT_HOURS_DAYS),
+        )
+        return facts, hours
+
     async def _active_interaction(
         self, business_id: uuid.UUID, interaction_id: uuid.UUID, channel: str
     ) -> Interaction:
@@ -432,8 +476,10 @@ class ConversationEngine:
         failures: list[dict[str, str]] = []
         executor = ToolExecutor(self._tools, self._store, isolate=self._store.savepoint)
         tool_context = ToolContext(tenant=tenant, interaction_id=interaction_id)
-        # FAQs retrieved this turn, by id: the only ones the reply may cite.
+        # FAQs retrieved this turn, by id (FAQ RESULTS), and everything the reply may
+        # cite or quote: listed hours that are in the prompt, plus what tools verified.
         retrieved: dict[str, FaqSnippet] = {}
+        evidence = TurnEvidence(hours_listed=context.hours is not None and context.hours.listed)
         results: list[ToolOutcome] = []
         rounds = 0
         retried = False
@@ -471,7 +517,7 @@ class ConversationEngine:
                     continue  # the same request, once
 
                 if not turn.tool_calls:
-                    problem = _grounding_problem(turn, retrieved)
+                    problem = grounding_problem(turn, evidence)
                     if problem is None:
                         return _Outcome(turn, "", failures)
                     failures.append(_failure("ungrounded", problem))
@@ -491,8 +537,10 @@ class ConversationEngine:
                 results.extend(outcomes)
                 for outcome in outcomes:
                     for snippet in outcome.faqs:
-                        if len(retrieved) < MAX_FAQS_PER_TURN:
-                            retrieved.setdefault(str(snippet.id), snippet)
+                        if len(retrieved) < MAX_FAQS_PER_TURN and str(snippet.id) not in retrieved:
+                            retrieved[str(snippet.id)] = snippet
+                            evidence.add_faq(snippet)
+                    evidence.add(outcome.evidence)
                 request = build(
                     replace(
                         context,
@@ -540,16 +588,6 @@ class ConversationEngine:
             state["entities"] = entities
             state["requires_human"] = outcome.turn.requires_human
         interaction.state = state
-
-
-def _grounding_problem(turn: AgentTurn, retrieved: Collection[str]) -> str | None:
-    """Why `turn` isn't grounded in this turn's FAQ results, as a fixed code (or None)."""
-    cited = {source.strip().lower() for source in turn.sources}
-    if turn.intent in GROUNDED_INTENTS and not cited:
-        return "missing_sources"
-    if not cited <= set(retrieved):
-        return "unknown_source"
-    return None
 
 
 def _tone(value: str) -> Tone:

@@ -1,7 +1,14 @@
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 
-import { getAgent, getTestTranscript, listFaqs } from "@/lib/api/client";
+import {
+  getAgent,
+  getBusiness,
+  getBusinessHours,
+  getTestTranscript,
+  listFaqs,
+  listServices,
+} from "@/lib/api/client";
 import type { ChatLoad } from "@/components/agent/test-chat";
 import { AgentWorkspace } from "@/components/agent/agent-workspace";
 
@@ -25,16 +32,24 @@ export default async function AgentPage({
   const { chat } = await searchParams;
   const chatId = typeof chat === "string" && UUID.test(chat) ? chat : null;
 
-  const [agent, transcript, faqs] = await Promise.all([
+  const [agent, transcript, faqs, business, services, hours] = await Promise.all([
     getAgent(token),
     chatId ? getTestTranscript(token, chatId) : Promise.resolve(null),
     listFaqs(token),
+    getBusiness(token),
+    listServices(token),
+    getBusinessHours(token),
   ]);
 
   if (agent.kind === "unauthorized") redirect("/sign-in");
   if (agent.kind === "subscription_required") redirect("/billing/plan");
   if (faqs.kind === "unauthorized") redirect("/sign-in");
   if (faqs.kind === "subscription_required") redirect("/billing/plan");
+  if (business.kind === "unauthorized") redirect("/sign-in");
+  if (services.kind === "unauthorized" || hours.kind === "unauthorized") redirect("/sign-in");
+  if (services.kind === "subscription_required" || hours.kind === "subscription_required") {
+    redirect("/billing/plan");
+  }
 
   let chatLoad: ChatLoad = { kind: "none" };
   if (chat !== undefined && !chatId) {
@@ -60,5 +75,14 @@ export default async function AgentPage({
     }
   }
 
-  return <AgentWorkspace agent={agent} chat={chatLoad} faqs={faqs} />;
+  return (
+    <AgentWorkspace
+      agent={agent}
+      chat={chatLoad}
+      faqs={faqs}
+      business={business}
+      services={services}
+      hours={hours}
+    />
+  );
 }

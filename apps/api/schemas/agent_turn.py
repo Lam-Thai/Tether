@@ -6,10 +6,12 @@ for a tool the `ToolRegistry` doesn't have, is invalid: the engine retries
 once, then falls back. Nothing in here is ever executed unvalidated: tool
 arguments are validated again, per tool, by `services/tools.ToolExecutor`.
 
-`sources` lists the FAQ ids a reply relies on. They stay plain strings here
-on purpose: a made-up id must reach the engine's grounding guard (and be
-replaced by the "I don't have that information" fallback), not make the
-whole reply schema-invalid and burn the one retry.
+`sources` lists what a reply relies on: FAQ and service ids a tool returned
+this turn, `business_hours` or `business_profile`. They stay plain strings
+here on purpose: a made-up id must reach the engine's grounding guard
+(`services/grounding.py`, which replaces the reply with the "I don't have
+that information" fallback), not make the whole reply schema-invalid and
+burn the one retry.
 """
 
 from typing import Annotated, Any, Literal
@@ -47,7 +49,7 @@ EntityText = Annotated[
     StringConstraints(strip_whitespace=True, max_length=MAX_ENTITY_CHARS),
     AfterValidator(lambda value: value or None),
 ]
-# Room for a UUID and then some; whether it's a real, retrieved FAQ id is the guard's call.
+# Room for a UUID and then some; whether it's a real, retrieved source is the guard's call.
 SourceId = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_SOURCE_CHARS)
 ]
@@ -82,5 +84,6 @@ class AgentTurn(BaseModel):
     # Backend tools to run before answering. A reply that requests tools is never
     # shown: the engine runs them and asks the model again with the results.
     tool_calls: list[ToolCall] = Field(default_factory=list)
-    # Ids of the FAQs (retrieved by `search_faq` this turn) the reply relies on.
+    # What the reply relies on: FAQ / service ids retrieved this turn, "business_hours",
+    # "business_profile" (checked by `services/grounding.py`).
     sources: list[SourceId] = Field(default_factory=list, max_length=MAX_SOURCES)

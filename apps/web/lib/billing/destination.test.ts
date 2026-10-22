@@ -12,6 +12,7 @@ const BUSINESS = {
   timezone: "America/New_York",
   phone: null,
   contact_email: null,
+  currency: "USD",
   created_at: "2026-10-01T00:00:00Z",
   updated_at: "2026-10-01T00:00:00Z",
 };

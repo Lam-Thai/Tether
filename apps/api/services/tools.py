@@ -13,13 +13,18 @@ doesn't change.
 - An unregistered name is never executed. (The engine already treats one as
   invalid model output; this is the backstop.)
 - Arguments are validated against the args model first. A miss is `rejected`
-  and the executor is never called.
+  and the executor is never called. An executor may still reject arguments
+  the model can't check but live data can (a date outside the range the
+  business answers for) by raising `ToolRejection` before it reads or writes
+  anything; that is `rejected` too.
 - An executor that raises is `failed`; the model is told only that the tool
   is unavailable, and only the tool name is logged. Each executor runs inside
   `isolate()` (a savepoint, from the store), so one that fails on a DB error
   rolls back only its own work and the failure can still be logged.
 - Otherwise `succeeded`, with the executor's verified result: what the backend
-  actually found, never an echo of what the model asked for.
+  actually found, never an echo of what the model asked for. Its `evidence`
+  (ids, prices, durations) is what the grounding guard lets the reply cite
+  and quote this turn.
 - Every call, whatever its status, is written to the operation log before its
   result goes back to the model. Logged arguments are the validated ones,
   truncated; a rejected call logs only the argument names it was sent.
@@ -44,6 +49,7 @@ from core.tenant import Tenant
 from integrations.llm.port import ToolDeclaration
 from schemas.agent_turn import ToolCall
 from services.agent import require_business
+from services.grounding import Evidence
 from services.knowledge import FaqSnippet
 
 logger = logging.getLogger("tether.tools")
@@ -89,9 +95,12 @@ class ToolResult:
     for_model: Mapping[str, Any]
     # Stored in the operation log: ids, counts, reason codes. Never free text.
     for_log: Mapping[str, Any]
-    # FAQs this call retrieved: rendered as FAQ RESULTS, and the only ids the
-    # grounding guard accepts as `sources` this turn.
+    # FAQs this call retrieved: rendered as FAQ RESULTS, and (with `evidence`)
+    # the only ids the grounding guard accepts as `sources` this turn.
     faqs: tuple[FaqSnippet, ...] = ()
+    # Other verified facts in `for_model` the reply may cite or quote (service
+    # ids, prices, durations, `business_hours`). Empty for a tool that states none.
+    evidence: Evidence = field(default_factory=Evidence)
 
 
 @dataclass(frozen=True)
@@ -102,6 +111,23 @@ class ToolOutcome:
     status: OperationStatus
     for_model: Mapping[str, Any]
     faqs: tuple[FaqSnippet, ...] = ()
+    evidence: Evidence = field(default_factory=Evidence)
+
+
+class ToolRejection(Exception):
+    """Raised by an executor, before it reads or writes anything, for arguments the
+    args model accepted but live data rules out (a date past what the business
+    answers for). The call is `rejected`; `reason`, `fields` and `details` are
+    fixed codes and backend values (never the model's own text), shown to the
+    model and logged."""
+
+    def __init__(
+        self, reason: str, *, fields: Sequence[str] = (), details: Mapping[str, Any] | None = None
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.fields = tuple(fields)
+        self.details = dict(details or {})
 
 
 @dataclass(frozen=True)
@@ -201,6 +227,9 @@ class ToolExecutor:
         try:
             async with self._isolate():
                 result = await tool.run(ctx, args)
+        except ToolRejection as exc:
+            reason = {"reason": exc.reason, "fields": sorted(exc.fields), **exc.details}
+            return await self._reject(ctx, call, reason, started=started)
         except Exception as exc:
             # Never the exception message: it may quote arguments or customer text.
             logger.warning(
@@ -219,7 +248,9 @@ class ToolExecutor:
         await self._record(
             ctx, tool.name, logged_args, "succeeded", _sanitize(result.for_log), started
         )
-        return ToolOutcome(tool.name, "succeeded", dict(result.for_model), tuple(result.faqs))
+        return ToolOutcome(
+            tool.name, "succeeded", dict(result.for_model), tuple(result.faqs), result.evidence
+        )
 
     async def _reject(
         self,

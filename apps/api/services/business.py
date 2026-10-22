@@ -45,6 +45,7 @@ async def create_business(
     timezone: str,
     phone: str | None,
     contact_email: str | None,
+    currency: str = "USD",
 ) -> Business:
     if tenant.business is not None:
         raise BusinessAlreadyExistsError("You already have a business.")
@@ -56,6 +57,7 @@ async def create_business(
         timezone=timezone,
         phone=phone,
         contact_email=contact_email,
+        currency=currency,
     )
 
 

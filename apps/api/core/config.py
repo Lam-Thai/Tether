@@ -57,6 +57,7 @@ class Settings(BaseSettings):
 
     # Most FAQs one business may keep (PRD §8.4); creating more is 409 faq_limit_reached.
     faq_max_per_business: int = Field(default=200, ge=1, le=1000)
+    service_max_per_business: int = Field(default=100, ge=1, le=1000)
 
     # Usage limits (services/usage.py, PRD §14.5). "Per day" is the UTC day; a
     # global cap covers all businesses together. 0 blocks the feature entirely.

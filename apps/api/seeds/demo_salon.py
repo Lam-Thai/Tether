@@ -1,22 +1,27 @@
-"""Seeds a synthetic hair salon and its FAQs, for demoing the agent.
+"""Seeds a synthetic hair salon with FAQs, services and weekly hours, for demoing the agent.
 
     uv run python -m seeds.demo_salon                       # synthetic owner + business
-    uv run python -m seeds.demo_salon --owner-email me@x.y  # add the FAQs to your business
+    uv run python -m seeds.demo_salon --owner-email me@x.y  # add them to your business
 
-Idempotent: a FAQ whose question already exists for the business is skipped.
+Idempotent: a FAQ whose question exists is skipped, a service whose name exists
+(ignoring case) is skipped, and hours are written only if the business has none.
 Uses the app's database settings. Synthetic data only; never run at startup.
 """
 
 import argparse
 import asyncio
 from dataclasses import dataclass
+from datetime import time
+from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db import async_session_factory
 from models.business import Business
 from models.faq import Faq
+from models.hours import BusinessHours
+from models.service import Service
 from models.user import User
 
 SEED_AUTH_ID = "seed|demo-salon"
@@ -118,6 +123,52 @@ DEMO_SALON_FAQS: tuple[SeedFaq, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class SeedService:
+    name: str
+    duration_minutes: int
+    price: Decimal | None
+    description: str | None = None
+    active: bool = True
+
+
+# "Haircut" and "Kids cut" make "cut" ambiguous on purpose; there is no perm at all, so
+# "How much is a perm?" is a "we don't list that"; "Hot towel shave" is inactive (never offered).
+DEMO_SALON_SERVICES: tuple[SeedService, ...] = (
+    SeedService("Haircut", 45, Decimal("40.00"), "Cut and style, wash included."),
+    SeedService("Kids cut", 20, Decimal("18.00"), "For children under 12."),
+    SeedService("Beard trim", 15, Decimal("15.00"), "Trim and shape-up."),
+    SeedService("Full colour", 120, Decimal("95.00"), "Single-process colour."),
+    SeedService("Balayage", 180, Decimal("160.00"), "Price depends on hair length."),
+    SeedService("Blow-dry", 30, Decimal("25.00")),
+    SeedService("Colour consultation", 20, None, "Free; ask us about pricing."),
+    SeedService("Hot towel shave", 30, Decimal("30.00"), "Retired from the menu.", active=False),
+)
+
+
+@dataclass(frozen=True)
+class SeedDay:
+    day_of_week: int  # 0 = Monday
+    opens_at: time | None
+    closes_at: time | None
+
+    @property
+    def is_closed(self) -> bool:
+        return self.opens_at is None
+
+
+# Local time in the business's timezone: closed Sunday and Monday, shorter Saturday.
+DEMO_SALON_HOURS: tuple[SeedDay, ...] = (
+    SeedDay(0, None, None),
+    SeedDay(1, time(9), time(18)),
+    SeedDay(2, time(9), time(18)),
+    SeedDay(3, time(9), time(20)),
+    SeedDay(4, time(9), time(18)),
+    SeedDay(5, time(10), time(16)),
+    SeedDay(6, None, None),
+)
+
+
 async def _ensure_demo_owner_business(session: AsyncSession) -> Business:
     user = (
         await session.execute(select(User).where(User.external_auth_id == SEED_AUTH_ID))
@@ -142,6 +193,7 @@ async def _ensure_demo_owner_business(session: AsyncSession) -> Business:
             industry="Hair salon",
             address="100 Example Street, Springfield",
             timezone="America/New_York",
+            currency="USD",
             phone="+15555550100",
             contact_email="hello@demo-salon.example.test",
         )
@@ -195,6 +247,61 @@ async def add_faqs(session: AsyncSession, business: Business) -> tuple[int, int]
     return added, len(DEMO_SALON_FAQS) - added
 
 
+async def add_services(session: AsyncSession, business: Business) -> tuple[int, int]:
+    """Adds the missing demo services (names compared ignoring case). Returns (added, skipped)."""
+    existing = set(
+        (
+            await session.execute(
+                select(func.lower(Service.name)).where(Service.business_id == business.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    added = 0
+    for item in DEMO_SALON_SERVICES:
+        if item.name.lower() in existing:
+            continue
+        session.add(
+            Service(
+                business_id=business.id,
+                name=item.name,
+                description=item.description,
+                duration_minutes=item.duration_minutes,
+                price=item.price,
+                active=item.active,
+            )
+        )
+        added += 1
+    await session.flush()
+    return added, len(DEMO_SALON_SERVICES) - added
+
+
+async def set_hours_if_missing(session: AsyncSession, business: Business) -> bool:
+    """Writes the demo week only when the business has no hours. Returns whether it did."""
+    stored = (
+        await session.execute(
+            select(func.count())
+            .select_from(BusinessHours)
+            .where(BusinessHours.business_id == business.id)
+        )
+    ).scalar_one()
+    if stored:
+        return False
+    session.add_all(
+        BusinessHours(
+            business_id=business.id,
+            day_of_week=day.day_of_week,
+            is_closed=day.is_closed,
+            opens_at=day.opens_at,
+            closes_at=day.closes_at,
+        )
+        for day in DEMO_SALON_HOURS
+    )
+    await session.flush()
+    return True
+
+
 async def run(owner_email: str | None) -> None:
     async with async_session_factory() as session:
         if owner_email:
@@ -202,13 +309,21 @@ async def run(owner_email: str | None) -> None:
         else:
             business = await _ensure_demo_owner_business(session)
         added, skipped = await add_faqs(session, business)
+        services_added, services_skipped = await add_services(session, business)
+        hours_set = await set_hours_if_missing(session, business)
         await session.commit()
-        print(f"{business.name} ({business.id}): added {added} FAQ(s), skipped {skipped} existing.")
+        print(
+            f"{business.name} ({business.id}): added {added} FAQ(s), skipped {skipped} existing; "
+            f"added {services_added} service(s), skipped {services_skipped} existing; "
+            f"hours {'set' if hours_set else 'left as they were'}."
+        )
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Seed the synthetic demo salon FAQs.")
-    parser.add_argument("--owner-email", help="add the FAQs to this existing user's business")
+    parser = argparse.ArgumentParser(
+        description="Seed the synthetic demo salon (FAQs, services, hours)."
+    )
+    parser.add_argument("--owner-email", help="add the demo data to this existing user's business")
     args = parser.parse_args(argv)
     asyncio.run(run(args.owner_email))  # SystemExit(message) prints to stderr, exit code 1
 

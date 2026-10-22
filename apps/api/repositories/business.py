@@ -43,6 +43,7 @@ async def create_business(
     timezone: str,
     phone: str | None,
     contact_email: str | None,
+    currency: str = "USD",
 ) -> Business:
     business = Business(
         owner_id=owner_id,
@@ -52,6 +53,7 @@ async def create_business(
         timezone=timezone,
         phone=phone,
         contact_email=contact_email,
+        currency=currency,
     )
     session.add(business)
     await session.flush()

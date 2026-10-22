@@ -436,3 +436,84 @@ async def test_faq_edits_and_disabling_reach_the_very_next_reply(client, entitle
     assert [(o.tool_name, o.status) for o in ops] == [("search_faq", "succeeded")] * 3
     assert [o.result["faq_ids"] for o in ops] == [[faq_id], [faq_id], []]
     assert foreign == []
+
+
+def _lookup(query: str) -> dict:
+    return agent_turn(
+        "Let me check.", tool_calls=[{"name": "get_services", "arguments": {"query": query}}]
+    )
+
+
+async def test_hours_location_and_prices_come_only_from_stored_facts(client, entitled_tenants, llm):
+    """The slice 7 demo end to end: business/hours/services APIs -> test chat."""
+    tenant_a, tenant_b = entitled_tenants
+    headers = _auth(tenant_a)
+    week = [
+        {"day_of_week": d, "is_closed": True}
+        if d in (0, 6)
+        else {"day_of_week": d, "is_closed": False, "opens_at": "09:00", "closes_at": "17:00"}
+        for d in range(7)
+    ]
+    week[5] = {"day_of_week": 5, "is_closed": False, "opens_at": "10:00", "closes_at": "16:00"}
+    assert (
+        await client.put("/api/v1/business/hours", json={"days": week}, headers=headers)
+    ).status_code == 200
+    created = {}
+    for name, price in [("Beard trim", "15.00"), ("Haircut", "40.00"), ("Kids cut", "25.00")]:
+        response = await client.post(
+            "/api/v1/services",
+            json={"name": name, "duration_minutes": 30, "price": price},
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+        created[name] = response.json()["id"]
+    # Tenant B's same-named service must never answer for tenant A.
+    other = await client.post(
+        "/api/v1/services",
+        json={"name": "Beard trim", "duration_minutes": 30, "price": "99.00"},
+        headers=_auth(tenant_b),
+    )
+    assert other.status_code == 201, other.text
+
+    # Hours come from the prompt: one model call, citing business_hours.
+    llm.queue(
+        agent_turn(
+            "On Saturday we're open 10 AM to 4 PM.",
+            intent="BUSINESS_HOURS",
+            sources=["business_hours"],
+        )
+    )
+    first = (await _send(client, tenant_a, "When are you open Saturday?")).json()
+    assert (first["fallback"], len(llm.requests)) == (False, 1)
+    instruction = llm.requests[0].system_instruction
+    assert "BUSINESS HOURS" in instruction and "10:00" in instruction
+    chat = first["interaction_id"]
+
+    # A stored price, cited by service id; a price the backend never returned is refused.
+    llm.queue(
+        _lookup("beard trim"),
+        agent_turn("A beard trim is $15.", intent="PRICE_INQUIRY", sources=[created["Beard trim"]]),
+        _lookup("beard trim"),
+        agent_turn("A beard trim is $99.", intent="PRICE_INQUIRY", sources=[created["Beard trim"]]),
+    )
+    priced = (await _send(client, tenant_a, "How much is a beard trim?", chat)).json()
+    invented = (await _send(client, tenant_a, "Sure it's not $99?", chat)).json()
+    assert (priced["reply_text"], priced["fallback"]) == ("A beard trim is $15.", False)
+    assert invented["fallback"] is True and "$99" not in invented["reply_text"]
+
+    # No such service: the honest answer stands. Ambiguous: asking which one stands.
+    llm.queue(
+        _lookup("perm"),
+        agent_turn("Sorry, we don't list perms.", intent="PRICE_INQUIRY"),
+        _lookup("cut"),
+        agent_turn("Do you mean a Haircut or a Kids cut?", intent="PRICE_INQUIRY"),
+    )
+    perm = (await _send(client, tenant_a, "How much is a perm?", chat)).json()
+    cut = (await _send(client, tenant_a, "How much is a cut?", chat)).json()
+    assert (perm["reply_text"], perm["fallback"]) == ("Sorry, we don't list perms.", False)
+    assert (cut["reply_text"], cut["fallback"]) == ("Do you mean a Haircut or a Kids cut?", False)
+
+    async with async_session_factory() as session:
+        ops = await operations_repo.list_operations(session, tenant_a.business_id, uuid.UUID(chat))
+    assert [o.result["match"] for o in ops] == ["found", "found", "not_found", "ambiguous"]
+    assert ops[0].result["service_ids"] == [created["Beard trim"]]

@@ -26,6 +26,16 @@ class AppError(Exception):
         super().__init__(message)
 
 
+class ServiceNameTakenError(AppError):
+    """Another service of the same business already has this name (ignoring case).
+
+    Raised by `repositories/services` when the unique index rejects a write, so it
+    lives here where both the repository and the catalog service can import it."""
+
+    status_code = status.HTTP_409_CONFLICT
+    code = "service_name_taken"
+
+
 def _envelope(code: str, message: str) -> dict:
     return {"error": {"code": code, "message": message}}
 

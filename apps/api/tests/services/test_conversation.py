@@ -3,6 +3,9 @@
 import asyncio
 import time
 import uuid
+from datetime import UTC, datetime
+from datetime import time as wall
+from decimal import Decimal
 
 import pytest
 
@@ -13,6 +16,7 @@ from integrations.llm.port import LLMUnavailableError, ModelReply
 from models.business import Business
 from models.user import User
 from services import agent as agent_service
+from services.business_tools import get_business_info_tool, get_services_tool
 from services.conversation import (
     INVALID_OUTPUT_FALLBACK,
     MAX_TOOL_ROUNDS,
@@ -23,11 +27,13 @@ from services.conversation import (
     no_info_fallback,
     quota_fallback,
 )
+from services.directory import BusinessDirectory
 from services.faq_search import search_faq_tool
 from services.knowledge import KnowledgeBase
 from services.tools import ToolRegistry
 from services.usage import ConcurrencyLimitedError, DailyLimit, UsageKind
 from tests.services.memory_conversation_store import MemoryStore
+from tests.services.memory_directory_store import MemoryDirectoryStore
 from tests.services.memory_faq_store import MemoryFaqStore
 from tests.services.memory_usage_store import MemoryUsageStore, guard, limits
 
@@ -78,7 +84,7 @@ def _texts(request) -> list[tuple[str, str]]:
 
 async def test_new_chat_persists_the_owners_greeting_as_message_one(store, llm):
     tenant = _tenant()
-    llm.queue(agent_turn("We're at 1 Main St.", intent="LOCATION"))
+    llm.queue(agent_turn("We're at 1 Main St.", intent="LOCATION", sources=["business_profile"]))
 
     result = await _engine(store, llm).handle_turn(tenant, None, "Where are you?", "test_chat")
 
@@ -693,7 +699,7 @@ async def test_an_ungrounded_answer_is_replaced_by_the_no_info_fallback(store, l
     assert "clarification_attempts" not in state
 
 
-async def test_grounded_intents_accept_cited_faqs_and_location_needs_none(store, llm):
+async def test_grounded_intents_accept_cited_faqs_and_location_cites_the_profile(store, llm):
     faqs = MemoryFaqStore()
     tenant, walk_in = _salon(faqs)
     engine = _faqs_engine(store, llm, faqs)
@@ -703,8 +709,8 @@ async def test_grounded_intents_accept_cited_faqs_and_location_needs_none(store,
     )
     hours = await engine.handle_turn(tenant, None, "when can I come?", "test_chat")
 
-    # The address is in BUSINESS FACTS, so a LOCATION answer needs no FAQ.
-    llm.queue(agent_turn("We're at 1 Main St.", intent="LOCATION"))
+    # The address is in BUSINESS FACTS, so a LOCATION answer cites the profile, no FAQ.
+    llm.queue(agent_turn("We're at 1 Main St.", intent="LOCATION", sources=["business_profile"]))
     where = await engine.handle_turn(tenant, hours.interaction_id, "where are you?", "test_chat")
 
     assert (hours.fallback, hours.reply_text) == (False, "Walk-ins before 3 PM.")
@@ -858,3 +864,424 @@ async def test_the_turn_deadline_covers_every_round_of_the_tool_loop(store):
     assert len(store.operations) == 1
     failure = store.interactions[result.interaction_id].state["failures"][-1]
     assert (failure["kind"], failure["detail"]) == ("provider_unavailable", "turn_timeout")
+
+
+# --- Business facts: hours, location, services and prices (slice #7) ---------
+
+# Wednesday 2026-10-21, 11:00 in New York.
+SALON_NOW = datetime(2026, 10, 21, 15, 0, tzinfo=UTC)
+SALON_WEEK = {
+    0: None,
+    1: ("09:00", "18:00"),
+    2: ("09:00", "18:00"),
+    3: ("09:00", "20:00"),
+    4: ("09:00", "18:00"),
+    5: ("10:00", "16:00"),  # Saturday
+    6: None,
+}
+
+
+class _RecordingDirectoryStore(MemoryDirectoryStore):
+    """Appends "directory" to the conversation store's call log on every read."""
+
+    def __init__(self, calls: list[str]) -> None:
+        super().__init__()
+        self._calls = calls
+
+    async def list_services(self, business_id, *, active_only):
+        self._calls.append("directory")
+        return await super().list_services(business_id, active_only=active_only)
+
+    async def list_hours(self, business_id):
+        self._calls.append("directory")
+        return await super().list_hours(business_id)
+
+
+class _Salon:
+    """A tenant with a catalog (Haircut, Kids cut, Beard trim, an inactive Hot towel
+    shave) and weekly hours, and the engine wired with all three tools."""
+
+    def __init__(self, store: MemoryStore, *, hours: bool = True) -> None:
+        self.tenant = _tenant()
+        business = _biz(self.tenant)
+        business.phone, business.currency = "+1 (312) 847-1928", "USD"
+        self.directory_store = _RecordingDirectoryStore(store.calls)
+        self.faqs = MemoryFaqStore()
+        add = self.directory_store.add_service
+        self.haircut = add(business.id, "Haircut", duration_minutes=45, price="40.00")
+        self.kids = add(business.id, "Kids cut", duration_minutes=20, price="18.00")
+        self.beard = add(business.id, "Beard trim", duration_minutes=15, price="15.00")
+        self.shave = add(
+            business.id, "Hot towel shave", duration_minutes=30, price="30.00", active=False
+        )
+        if hours:
+            self.directory_store.set_week(business.id, SALON_WEEK)
+        self.directory = BusinessDirectory(self.directory_store, lambda: SALON_NOW)
+
+    def engine(self, store: MemoryStore, llm, **kwargs) -> ConversationEngine:
+        tools = ToolRegistry.of(
+            [
+                search_faq_tool(KnowledgeBase(self.faqs)),
+                get_services_tool(self.directory),
+                get_business_info_tool(self.directory),
+            ]
+        )
+        return ConversationEngine(
+            store,
+            llm,
+            tools,
+            20,
+            5,
+            usage=kwargs.pop("usage", None) or guard(),
+            llm_retry=RetryPolicy(attempts=2),
+            directory=self.directory,
+        )
+
+    @property
+    def fallback(self) -> str:
+        return no_info_fallback(_biz(self.tenant))
+
+
+def _services(query: str | None = None) -> dict:
+    arguments = {"query": query} if query is not None else {}
+    return agent_turn("Checking.", tool_calls=[{"name": "get_services", "arguments": arguments}])
+
+
+def _failure_of(store: MemoryStore, result) -> tuple[str, str]:
+    failure = store.interactions[result.interaction_id].state["failures"][-1]
+    return failure["kind"], failure["detail"]
+
+
+def _hours_block(prompt: str) -> str:
+    start, end = "<<<BUSINESS_HOURS>>>", "<<<END_BUSINESS_HOURS>>>"
+    return prompt[prompt.index(start) : prompt.index(end)]
+
+
+async def test_saturday_hours_are_answered_from_the_prompt_in_one_call(store, llm):
+    salon = _Salon(store)
+    llm.queue(
+        agent_turn(
+            "On Saturday we're open 10 AM to 4 PM.",
+            intent="BUSINESS_HOURS",
+            sources=["business_hours"],
+        )
+    )
+
+    result = await salon.engine(store, llm).handle_turn(
+        salon.tenant, None, "When are you open Saturday?", "test_chat"
+    )
+
+    assert len(llm.requests) == 1 and store.operations == []
+    assert result.reply_text == "On Saturday we're open 10 AM to 4 PM." and not result.fallback
+    hours = _hours_block(llm.requests[0].system_instruction)
+    assert "Today: Wednesday 2026-10-21" in hours
+    assert "Saturday: 10:00-16:00" in hours and "Monday: closed" in hours
+    assert "Saturday 2026-10-24: 10:00-16:00" in hours
+    assert "Tuesday 2026-10-27: 09:00-18:00" in hours  # 7 days: today through next Tuesday
+    assert "Wednesday 2026-10-28" not in hours
+    # Services never ride in the prompt: only get_services brings them.
+    assert "Haircut" not in llm.requests[0].system_instruction
+    assert "Currency: USD" in llm.requests[0].system_instruction
+
+
+async def test_location_cites_the_business_profile_and_needs_a_source(store, llm):
+    salon = _Salon(store)
+    engine = salon.engine(store, llm)
+    llm.queue(
+        agent_turn("We're at 1 Main St.", intent="LOCATION", sources=["business_profile"]),
+        agent_turn("We're at 1 Main St.", intent="LOCATION"),
+    )
+
+    where = await engine.handle_turn(salon.tenant, None, "Where are you?", "test_chat")
+    again = await engine.handle_turn(salon.tenant, where.interaction_id, "Where?", "test_chat")
+
+    assert (where.fallback, where.reply_text) == (False, "We're at 1 Main St.")
+    assert again.reply_text == salon.fallback
+    assert _failure_of(store, again) == ("ungrounded", "missing_sources")
+
+
+async def test_beard_trim_price_comes_from_get_services_and_cites_the_service(store, llm):
+    salon = _Salon(store)
+    reply = "A beard trim is $15 and takes about 15 minutes."
+    llm.queue(
+        _services("beard trim"),
+        agent_turn(reply, intent="PRICE_INQUIRY", sources=[str(salon.beard.id)]),
+    )
+
+    result = await salon.engine(store, llm).handle_turn(
+        salon.tenant, None, "How much is a beard trim?", "test_chat"
+    )
+
+    assert (result.fallback, result.reply_text) == (False, reply)
+    first, second = llm.requests
+    assert "15.00" not in first.system_instruction
+    assert '1. get_services: succeeded {"currency": "USD", "match": "found"' in (
+        second.system_instruction
+    )
+    assert '"price": "15.00"' in second.system_instruction
+    (op,) = store.operations
+    assert (op["tool_name"], op["status"]) == ("get_services", "succeeded")
+    assert op["arguments"] == {"query": "beard trim"}
+    assert op["result"] == {"match": "found", "service_ids": [str(salon.beard.id)]}
+
+
+async def test_a_perm_is_not_listed_so_an_honest_reply_stands_and_a_price_never_does(store, llm):
+    salon = _Salon(store)
+    engine = salon.engine(store, llm)
+    honest = "Sorry, we don't list a perm. Anything else I can help with?"
+    llm.queue(
+        _services("perm"),
+        agent_turn(honest, intent="PRICE_INQUIRY"),
+        _services("perm"),
+        agent_turn("A perm is usually around $80.", intent="PRICE_INQUIRY"),
+    )
+
+    first = await engine.handle_turn(salon.tenant, None, "How much is a perm?", "test_chat")
+    second = await engine.handle_turn(salon.tenant, first.interaction_id, "Roughly?", "test_chat")
+
+    assert (first.fallback, first.reply_text) == (False, honest)
+    assert '"match": "not_found"' in llm.requests[1].system_instruction
+    assert second.reply_text == salon.fallback and second.fallback is True
+    assert _failure_of(store, second) == ("ungrounded", "unverified_amount")
+    assert "$80" not in {m.message_text for m in store.messages}
+    assert store.interactions[first.interaction_id].state["requires_human"] is True
+
+
+async def test_cut_is_ambiguous_and_the_agent_asks_which_one(store, llm):
+    salon = _Salon(store)
+    engine = salon.engine(store, llm)
+    ask = "Do you mean a Haircut or a Kids cut?"
+    llm.queue(
+        _services("cut"),
+        agent_turn(ask, intent="PRICE_INQUIRY"),
+        _services("cut"),
+        agent_turn("A cut is $40.", intent="PRICE_INQUIRY", sources=[str(salon.haircut.id)]),
+    )
+
+    first = await engine.handle_turn(salon.tenant, None, "How much is a cut?", "test_chat")
+    second = await engine.handle_turn(salon.tenant, first.interaction_id, "A cut", "test_chat")
+
+    assert (first.fallback, first.reply_text) == (False, ask)
+    results = llm.requests[1].system_instruction
+    assert '"match": "ambiguous"' in results
+    assert "Haircut" in results and "Kids cut" in results and "40.00" not in results
+    # The candidates carry no prices, so quoting one before a lookup that finds it fails.
+    assert second.reply_text == salon.fallback
+    assert _failure_of(store, second) == ("ungrounded", "unverified_amount")
+
+
+async def test_an_inactive_service_is_never_offered_or_priced(store, llm):
+    salon = _Salon(store)
+    llm.queue(
+        _services(),
+        _services("hot towel shave"),
+        agent_turn("A hot towel shave is $30.", intent="PRICE_INQUIRY"),
+    )
+
+    result = await salon.engine(store, llm).handle_turn(
+        salon.tenant, None, "Do you do hot towel shaves?", "test_chat"
+    )
+
+    for request in llm.requests:
+        assert "Hot towel shave" not in request.system_instruction
+        assert "30.00" not in request.system_instruction
+    assert '"match": "not_found"' in llm.requests[2].system_instruction
+    assert result.reply_text == salon.fallback
+    # The listing returned real prices, so the not_found exemption no longer applies.
+    assert _failure_of(store, result) == ("ungrounded", "missing_sources")
+
+
+@pytest.mark.parametrize(
+    ("reply", "detail"),
+    [
+        ("A haircut is $40.00 and takes 45 minutes.", None),
+        ("A haircut is forty dollars.", None),
+        ("A haircut is $45.", "unverified_amount"),
+        ("A haircut is $40, and a kids cut is $18.", "unverified_amount"),
+        ("A haircut is $40 and takes about an hour.", "unverified_duration"),
+    ],
+)
+async def test_prices_and_durations_must_equal_the_stored_ones(store, llm, reply, detail):
+    salon = _Salon(store)
+    llm.queue(
+        _services("haircut"),
+        agent_turn(reply, intent="PRICE_INQUIRY", sources=[str(salon.haircut.id)]),
+    )
+
+    result = await salon.engine(store, llm).handle_turn(
+        salon.tenant, None, "How much is a haircut?", "test_chat"
+    )
+
+    if detail is None:
+        assert (result.fallback, result.reply_text) == (False, reply)
+    else:
+        assert result.reply_text == salon.fallback
+        assert _failure_of(store, result) == ("ungrounded", detail)
+
+
+async def test_listing_services_grounds_every_listed_price(store, llm):
+    salon = _Salon(store)
+    reply = "A haircut is $40 (45 min), a kids cut $18 and a beard trim $15."
+    sources = [str(s.id) for s in (salon.haircut, salon.kids, salon.beard)]
+    llm.queue(_services(), agent_turn(reply, intent="PRICE_INQUIRY", sources=sources))
+
+    result = await salon.engine(store, llm).handle_turn(
+        salon.tenant, None, "What are your prices?", "test_chat"
+    )
+
+    assert (result.fallback, result.reply_text) == (False, reply)
+    assert store.operations[0]["result"]["match"] == "list"
+
+
+async def test_amounts_from_an_faq_answer_retrieved_this_turn_are_accepted(store, llm):
+    salon = _Salon(store)
+    kids = salon.faqs.add(
+        _biz(salon.tenant).id,
+        "Do you offer a children's haircut?",
+        "Yes, children under 12 get a cut for 18 dollars, about 20 minutes.",
+    )
+    llm.queue(
+        _search("children haircut"),
+        agent_turn("Yes: $18, about 20 minutes.", intent="FAQ", sources=[str(kids.id)]),
+    )
+
+    result = await salon.engine(store, llm).handle_turn(
+        salon.tenant, None, "Do you cut kids' hair?", "test_chat"
+    )
+
+    assert (result.fallback, result.reply_text) == (False, "Yes: $18, about 20 minutes.")
+
+
+async def test_hours_not_set_are_never_called_closed_or_cited(store, llm):
+    salon = _Salon(store, hours=False)
+    engine = salon.engine(store, llm)
+    honest = "Our opening hours aren't listed yet. You can call us at +1 (312) 847-1928."
+    llm.queue(
+        agent_turn(honest, intent="BUSINESS_HOURS", sources=["business_profile"]),
+        agent_turn("We're closed Saturday.", intent="BUSINESS_HOURS", sources=["business_hours"]),
+    )
+
+    first = await engine.handle_turn(salon.tenant, None, "Open Saturday?", "test_chat")
+    # Citing the profile (the phone number) isn't grounds for an hours answer: the
+    # customer gets the fixed no-info line with the same contacts, flagged for a human.
+    assert first.reply_text == salon.fallback
+    assert _failure_of(store, first) == ("ungrounded", "unsupported_source")
+    second = await engine.handle_turn(salon.tenant, first.interaction_id, "Sure?", "test_chat")
+    # And with no listed hours there is nothing to cite.
+    assert second.reply_text == salon.fallback
+    assert _failure_of(store, second) == ("ungrounded", "unknown_source")
+
+    hours = _hours_block(llm.requests[0].system_instruction)
+    assert "Opening hours: not listed" in hours and "closed" not in hours
+    assert "Today: Wednesday 2026-10-21" in hours
+
+
+async def test_a_date_beyond_the_prompt_week_is_looked_up_with_get_business_info(store, llm):
+    salon = _Salon(store)
+    llm.queue(
+        agent_turn(
+            "Checking.",
+            tool_calls=[{"name": "get_business_info", "arguments": {"date": "2026-12-05"}}],
+        ),
+        agent_turn(
+            "On Saturday, December 5 we're open 10 AM to 4 PM.",
+            intent="BUSINESS_HOURS",
+            sources=["business_hours"],
+        ),
+    )
+
+    result = await salon.engine(store, llm).handle_turn(
+        salon.tenant, None, "Are you open December 5th?", "test_chat"
+    )
+
+    assert result.fallback is False and len(llm.requests) == 2
+    assert '"date": "2026-12-05"' in llm.requests[1].system_instruction
+    assert '"opens": "10:00"' in llm.requests[1].system_instruction
+    op = store.operations[0]
+    assert (op["tool_name"], op["arguments"]) == (
+        "get_business_info",
+        {"date": "2026-12-05", "days": None},
+    )
+
+
+async def test_a_service_id_from_an_earlier_turn_does_not_ground_this_one(store, llm):
+    salon = _Salon(store)
+    engine = salon.engine(store, llm)
+    cite = {"intent": "PRICE_INQUIRY", "sources": [str(salon.beard.id)]}
+    llm.queue(
+        _services("beard trim"),
+        agent_turn("A beard trim is $15.", **cite),
+        agent_turn("Still $15.", **cite),  # no lookup this turn
+    )
+
+    first = await engine.handle_turn(salon.tenant, None, "Beard trim price?", "test_chat")
+    second = await engine.handle_turn(salon.tenant, first.interaction_id, "Sure?", "test_chat")
+
+    assert first.fallback is False
+    assert second.reply_text == salon.fallback
+    assert _failure_of(store, second) == ("ungrounded", "unknown_source")
+
+
+async def test_owner_edits_to_prices_and_hours_apply_to_the_next_turn(store, llm):
+    salon = _Salon(store)
+    engine = salon.engine(store, llm)
+    cite = {"intent": "PRICE_INQUIRY", "sources": [str(salon.beard.id)]}
+    llm.queue(_services("beard trim"), agent_turn("A beard trim is $15.", **cite))
+    first = await engine.handle_turn(salon.tenant, None, "Beard trim price?", "test_chat")
+
+    salon.beard.price = Decimal("17.00")
+    saturday = next(h for h in salon.directory_store.hours if h.day_of_week == 5)
+    saturday.opens_at, saturday.closes_at = wall(11), wall(15)
+    llm.queue(_services("beard trim"), agent_turn("A beard trim is $15.", **cite))
+    stale = await engine.handle_turn(salon.tenant, first.interaction_id, "Again?", "test_chat")
+    llm.queue(_services("beard trim"), agent_turn("A beard trim is $17.", **cite))
+    fresh = await engine.handle_turn(salon.tenant, first.interaction_id, "Now?", "test_chat")
+
+    assert first.reply_text == "A beard trim is $15."
+    assert stale.reply_text == salon.fallback
+    assert _failure_of(store, stale) == ("ungrounded", "unverified_amount")
+    assert fresh.reply_text == "A beard trim is $17." and fresh.fallback is False
+    turn_two = llm.requests[2].system_instruction
+    assert "Saturday 2026-10-24: 11:00-15:00" in turn_two
+    assert "Saturday 2026-10-24: 10:00-16:00" not in turn_two
+    assert '"price": "17.00"' in llm.requests[3].system_instruction
+
+
+async def test_business_facts_are_read_before_the_first_checkpoint(store):
+    salon = _Salon(store)
+    llm = _OrderedLLM(store.calls)
+    llm.queue(_services("beard trim"), agent_turn("Sure."))
+
+    await salon.engine(store, llm).handle_turn(salon.tenant, None, "Beard trim?", "test_chat")
+
+    assert store.calls == [
+        "admission",
+        "directory",  # weekly hours
+        "directory",  # the 7-day schedule
+        "checkpoint",
+        "generate",
+        "savepoint",
+        "directory",  # get_services, inside its savepoint
+        "record_operation",
+        "checkpoint",
+        "generate",
+    ]
+
+
+async def test_a_get_business_info_date_out_of_range_is_rejected_and_the_turn_continues(store, llm):
+    salon = _Salon(store)
+    llm.queue(
+        agent_turn(
+            "Checking.",
+            tool_calls=[{"name": "get_business_info", "arguments": {"date": "2020-01-01"}}],
+        ),
+        agent_turn("I can only check dates from today on.", intent="UNKNOWN"),
+    )
+
+    result = await salon.engine(store, llm).handle_turn(
+        salon.tenant, None, "Were you open on Jan 1 2020?", "test_chat"
+    )
+
+    assert result.fallback is False
+    assert store.operations[0]["status"] == "rejected"
+    assert '"error": "date_out_of_range"' in llm.requests[1].system_instruction
