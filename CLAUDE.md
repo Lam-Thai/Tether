@@ -63,7 +63,7 @@ Frontend (`apps/web`, via `pnpm --filter web <script>` from the root, or directl
 
 - `pnpm --filter web dev` / `lint` / `typecheck` / `test` / `build`.
 
-Local Postgres for `apps/api`: `docker compose up -d` at the repo root (see `docker-compose.yml`), then point `apps/api/.env`'s `DATABASE_URL` at `postgresql://tether:tether@localhost:5432/tether`. A Neon dev branch works too — same `DATABASE_URL`, just point it at Neon's pooled connection string instead.
+Local Postgres for `apps/api`: `docker compose up -d` at the repo root (see `docker-compose.yml`), then point `apps/api/.env`'s `DATABASE_URL` at `postgresql://tether:tether@127.0.0.1:5432/tether` (`127.0.0.1`, not `localhost`: on Windows `localhost` tries IPv6 first and every new connection waits ~2s). A Neon dev branch works too — same `DATABASE_URL`, just point it at Neon's pooled connection string instead.
 
 ## Design
 

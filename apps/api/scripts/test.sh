@@ -12,7 +12,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-url="${TEST_DATABASE_URL:-postgresql://tether:tether@localhost:5432/tether}"
+# 127.0.0.1, not localhost: on Windows "localhost" tries IPv6 first and every new
+# connection (the app opens one per session) waits ~2s for the fallback.
+url="${TEST_DATABASE_URL:-postgresql://tether:tether@127.0.0.1:5432/tether}"
 # scheme://[user[:password]@]host[:port]/db -> host
 rest="${url#*://}"
 rest="${rest##*@}"
