@@ -117,4 +117,3 @@ def guard(
     clock=lambda: NOW,
 ) -> UsageGuard:
     return UsageGuard(store or MemoryUsageStore(), usage_limits or limits(), RATES, clock)
-

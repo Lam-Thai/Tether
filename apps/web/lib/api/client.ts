@@ -126,6 +126,8 @@ export interface BusinessRead {
   timezone: string;
   phone: string | null;
   contact_email: string | null;
+  /** ISO 4217 code; service prices are in this currency. */
+  currency: string;
   created_at: string;
   updated_at: string;
 }
@@ -142,6 +144,7 @@ export interface BusinessInput {
   timezone: string;
   phone?: string | null;
   contact_email?: string | null;
+  currency?: string;
 }
 
 /** Billing access for the caller's business (`GET /billing/subscription`, `GET /me`). */
@@ -217,6 +220,7 @@ function isBusinessRead(value: unknown): value is BusinessRead {
     typeof candidate.timezone === "string" &&
     (typeof candidate.phone === "string" || candidate.phone === null) &&
     (typeof candidate.contact_email === "string" || candidate.contact_email === null) &&
+    typeof candidate.currency === "string" &&
     typeof candidate.created_at === "string" &&
     typeof candidate.updated_at === "string"
   );
@@ -1105,5 +1109,253 @@ export async function deleteFaq(token: string, id: string): Promise<DeleteFaqRes
   if (outcome.status === 402) return { kind: "subscription_required" };
   if (outcome.status === 404) return { kind: "not_found" };
   if (outcome.status === 204) return { kind: "ok" };
+  return UNEXPECTED;
+}
+
+// Services (`/services`): what the business sells, with duration and an optional listed price.
+
+export interface ServiceRead {
+  id: string;
+  name: string;
+  description: string | null;
+  duration_minutes: number;
+  /** Decimal string such as "45.00", or null when there is no listed price. */
+  price: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceList {
+  services: ServiceRead[];
+  currency: string;
+  max_services: number;
+}
+
+/** `POST /services` body. A null description / null price means none. */
+export interface ServiceCreate {
+  name: string;
+  description?: string | null;
+  duration_minutes: number;
+  price?: string | null;
+  active?: boolean;
+}
+
+/** `PATCH /services/{id}` body: send only the fields that changed. */
+export type ServiceUpdate = Partial<ServiceCreate>;
+
+export type ServiceListResult =
+  | { kind: "ok"; data: ServiceList }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type CreateServiceResult =
+  | { kind: "ok"; data: ServiceRead }
+  | { kind: "validation"; message: string; fieldErrors: FieldErrors }
+  /** 409 `service_limit_reached`. */
+  | { kind: "limit_reached" }
+  /** 409 `service_name_taken`: names are unique per business, ignoring case. */
+  | { kind: "name_taken" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type UpdateServiceResult =
+  | { kind: "ok"; data: ServiceRead }
+  | { kind: "validation"; message: string; fieldErrors: FieldErrors }
+  | { kind: "name_taken" }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type DeleteServiceResult =
+  | { kind: "ok" }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isServiceRead(value: unknown): value is ServiceRead {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    isNullableString(value.description) &&
+    isCount(value.duration_minutes) &&
+    isNullableString(value.price) &&
+    typeof value.active === "boolean" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
+}
+
+function isServiceList(value: unknown): value is ServiceList {
+  if (!isRecord(value)) return false;
+  return (
+    Array.isArray(value.services) &&
+    value.services.every(isServiceRead) &&
+    typeof value.currency === "string" &&
+    isCount(value.max_services)
+  );
+}
+
+/** Calls `GET /api/v1/services` (inactive services included). */
+export async function listServices(token: string): Promise<ServiceListResult> {
+  const outcome = await fetchApi("/services", { headers: authHeaders(token) }, AGENT_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isServiceList(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/services`. */
+export async function createService(token: string, input: ServiceCreate): Promise<CreateServiceResult> {
+  const outcome = await fetchApi(
+    "/services",
+    { method: "POST", headers: jsonAuthHeaders(token), body: JSON.stringify(input) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 409) {
+    const code = errorCode(outcome.body);
+    if (code === "service_limit_reached") return { kind: "limit_reached" };
+    if (code === "service_name_taken") return { kind: "name_taken" };
+    return UNEXPECTED;
+  }
+  if (outcome.status === 422) {
+    return { kind: "validation", ...validationFrom(outcome.body, "The service details are invalid.") };
+  }
+  if (outcome.status === 201 && isServiceRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `PATCH /api/v1/services/{id}`. */
+export async function updateService(
+  token: string,
+  id: string,
+  patch: ServiceUpdate,
+): Promise<UpdateServiceResult> {
+  const outcome = await fetchApi(
+    `/services/${encodeURIComponent(id)}`,
+    { method: "PATCH", headers: jsonAuthHeaders(token), body: JSON.stringify(patch) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 409) {
+    return errorCode(outcome.body) === "service_name_taken" ? { kind: "name_taken" } : UNEXPECTED;
+  }
+  if (outcome.status === 422) {
+    return { kind: "validation", ...validationFrom(outcome.body, "The service details are invalid.") };
+  }
+  if (outcome.status === 200 && isServiceRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `DELETE /api/v1/services/{id}`; only a 204 counts as deleted. */
+export async function deleteService(token: string, id: string): Promise<DeleteServiceResult> {
+  const outcome = await fetchApi(
+    `/services/${encodeURIComponent(id)}`,
+    { method: "DELETE", headers: authHeaders(token) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 204) return { kind: "ok" };
+  return UNEXPECTED;
+}
+
+// Business hours (`/business/hours`): one row per weekday, Monday = 0.
+
+export interface DayHours {
+  day_of_week: number;
+  is_closed: boolean;
+  /** "HH:MM:SS", null when closed. */
+  opens_at: string | null;
+  closes_at: string | null;
+}
+
+export interface BusinessHours {
+  timezone: string;
+  /** False until the owner first saves hours; then `days` is empty. Not the same as closed. */
+  configured: boolean;
+  days: DayHours[];
+}
+
+export type BusinessHoursResult =
+  | { kind: "ok"; data: BusinessHours }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type PutBusinessHoursResult =
+  | { kind: "ok"; data: BusinessHours }
+  | { kind: "validation"; message: string; fieldErrors: FieldErrors }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isDayHours(value: unknown): value is DayHours {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.day_of_week === "number" &&
+    Number.isInteger(value.day_of_week) &&
+    value.day_of_week >= 0 &&
+    value.day_of_week <= 6 &&
+    typeof value.is_closed === "boolean" &&
+    isNullableString(value.opens_at) &&
+    isNullableString(value.closes_at)
+  );
+}
+
+function isBusinessHours(value: unknown): value is BusinessHours {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.timezone === "string" &&
+    typeof value.configured === "boolean" &&
+    Array.isArray(value.days) &&
+    value.days.every(isDayHours)
+  );
+}
+
+/** Calls `GET /api/v1/business/hours`. */
+export async function getBusinessHours(token: string): Promise<BusinessHoursResult> {
+  const outcome = await fetchApi("/business/hours", { headers: authHeaders(token) }, AGENT_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isBusinessHours(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `PUT /api/v1/business/hours`: replaces the whole week (exactly 7 days). */
+export async function putBusinessHours(token: string, days: DayHours[]): Promise<PutBusinessHoursResult> {
+  const outcome = await fetchApi(
+    "/business/hours",
+    { method: "PUT", headers: jsonAuthHeaders(token), body: JSON.stringify({ days }) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 422) {
+    return { kind: "validation", ...validationFrom(outcome.body, "The business hours are invalid.") };
+  }
+  if (outcome.status === 200 && isBusinessHours(outcome.body)) return { kind: "ok", data: outcome.body };
   return UNEXPECTED;
 }

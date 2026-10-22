@@ -5,6 +5,7 @@ are flagged retryable (the adapter itself makes exactly one attempt).
 """
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,6 +17,13 @@ from google.genai import types
 from integrations.llm.gemini import GeminiClient, response_schema_for_gemini
 from integrations.llm.port import LLMUnavailableError, ModelMessage, ModelRequest, ToolDeclaration
 from schemas.agent_turn import AgentTurn
+from services.business_tools import get_business_info_tool, get_services_tool
+from services.directory import BusinessDirectory
+from services.faq_search import search_faq_tool
+from services.knowledge import KnowledgeBase
+from services.tools import ToolRegistry
+from tests.services.memory_directory_store import MemoryDirectoryStore
+from tests.services.memory_faq_store import MemoryFaqStore
 
 OK_JSON = '{"intent":"FAQ","response_text":"Hello","entities":{},"requires_human":false}'
 
@@ -238,3 +246,38 @@ async def test_missing_token_counts_are_zero():
     sdk, _ = stub_sdk(reply(usage=SimpleNamespace(prompt_token_count=None)))
     result = await client(sdk).generate(REQUEST)
     assert (result.tokens_in, result.tokens_out) == (0, 0)
+
+
+def test_the_registered_tools_union_into_one_nullable_arguments_object():
+    directory = BusinessDirectory(MemoryDirectoryStore(), lambda: datetime.now(UTC))
+    declarations = ToolRegistry.of(
+        [
+            search_faq_tool(KnowledgeBase(MemoryFaqStore())),
+            get_services_tool(directory),
+            get_business_info_tool(directory),
+        ]
+    ).declarations()
+
+    schema = types.Schema.model_validate(response_schema_for_gemini(declarations))
+    calls = (schema.properties or {})["tool_calls"]
+    assert calls.items is not None
+    item = calls.items.properties or {}
+    assert item["name"].enum == ["search_faq", "get_services", "get_business_info"]
+    arguments = item["arguments"].properties or {}
+    assert set(arguments) == {"query", "date", "days"}
+    assert all(arg.nullable for arg in arguments.values())
+    assert arguments["query"].type == types.Type.STRING
+    assert arguments["date"].type == types.Type.STRING
+    assert arguments["days"].type == types.Type.INTEGER
+    # search_faq and get_services describe `query` differently: neither wording is kept.
+    assert arguments["query"].description is None
+    assert arguments["date"].description and "YYYY-MM-DD" in arguments["date"].description
+
+
+def test_a_shared_param_described_the_same_way_keeps_its_description():
+    twin = replace(SEARCH, name="search_again")
+    schema = types.Schema.model_validate(response_schema_for_gemini((SEARCH, twin)))
+    calls = (schema.properties or {})["tool_calls"]
+    assert calls.items is not None
+    arguments = (calls.items.properties or {})["arguments"].properties or {}
+    assert arguments["query"].description == "The question."

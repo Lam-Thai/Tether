@@ -1,24 +1,41 @@
 import Link from "next/link";
 
-import type { AgentResult, FaqListResult } from "@/lib/api/client";
+import type {
+  AgentResult,
+  BusinessHoursResult,
+  BusinessResult,
+  FaqListResult,
+  ServiceListResult,
+} from "@/lib/api/client";
 import { AgentBuilder } from "@/components/agent/agent-builder";
+import { BusinessInfoForm } from "@/components/agent/business-info-form";
 import { FaqManager } from "@/components/agent/faq-manager";
+import { HoursEditor } from "@/components/agent/hours-editor";
+import { ServicesManager } from "@/components/agent/services-manager";
 import { TestChat, type ChatLoad } from "@/components/agent/test-chat";
 import { buttonVariants } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 
 /**
  * Presentational view of `/dashboard/agent`: switches exhaustively on the
- * `GET /agent` result. The chat's own load state travels in `chat`.
+ * `GET /agent` result. The chat's own load state travels in `chat`. The builder
+ * column follows the PRD order: identity and personality, business information,
+ * FAQs, services, business hours; each section handles its own load failure.
  */
 export function AgentWorkspace({
   agent,
   chat,
   faqs,
+  business,
+  services,
+  hours,
 }: {
   agent: AgentResult;
   chat: ChatLoad;
   faqs: FaqListResult;
+  business: BusinessResult;
+  services: ServiceListResult;
+  hours: BusinessHoursResult;
 }) {
   switch (agent.kind) {
     case "ok":
@@ -28,9 +45,14 @@ export function AgentWorkspace({
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
             <div className="flex min-w-0 flex-col gap-6">
               <AgentBuilder agent={agent.data} />
+              <BusinessInfoForm result={business} />
               <FaqManager result={faqs} />
+              <ServicesManager result={services} />
+              <HoursEditor result={hours} />
             </div>
-            <TestChat agentName={agent.data.name} chat={chat} />
+            <div className="min-w-0 lg:sticky lg:top-6">
+              <TestChat agentName={agent.data.name} chat={chat} />
+            </div>
           </div>
         </div>
       );

@@ -1,13 +1,16 @@
 """Opt-in smoke test against the real Gemini API: `GEMINI_API_KEY=... uv run pytest -m live`.
 
 Never runs in CI (no key). A handful of calls total, so it stays cheap: two
-direct prompts, then two engine turns over the demo salon's FAQs (about two
-calls each: `search_faq`, then the answer).
+direct prompts, two engine turns over the demo salon's FAQs (about two calls
+each: `search_faq`, then the answer), then the slice 7 demo questions over the
+demo salon's services and hours (one call for hours and location, about two
+for each price question: `get_services`, then the answer).
 """
 
 import os
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import pytest
 
@@ -18,12 +21,16 @@ from integrations.llm.port import ModelMessage, ModelReply, ModelRequest
 from models.business import Business
 from models.user import User
 from schemas.agent_turn import AgentTurn
+from services.business_tools import get_business_info_tool, get_services_tool
 from services.conversation import ConversationEngine, no_info_fallback
+from services.directory import BusinessDirectory
 from services.faq_search import search_faq_tool
+from services.grounding import money_amounts
 from services.knowledge import KnowledgeBase
 from services.prompt_builder import PLATFORM_RULES, BusinessFacts, Persona, PromptContext, build
 from services.tools import ToolRegistry
 from tests.services.memory_conversation_store import MemoryStore
+from tests.services.memory_directory_store import MemoryDirectoryStore
 from tests.services.memory_faq_store import MemoryFaqStore
 from tests.services.memory_usage_store import guard
 
@@ -169,3 +176,87 @@ async def test_live_faq_answers_are_grounded_and_unknowns_are_not_invented():
     assert parking.reply_text == no_info_fallback(tenant.business) or honest, parking.reply_text
     # The disabled FAQ never reached the model.
     assert not any("keratin" in r.system_instruction.lower() for r in llm.requests)
+
+
+def demo_salon_directory(tenant: Tenant) -> tuple[BusinessDirectory, dict[str, uuid.UUID]]:
+    from seeds.demo_salon import DEMO_SALON_HOURS, DEMO_SALON_SERVICES
+
+    assert tenant.business is not None
+    business_id = tenant.business.id
+    store = MemoryDirectoryStore()
+    ids = {
+        item.name: store.add_service(
+            business_id,
+            item.name,
+            duration_minutes=item.duration_minutes,
+            price=str(item.price) if item.price is not None else None,
+            description=item.description,
+            active=item.active,
+        ).id
+        for item in DEMO_SALON_SERVICES
+    }
+    store.set_week(
+        business_id,
+        {
+            day.day_of_week: None
+            if day.opens_at is None or day.closes_at is None
+            else (day.opens_at.strftime("%H:%M"), day.closes_at.strftime("%H:%M"))
+            for day in DEMO_SALON_HOURS
+        },
+    )
+    return BusinessDirectory(store, lambda: datetime.now(UTC)), ids
+
+
+async def test_live_hours_location_and_prices_come_only_from_stored_data():
+    tenant, faqs, _ = demo_salon()
+    assert tenant.business is not None
+    tenant.business.currency = "USD"
+    directory, ids = demo_salon_directory(tenant)
+    llm = Recording(live_client())
+    engine = ConversationEngine(
+        MemoryStore(),
+        llm,
+        ToolRegistry.of(
+            [
+                search_faq_tool(KnowledgeBase(faqs)),
+                get_services_tool(directory),
+                get_business_info_tool(directory),
+            ]
+        ),
+        history_limit=20,
+        turn_timeout_seconds=60,
+        usage=guard(),
+        directory=directory,
+    )
+
+    async def ask(question: str) -> tuple[str, set[str], int]:
+        before = len(llm.requests)
+        result = await engine.handle_turn(tenant, None, question, "test_chat")
+        assert result.fallback is False, (question, result.reply_text)
+        final = AgentTurn.model_validate_json(llm.replies[-1].text)
+        return (
+            result.reply_text,
+            {s.strip().lower() for s in final.sources},
+            len(llm.requests) - before,
+        )
+
+    # Saturday is 10:00-16:00, straight from BUSINESS HOURS: no tool call needed.
+    saturday, sources, calls = await ask("When are you open Saturday?")
+    assert "business_hours" in sources and calls <= 2
+    assert "10" in saturday and ("4" in saturday or "16" in saturday), saturday
+
+    where, sources, _ = await ask("Where are you?")
+    assert "business_profile" in sources and "Elm" in where, where
+
+    beard, sources, _ = await ask("How much is a beard trim?")
+    assert str(ids["Beard trim"]) in sources and "15" in beard, beard
+
+    # No perm in the catalog: an honest "we don't list that", never an invented price.
+    perm = await engine.handle_turn(tenant, None, "How much is a perm?", "test_chat")
+    assert money_amounts(perm.reply_text) == [], perm.reply_text
+
+    # "cut" matches Haircut and Kids cut: the agent asks which one.
+    cut, _, _ = await ask("How much is a cut?")
+    assert "haircut" in cut.lower() and "kid" in cut.lower(), cut
+    # Never offered: the inactive service doesn't reach any request.
+    assert not any("hot towel" in r.system_instruction.lower() for r in llm.requests)

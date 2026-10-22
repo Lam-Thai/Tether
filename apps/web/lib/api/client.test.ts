@@ -32,6 +32,7 @@ const BUSINESS: BusinessRead = {
   timezone: "America/New_York",
   phone: "+15551234567",
   contact_email: "owner@acme.test",
+  currency: "USD",
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
 };
@@ -310,6 +311,7 @@ describe("createBusiness", () => {
     timezone: "America/New_York",
     phone: null,
     contact_email: null,
+    currency: "USD",
   };
 
   beforeEach(() => {
