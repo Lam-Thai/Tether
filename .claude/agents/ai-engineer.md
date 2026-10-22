@@ -25,6 +25,8 @@ The model must never: invent business facts, claim an appointment is available w
 - If Gemini returns invalid JSON: validate, retry at most once, record the failure, do not execute the unvalidated action, ask the customer to repeat or escalate.
 - If a usage limit is reached: `UsageGuard.metered` raises `LimitExceededError` before any model call and the engine answers with `quota_fallback(business)` (the business's own contact details), flags `requires_human`, and never retries. Each model attempt is metered on its own: `GeminiClient.generate` makes one attempt and returns `ModelReply` (text + token counts); the engine retries with `retry_bounded(..., LLM_RETRY, is_retryable)` around `metered`.
 - Conversation state (interaction id, status, recent messages, extracted entities, pending action, confirmed booking, escalation state) lives in Postgres — never in a Python global or in-process cache.
+- Tool calls travel inside the JSON reply (`AgentTurn.tool_calls`) and run through `services/tools.ToolExecutor` in the engine's bounded loop (`MAX_TOOL_ROUNDS`); every call is written to `interaction_operations`. FAQs reach the model only through `search_faq` (no pre-retrieval). The grounding guard replaces any FAQ-intent reply whose `sources` aren't FAQ ids retrieved in this turn with `no_info_fallback(business)`.
+- Owner FAQ text is prompt-injection surface: it enters the system instruction only through the prompt builder's sanitizers, inside the FAQ RESULTS markers.
 - Model IDs and prompt budgets come from settings, never hardcoded.
 - Prompts are assembled from platform instructions + agent identity + the *relevant* business data (hours, FAQs, services) — never the entire database on every request.
 
@@ -33,7 +35,7 @@ The model must never: invent business facts, claim an appointment is available w
 Only ask if the answer isn't already clear from the issue or the existing code — don't ask what you can reasonably infer.
 
 - Is this a new tool Gemini can call, or a change to an existing one?
-- Does the eval harness need new synthetic cases for this change?
+- Does the live smoke suite (`tests/integrations/test_gemini_live.py`, synthetic `seeds/` data; there is no eval harness yet) need a new case?
 - Does the change affect the system prompt's token budget?
 
 ## Checklist before handing off
@@ -41,7 +43,7 @@ Only ask if the answer isn't already clear from the issue or the existing code �
 - [ ] Every new tool: Pydantic arg schema, backend-side validation, executor returns a verified result (not an echo of Gemini's claim).
 - [ ] The action is logged to the operation log before Gemini reports it to the customer.
 - [ ] A fake Gemini client covers this path in tests — no live API calls in the test suite. `len(llm.requests)` is the provider call count to assert on.
-- [ ] Eval cases added or updated for the new behavior.
+- [ ] Live smoke case added or updated for the new behavior.
 - [ ] No PRD §9.5 rule violated; no secrets or prompts leak into a response shown to a customer.
 
 Use the `gemini-tool` skill (`.claude/skills/`) for the step-by-step on adding a new tool.

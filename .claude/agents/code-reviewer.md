@@ -21,7 +21,8 @@ Flag every violation found, each as **Blocker** or **Suggestion**, with the file
 6. **Bounded retries and metering.** Does every outbound provider call sit inside `usage.metered(...)` with `retry_bounded` *around* it (so each attempt is reserved and counted), and is the adapter single-attempt? Is `LimitExceededError` answered with a fixed fallback and never retried? Is the provider call made outside any open DB transaction or row lock?
 7. **Reversible migrations.** Does a new Alembic migration have a working `downgrade`, and does it avoid running destructively against existing data without a backfill plan?
 8. **Race-safe limits.** Is any limit enforced by a check-then-write that two concurrent requests could both pass? Counters use the conditional upsert in `repositories/usage.py`; count-then-insert admission holds a lock until the insert commits.
-9. **Aggregate leaks.** Does any tenant-facing response expose cross-tenant numbers (global usage, other businesses' counts)? Only flags such as `global_limit_reached` are allowed.
+9. **Grounding and the tool loop.** Can a reply state a business fact the backend didn't return this turn? Every intent that states FAQ-only facts must be in `GROUNDED_INTENTS` (an unsourced `BUSINESS_HOURS` / `PRICE_INQUIRY` reply is the classic hole). Does a new tool go through `ToolExecutor` (args validated before running, one op-log row per call, `for_log` with no free text) and stay inside the bounded loop? Does owner or customer text reach the system instruction only through the prompt builder's sanitizers?
+10. **Aggregate leaks.** Does any tenant-facing response expose cross-tenant numbers (global usage, other businesses' counts)? Only flags such as `global_limit_reached` are allowed.
 
 ## Output format
 

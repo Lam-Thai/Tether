@@ -3,7 +3,13 @@
 The backend validates the model's raw output against this before anything
 is persisted or shown (PRD §8.6). A reply that doesn't parse, or that asks
 for a tool the `ToolRegistry` doesn't have, is invalid: the engine retries
-once, then falls back. Nothing in here is ever executed unvalidated.
+once, then falls back. Nothing in here is ever executed unvalidated: tool
+arguments are validated again, per tool, by `services/tools.ToolExecutor`.
+
+`sources` lists the FAQ ids a reply relies on. They stay plain strings here
+on purpose: a made-up id must reach the engine's grounding guard (and be
+replaced by the "I don't have that information" fallback), not make the
+whole reply schema-invalid and burn the one retry.
 """
 
 from typing import Annotated, Any, Literal
@@ -26,6 +32,8 @@ Intent = Literal[
 
 MAX_RESPONSE_CHARS = 1000
 MAX_ENTITY_CHARS = 80
+MAX_SOURCES = 10
+MAX_SOURCE_CHARS = 64
 
 # Stripped before the length checks, so a whitespace-only reply is invalid.
 ResponseText = Annotated[
@@ -38,6 +46,10 @@ EntityText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, max_length=MAX_ENTITY_CHARS),
     AfterValidator(lambda value: value or None),
+]
+# Room for a UUID and then some; whether it's a real, retrieved FAQ id is the guard's call.
+SourceId = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_SOURCE_CHARS)
 ]
 
 
@@ -67,5 +79,8 @@ class AgentTurn(BaseModel):
     response_text: ResponseText
     entities: Entities = Field(default_factory=Entities)
     requires_human: bool = False
-    # Always empty until Slice 6 registers the first tool.
+    # Backend tools to run before answering. A reply that requests tools is never
+    # shown: the engine runs them and asks the model again with the results.
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    # Ids of the FAQs (retrieved by `search_faq` this turn) the reply relies on.
+    sources: list[SourceId] = Field(default_factory=list, max_length=MAX_SOURCES)

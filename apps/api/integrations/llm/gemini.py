@@ -16,6 +16,7 @@ Policy
 
 import asyncio
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Any, get_args
 
 import httpx
@@ -23,7 +24,13 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from integrations.llm.port import LLMUnavailableError, ModelMessage, ModelReply, ModelRequest
+from integrations.llm.port import (
+    LLMUnavailableError,
+    ModelMessage,
+    ModelReply,
+    ModelRequest,
+    ToolDeclaration,
+)
 from schemas.agent_turn import Entities, Intent
 
 logger = logging.getLogger(__name__)
@@ -35,33 +42,88 @@ _MAX_OUTPUT_TOKENS = 2048
 _THINKING_BUDGET_TOKENS = 1024
 
 
-def response_schema_for_gemini() -> dict[str, Any]:
+_GEMINI_TYPES = {
+    "string": "STRING",
+    "integer": "INTEGER",
+    "number": "NUMBER",
+    "boolean": "BOOLEAN",
+    "array": "ARRAY",
+}
+
+
+def response_schema_for_gemini(tools: Sequence[ToolDeclaration] = ()) -> dict[str, Any]:
     """The structured-output schema sent to Gemini.
 
     `AgentTurn.model_json_schema()` isn't usable as-is: `ToolCall.arguments` is a
     free-form `dict[str, Any]` (`additionalProperties: true`), which Gemini's schema
     subset can't express, and Pydantic's `$defs`/`anyOf: [..., null]` need
-    flattening. While the tool registry is empty the model must not emit tool
-    calls, so `tool_calls` is omitted here. The engine still validates the raw
-    text against the full `AgentTurn` afterwards, so this schema only steers
-    the model; it is never the source of truth. When tools land (Slice 6), add a
-    `tool_calls` array whose arguments are a per-tool schema instead.
+    flattening. The engine still validates the raw text against the full
+    `AgentTurn` afterwards, and each tool's arguments against that tool's own
+    args model, so this schema only steers the model; it is never the source of
+    truth.
+
+    Gemini 2.5 can't combine structured output with native function calling,
+    so tool requests ride inside this JSON: with tools declared, `tool_calls`
+    is an array of `{name, arguments}` where `name` is one of the declared
+    tools and `arguments` has one property per parameter name across all of
+    them (the union), each nullable, since one shape has to fit every tool.
+    The executor treats a null argument as "not given". Without tools,
+    `tool_calls` is left out so the model can't emit one.
     """
     nullable_string: dict[str, Any] = {"type": "STRING", "nullable": True}
+    properties: dict[str, Any] = {
+        "intent": {"type": "STRING", "enum": list(get_args(Intent))},
+        "sources": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "response_text": {"type": "STRING"},
+        "entities": {
+            "type": "OBJECT",
+            "properties": {name: dict(nullable_string) for name in Entities.model_fields},
+        },
+        "requires_human": {"type": "BOOLEAN"},
+    }
+    if tools:
+        properties["tool_calls"] = _tool_calls_schema(tools)
+    # Decide on tools and sources before writing the reply.
+    order = ["intent", "tool_calls", "sources", "response_text", "entities", "requires_human"]
+    order = [name for name in order if name in properties]
     return {
         "type": "OBJECT",
-        "properties": {
-            "intent": {"type": "STRING", "enum": list(get_args(Intent))},
-            "response_text": {"type": "STRING"},
-            "entities": {
-                "type": "OBJECT",
-                "properties": {name: dict(nullable_string) for name in Entities.model_fields},
-            },
-            "requires_human": {"type": "BOOLEAN"},
-        },
-        "required": ["intent", "response_text", "entities", "requires_human"],
-        "propertyOrdering": ["intent", "response_text", "entities", "requires_human"],
+        "properties": properties,
+        "required": order,
+        "propertyOrdering": order,
     }
+
+
+def _tool_calls_schema(tools: Sequence[ToolDeclaration]) -> dict[str, Any]:
+    arguments: dict[str, dict[str, Any]] = {}
+    for tool in tools:
+        for name, spec in dict(tool.parameters.get("properties") or {}).items():
+            converted = {**_gemini_property(name, spec), "nullable": True}
+            known = arguments.setdefault(name, converted)
+            if known["type"] != converted["type"]:
+                raise ValueError(f"Tool parameter {name!r} is declared with two different types.")
+    item: dict[str, Any] = {"name": {"type": "STRING", "enum": [tool.name for tool in tools]}}
+    if arguments:  # Gemini rejects an OBJECT with no properties
+        item["arguments"] = {"type": "OBJECT", "properties": arguments}
+    return {
+        "type": "ARRAY",
+        "items": {"type": "OBJECT", "properties": item, "required": list(item)},
+    }
+
+
+def _gemini_property(name: str, spec: Mapping[str, Any]) -> dict[str, Any]:
+    """One JSON-schema parameter (the subset `services/tools` emits) in Gemini's dialect."""
+    kind = _GEMINI_TYPES.get(str(spec.get("type")))
+    if kind is None:
+        raise ValueError(f"Tool parameter {name!r} has an unsupported type.")
+    converted: dict[str, Any] = {"type": kind}
+    if spec.get("description"):
+        converted["description"] = str(spec["description"])
+    if kind == "STRING" and spec.get("enum"):
+        converted["enum"] = [str(value) for value in spec["enum"]]
+    if kind == "ARRAY":
+        converted["items"] = _gemini_property(name, spec.get("items") or {})
+    return converted
 
 
 def _is_transient(exc: Exception) -> bool:
@@ -141,7 +203,7 @@ class GeminiClient:
         config = types.GenerateContentConfig(
             system_instruction=request.system_instruction,
             response_mime_type="application/json",
-            response_schema=response_schema_for_gemini(),
+            response_schema=response_schema_for_gemini(request.tools),
             temperature=_TEMPERATURE,
             max_output_tokens=_MAX_OUTPUT_TOKENS,
             thinking_config=types.ThinkingConfig(thinking_budget=_THINKING_BUDGET_TOKENS),

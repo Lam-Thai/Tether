@@ -4,6 +4,8 @@ import asyncio
 import uuid
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from core.db import async_session_factory
 from repositories import agents as agents_repo
@@ -90,3 +92,21 @@ async def test_a_second_locker_gets_interaction_busy_not_a_hang(two_tenants, mon
             await repo.lock_interaction(waiter, tenant_a.business_id, interaction_id, "test_chat")
         await holder.rollback()
         await waiter.rollback()
+
+
+async def test_a_failed_savepoint_leaves_the_session_usable(two_tenants):
+    """What lets `ToolExecutor` log a tool that died on a DB error."""
+    tenant, _ = two_tenants
+    async with async_session_factory() as session:
+        store = repo.SqlConversationStore(session)
+        interaction = await store.create_interaction(tenant.business_id, "test_chat")
+        with pytest.raises(DBAPIError):
+            async with store.savepoint():
+                await session.execute(text("SELECT 1 / 0"))
+
+        await store.append_message(interaction, "agent", "still writable")
+        await store.checkpoint()
+
+    async with async_session_factory() as session:
+        rows = await repo.list_messages(session, tenant.business_id, interaction.id)
+    assert [r.message_text for r in rows] == ["still writable"]

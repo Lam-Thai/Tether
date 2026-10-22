@@ -4,6 +4,7 @@ Covers the request mapping, the no-key path, token counts, and which failures
 are flagged retryable (the adapter itself makes exactly one attempt).
 """
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,8 +13,8 @@ import pytest
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from integrations.llm.gemini import GeminiClient
-from integrations.llm.port import LLMUnavailableError, ModelMessage, ModelRequest
+from integrations.llm.gemini import GeminiClient, response_schema_for_gemini
+from integrations.llm.port import LLMUnavailableError, ModelMessage, ModelRequest, ToolDeclaration
 from schemas.agent_turn import AgentTurn
 
 OK_JSON = '{"intent":"FAQ","response_text":"Hello","entities":{},"requires_human":false}'
@@ -84,17 +85,85 @@ async def test_maps_request_to_sdk_call():
     assert config.temperature is not None
 
 
-async def test_response_schema_is_gemini_compatible_and_omits_tool_calls():
+async def test_without_tools_the_schema_has_sources_but_no_tool_calls():
     sdk, models = stub_sdk(reply())
     await client(sdk).generate(REQUEST)
 
     raw = models.calls[0]["config"].response_schema
     schema = types.Schema.model_validate(raw)  # the SDK's own schema type accepts it
     props = schema.properties or {}
-    assert set(props) == {"intent", "response_text", "entities", "requires_human"}
+    assert set(props) == {"intent", "response_text", "entities", "requires_human", "sources"}
     assert "UNKNOWN" in (props["intent"].enum or [])
     assert "customer_name" in (props["entities"].properties or {})
+    sources = props["sources"]
+    assert sources.type == types.Type.ARRAY and sources.items is not None
+    assert sources.items.type == types.Type.STRING
     assert "additionalProperties" not in str(raw)
+
+
+SEARCH = ToolDeclaration(
+    name="search_faq",
+    description="Search FAQs.",
+    parameters={
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "The question.", "maxLength": 9}},
+        "required": ["query"],
+    },
+)
+LOOKUP = ToolDeclaration(
+    name="lookup",
+    description="Look up.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "size": {"type": "string", "enum": ["small", "large"]},
+            "count": {"type": "integer"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+)
+
+
+async def test_declared_tools_add_a_tool_calls_array_built_from_their_params():
+    sdk, models = stub_sdk(reply())
+    await client(sdk).generate(replace(REQUEST, tools=(SEARCH, LOOKUP)))
+
+    raw = models.calls[0]["config"].response_schema
+    schema = types.Schema.model_validate(raw)
+    calls = (schema.properties or {})["tool_calls"]
+    assert calls.type == types.Type.ARRAY and calls.items is not None
+    item = calls.items.properties or {}
+    assert item["name"].enum == ["search_faq", "lookup"]
+    arguments = item["arguments"].properties or {}
+    assert set(arguments) == {"query", "size", "count", "tags"}  # the union, once each
+    assert all(arg.nullable for arg in arguments.values())  # null = "not given"
+    assert arguments["query"].type == types.Type.STRING
+    assert arguments["query"].description == "The question."
+    assert arguments["size"].enum == ["small", "large"]
+    assert arguments["count"].type == types.Type.INTEGER
+    tags = arguments["tags"]
+    assert tags.type == types.Type.ARRAY and tags.items and tags.items.type == types.Type.STRING
+    assert "tool_calls" in (schema.required or [])
+    assert "additionalProperties" not in str(raw)
+
+
+def test_tools_without_any_params_omit_the_arguments_object():
+    bare = ToolDeclaration(name="ping", description="Ping.")
+    schema = types.Schema.model_validate(response_schema_for_gemini((bare,)))
+    calls = (schema.properties or {})["tool_calls"]
+    assert calls.items is not None
+    assert set(calls.items.properties or {}) == {"name"}
+
+
+def test_conflicting_param_types_across_tools_fail_loudly():
+    clash = ToolDeclaration(
+        name="clash",
+        description="d",
+        parameters={"type": "object", "properties": {"query": {"type": "integer"}}},
+    )
+    with pytest.raises(ValueError):
+        response_schema_for_gemini((SEARCH, clash))
 
 
 async def test_no_api_key_raises_unavailable_without_calling_sdk():

@@ -10,7 +10,8 @@ backstop if that discipline ever slips.
 """
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
@@ -201,3 +202,8 @@ class SqlConversationStore:
 
     async def checkpoint(self) -> None:
         await self._session.commit()
+
+    @asynccontextmanager
+    async def savepoint(self) -> AsyncIterator[None]:
+        async with self._session.begin_nested():
+            yield

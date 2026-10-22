@@ -16,6 +16,7 @@ from core.db import async_session_factory
 from integrations.llm.fake import agent_turn
 from integrations.llm.port import LLMUnavailableError
 from models.interaction import Interaction, InteractionMessage
+from repositories import operations as operations_repo
 from services.conversation import INVALID_OUTPUT_FALLBACK, PROVIDER_FALLBACK
 
 
@@ -125,8 +126,8 @@ async def test_routes_require_a_bearer_token(client):
 async def test_chat_round_trip_reloads_identically_from_postgres(client, entitled_tenants, llm):
     tenant_a, _ = entitled_tenants
     llm.queue(
-        agent_turn("We open at nine.", intent="BUSINESS_HOURS"),
-        agent_turn("Happy to help.", intent="FAQ"),
+        agent_turn("Let me find out for you.", intent="UNKNOWN"),
+        agent_turn("Happy to help.", intent="UNKNOWN"),
     )
 
     first = await _send(client, tenant_a, "When do you open?")
@@ -135,8 +136,8 @@ async def test_chat_round_trip_reloads_identically_from_postgres(client, entitle
     interaction_id = first_body["interaction_id"]
     assert [m["speaker"] for m in first_body["messages"]] == ["agent", "customer", "agent"]
     assert first_body["messages"][0]["text"].startswith("Hi, thanks for contacting")
-    assert first_body["reply_text"] == "We open at nine."
-    assert (first_body["intent"], first_body["status"]) == ("BUSINESS_HOURS", "active")
+    assert first_body["reply_text"] == "Let me find out for you."
+    assert (first_body["intent"], first_body["status"]) == ("UNKNOWN", "active")
     assert first_body["ended"] is False and first_body["fallback"] is False
 
     second = await _send(client, tenant_a, "And Sunday?", interaction_id)
@@ -158,7 +159,7 @@ async def test_chat_round_trip_reloads_identically_from_postgres(client, entitle
     # The second request's model call saw the persisted history.
     assert [m.text for m in llm.requests[1].messages][1:] == [
         "When do you open?",
-        "We open at nine.",
+        "Let me find out for you.",
         "And Sunday?",
     ]
 
@@ -362,3 +363,76 @@ async def test_interaction_busy_is_a_distinct_409_code(client, entitled_tenants,
 
     assert busy.status_code == 409
     assert busy.json()["error"]["code"] == "interaction_busy"
+
+
+def _search(query: str) -> dict:
+    return agent_turn(
+        "Let me check.", tool_calls=[{"name": "search_faq", "arguments": {"query": query}}]
+    )
+
+
+async def test_faq_edits_and_disabling_reach_the_very_next_reply(client, entitled_tenants, llm):
+    """The slice's demo end to end: FAQ API -> test chat -> search_faq -> grounded reply."""
+    tenant_a, tenant_b = entitled_tenants
+    headers = _auth(tenant_a)
+    created = await client.post(
+        "/api/v1/faqs",
+        json={
+            "question": "Do you take walk-ins?",
+            "answer": "Yes, before 3 PM.",
+            "category": "Booking",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    faq_id = created.json()["id"]
+    # Another tenant's FAQ on the same topic must never reach tenant A's prompt.
+    other = await client.post(
+        "/api/v1/faqs",
+        json={"question": "Do you take walk-ins?", "answer": "Never, appointments only."},
+        headers=_auth(tenant_b),
+    )
+    assert other.status_code == 201, other.text
+
+    llm.queue(_search("walk in"), agent_turn("Yes, before 3 PM!", intent="FAQ", sources=[faq_id]))
+    first = await _send(client, tenant_a, "can I just walk in?")
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert (body["reply_text"], body["intent"], body["fallback"]) == (
+        "Yes, before 3 PM!",
+        "FAQ",
+        False,
+    )
+    assert "Yes, before 3 PM." in llm.requests[1].system_instruction
+    assert "Never, appointments only." not in llm.requests[1].system_instruction
+    interaction_id = uuid.UUID(body["interaction_id"])
+
+    edited = await client.patch(
+        f"/api/v1/faqs/{faq_id}", json={"answer": "Yes, before 5 PM."}, headers=headers
+    )
+    assert edited.status_code == 200, edited.text
+    llm.queue(_search("walk in"), agent_turn("Yes, before 5 PM!", intent="FAQ", sources=[faq_id]))
+    second = await _send(client, tenant_a, "walk-ins today?", str(interaction_id))
+    assert second.json()["reply_text"] == "Yes, before 5 PM!"
+    assert "before 5 PM." in llm.requests[3].system_instruction
+    assert "before 3 PM." not in llm.requests[3].system_instruction
+
+    disabled = await client.patch(f"/api/v1/faqs/{faq_id}", json={"active": False}, headers=headers)
+    assert disabled.status_code == 200, disabled.text
+    # The model cites the now-disabled FAQ from memory: the guard must refuse it.
+    llm.queue(_search("walk in"), agent_turn("Yes, before 5 PM!", intent="FAQ", sources=[faq_id]))
+    third = await _send(client, tenant_a, "and tomorrow?", str(interaction_id))
+    third_body = third.json()
+    assert third_body["fallback"] is True
+    assert third_body["reply_text"].startswith("Sorry, I don't have that information.")
+    assert "before 5 PM" not in llm.requests[5].system_instruction
+
+    # Every tool call is in the operation log, scoped to tenant A only.
+    async with async_session_factory() as session:
+        ops = await operations_repo.list_operations(session, tenant_a.business_id, interaction_id)
+        foreign = await operations_repo.list_operations(
+            session, tenant_b.business_id, interaction_id
+        )
+    assert [(o.tool_name, o.status) for o in ops] == [("search_faq", "succeeded")] * 3
+    assert [o.result["faq_ids"] for o in ops] == [[faq_id], [faq_id], []]
+    assert foreign == []

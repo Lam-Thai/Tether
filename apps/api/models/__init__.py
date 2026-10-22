@@ -6,15 +6,19 @@ imports `models` or `models.base`.
 from models.agent import Agent
 from models.billing import StripeEvent, Subscription
 from models.business import Business
+from models.faq import Faq
 from models.interaction import Interaction, InteractionMessage
+from models.operation import InteractionOperation
 from models.usage import UsageCounter, UsageEvent
 from models.user import User
 
 __all__ = [
     "Agent",
     "Business",
+    "Faq",
     "Interaction",
     "InteractionMessage",
+    "InteractionOperation",
     "StripeEvent",
     "Subscription",
     "UsageCounter",
