@@ -131,7 +131,7 @@ export function AgentBuilder({ agent }: { agent: AgentRead }) {
           className="flex flex-col gap-8"
           onSubmit={handleSubmit(onSubmit)}
           onChange={() => {
-            if (saveState.kind === "saved") setSaveState({ kind: "idle" });
+            if (saveState.kind !== "idle") setSaveState({ kind: "idle" });
           }}
           noValidate
         >

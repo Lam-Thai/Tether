@@ -134,6 +134,10 @@ describe("HoursEditor", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach the API.");
     expect(screen.queryByText("Saved")).not.toBeInTheDocument();
     expect(screen.getByText("Not set yet")).toBeInTheDocument();
+
+    // Editing a time clears the stale error.
+    fireEvent.change(screen.getByLabelText("Tuesday opens"), { target: { value: "08:00" } });
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
   it("shows a 422 message from the API", async () => {

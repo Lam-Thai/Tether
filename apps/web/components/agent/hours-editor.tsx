@@ -102,7 +102,7 @@ function HoursPanel({ initial }: { initial: BusinessHours }) {
           className="flex flex-col gap-5"
           onSubmit={handleSubmit(onSubmit)}
           onChange={() => {
-            if (saveState.kind === "saved") setSaveState({ kind: "idle" });
+            if (saveState.kind !== "idle") setSaveState({ kind: "idle" });
           }}
           noValidate
         >

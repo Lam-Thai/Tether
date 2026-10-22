@@ -20,9 +20,16 @@ export function formatPrice(price: string | null, currency: string): string {
   }
 }
 
-/** Saved price -> the text shown in the price input (the currency's own number of decimals). */
+/**
+ * Saved price -> the text shown in the price input (the currency's own number of
+ * decimals). When that would round the price (45.50 after switching to JPY), the
+ * saved value is shown as it is, so validation asks the owner to fix it instead of
+ * an unrelated edit silently saving a different price.
+ */
 export function priceToInput(price: string | null, currency: string): string {
   if (price === null) return "";
   const amount = Number(price);
-  return Number.isFinite(amount) ? amount.toFixed(currencyDigits(currency)) : price;
+  if (!Number.isFinite(amount)) return price;
+  const shown = amount.toFixed(currencyDigits(currency));
+  return Number(shown) === amount ? shown : price;
 }

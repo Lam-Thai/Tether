@@ -160,7 +160,7 @@ function BusinessInfoPanel({ business }: { business: BusinessRead }) {
           className="flex flex-col gap-5"
           onSubmit={handleSubmit(onSubmit)}
           onChange={() => {
-            if (saveState.kind === "saved") setSaveState({ kind: "idle" });
+            if (saveState.kind !== "idle") setSaveState({ kind: "idle" });
           }}
           noValidate
         >

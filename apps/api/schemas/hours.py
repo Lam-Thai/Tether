@@ -24,6 +24,10 @@ class DayHours(BaseModel):
 
     @model_validator(mode="after")
     def _window_matches_closed_flag(self) -> "DayHours":
+        # Local wall-clock only: an offset ("09:00Z") would be dropped by the
+        # `time without time zone` column, and can't be compared with a naive time.
+        if any(t is not None and t.tzinfo is not None for t in (self.opens_at, self.closes_at)):
+            raise ValueError("Times are local to the business timezone; leave out any offset.")
         if self.is_closed:
             if self.opens_at is not None or self.closes_at is not None:
                 raise ValueError("A closed day has no opening or closing time.")

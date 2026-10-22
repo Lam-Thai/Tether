@@ -33,6 +33,8 @@ describe("priceToInput", () => {
     expect(priceToInput("45.5", "USD")).toBe("45.50");
     expect(priceToInput("5000.00", "JPY")).toBe("5000");
     expect(priceToInput(null, "USD")).toBe("");
+    // Never rounds a saved price the currency can't express.
+    expect(priceToInput("45.50", "JPY")).toBe("45.50");
   });
 });
 

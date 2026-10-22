@@ -126,6 +126,10 @@ describe("BusinessInfoForm", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach the API.");
+
+    // Correcting a field clears the stale error.
+    await user.type(screen.getByLabelText("Industry"), "x");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows a callout when the business could not load", () => {
