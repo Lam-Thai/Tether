@@ -20,9 +20,17 @@ hostport="${rest%%/*}"
 host="${hostport%:*}"
 case "$host" in
   localhost | 127.0.0.1 | "[::1]") ;;
+  *) host="remote host '$host'" ;;
+esac
+# The driver also takes a host from the query (`?host=...`), overriding the one above.
+case "$url" in
+  *\?*host=*) host="host in the query string" ;;
+esac
+case "$host" in
+  localhost | 127.0.0.1 | "[::1]") ;;
   *)
     if [ "${TEST_DATABASE_ALLOW_REMOTE:-}" != "1" ]; then
-      echo "api tests: refusing remote database host '$host'. Use a local Postgres" >&2
+      echo "api tests: refusing database with a $host. Use a local Postgres" >&2
       echo "  (docker compose up -d), or set TEST_DATABASE_ALLOW_REMOTE=1 for a disposable one." >&2
       exit 1
     fi

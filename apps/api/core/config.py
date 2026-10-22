@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     eval_max_requests: int | None = Field(default=None, ge=1, le=5000)
     eval_requests_per_minute: float | None = Field(default=None, gt=0, le=2000)
     eval_concurrency: int | None = Field(default=None, ge=1, le=16)
+    # Tests refuse a non-local DATABASE_URL unless this is set (tests/conftest.py).
+    # Only for a disposable test database: tests create and delete tenants.
+    test_database_allow_remote: bool = False
 
     @field_validator("stripe_secret_key")
     @classmethod

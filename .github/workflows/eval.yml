@@ -64,7 +64,7 @@ jobs:
       STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder
       STRIPE_PRICE_ID: price_ci_placeholder
       APP_BASE_URL: https://example.com
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # GEMINI_API_KEY is set only on the two steps that need it, not job-wide.
       # A fresh database: the global cap only sees this run, the budget below still binds.
       GEMINI_REQUESTS_PER_DAY: "5000"
       # Inputs reach the shell as env vars only, never interpolated into the script.
@@ -91,6 +91,8 @@ jobs:
         run: uv sync --locked
 
       - name: Check the API key secret is set
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then
             echo "::error::Add a GEMINI_API_KEY repository secret to run evals."
@@ -114,6 +116,8 @@ jobs:
 
       - name: Run the eval
         id: eval
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set +e
           set -- --suite "$EVAL_SUITE" --tier "$EVAL_TIER"

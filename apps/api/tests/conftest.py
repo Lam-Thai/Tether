@@ -2,7 +2,6 @@
 touches business-scoped data.
 """
 
-import os
 import random
 import uuid
 from collections.abc import AsyncIterator
@@ -48,8 +47,7 @@ def pytest_configure(config: pytest.Config) -> None:
             "Use `sh scripts/test.sh` (local Postgres, test settings)."
         )
     host = make_url(settings.database_url).host
-    remote_ok = os.environ.get("TEST_DATABASE_ALLOW_REMOTE") == "1"
-    if not is_local_database(settings.database_url) and not remote_ok:
+    if not is_local_database(settings.database_url) and not settings.test_database_allow_remote:
         raise pytest.UsageError(
             f"Refusing to run tests against a remote database ({host}). Point DATABASE_URL "
             "at a local Postgres (`sh scripts/test.sh` does), or set "

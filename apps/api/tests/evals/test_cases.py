@@ -61,6 +61,9 @@ cases:
          "  - {id: a, turns: [x], expected_intent: FAQ}\n"
          "  - {id: a, turns: [y], expected_intent: FAQ}\n", "Duplicate case id"),
         ("scorers: [intent_match]\ncases: [\n", "cannot read"),
+        # A repeated key would silently drop the first list of checks.
+        ("scorers: [intent_match]\ncases:\n  - id: a\n    turns: [x]\n    expected_intent: FAQ\n"
+         "    must_not_contain: [one]\n    must_not_contain: [two]\n", "cannot read"),
     ],
 )
 def test_invalid_case_files_are_refused_before_any_model_call(tmp_path, cases_yaml, message):

@@ -90,9 +90,25 @@ class _CaseFile(BaseModel):
     cases: tuple[EvalCase, ...] = Field(min_length=1)
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """`SafeLoader` that refuses a repeated mapping key. Plain YAML keeps only the
+    last one, so a case with two `must_not_contain:` would silently lose a check."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
+        seen: set[object] = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)  # pyright: ignore[reportArgumentType]
+            if key in seen:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"duplicate key {key!r}", key_node.start_mark
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
 def _read_yaml(path: Path) -> object:
     try:
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
+        return yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
     except (OSError, yaml.YAMLError) as exc:
         raise SuiteError(f"{path.name}: cannot read ({type(exc).__name__}).") from exc
 
