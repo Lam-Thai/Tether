@@ -2,6 +2,7 @@
 touches business-scoped data.
 """
 
+import os
 import random
 import uuid
 from collections.abc import AsyncIterator
@@ -14,11 +15,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
+from sqlalchemy.engine import make_url
 
 from core.app import create_app
 from core.billing import get_billing_gateway
 from core.config import settings
-from core.db import async_session_factory
+from core.db import async_session_factory, is_local_database
 from core.llm import get_llm_client
 from core.tenant import get_signing_key_resolver
 from core.usage import SqlUsageStore, cost_rates, get_usage_guard, usage_limits
@@ -31,6 +33,28 @@ from models.business import Business
 from models.usage import UsageCounter, UsageEvent
 from models.user import User
 from services.usage import DailyLimit, UsageGuard, UsageKind, UsageLimits
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Refuse to run against a database the tests could damage.
+
+    Tests create and delete tenants, so they run only with ENVIRONMENT=local or
+    ci and, unless TEST_DATABASE_ALLOW_REMOTE=1 is set, only against a Postgres
+    on this machine (`scripts/test.sh` points them at one).
+    """
+    if settings.environment == "production":
+        raise pytest.UsageError(
+            "Refusing to run tests with ENVIRONMENT=production. "
+            "Use `sh scripts/test.sh` (local Postgres, test settings)."
+        )
+    host = make_url(settings.database_url).host
+    remote_ok = os.environ.get("TEST_DATABASE_ALLOW_REMOTE") == "1"
+    if not is_local_database(settings.database_url) and not remote_ok:
+        raise pytest.UsageError(
+            f"Refusing to run tests against a remote database ({host}). Point DATABASE_URL "
+            "at a local Postgres (`sh scripts/test.sh` does), or set "
+            "TEST_DATABASE_ALLOW_REMOTE=1 for a disposable test database."
+        )
 
 
 @pytest.fixture(scope="session")

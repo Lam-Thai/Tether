@@ -7,6 +7,7 @@ pooling: build one engine per process, one session per request.
 from collections.abc import AsyncGenerator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -51,6 +52,15 @@ def _connect_args(raw_url: str) -> dict:
     if _requires_ssl(raw_url):
         connect_args["ssl"] = True
     return connect_args
+
+
+# Hosts that are this machine. Tests and the eval harness refuse any other database
+# unless explicitly allowed (tests/conftest.py, evals/cli.py).
+LOCAL_DB_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_local_database(raw_url: str) -> bool:
+    return make_url(raw_url).host in LOCAL_DB_HOSTS
 
 
 engine = create_async_engine(

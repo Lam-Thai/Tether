@@ -35,15 +35,25 @@ The model must never: invent business facts, claim an appointment is available w
 Only ask if the answer isn't already clear from the issue or the existing code — don't ask what you can reasonably infer.
 
 - Is this a new tool Gemini can call, or a change to an existing one?
-- Does the live smoke suite (`tests/integrations/test_gemini_live.py`, synthetic `seeds/` data; there is no eval harness yet) need a new case?
+- Which eval cases does this need? (`apps/api/evals/suites/`, see below.)
 - Does the change affect the system prompt's token budget?
+
+## Evals: every tool or intent change adds cases
+
+`uv run tether-eval --suite core` (from `apps/api`) measures the agent against real Gemini on synthetic cases (`apps/api/evals/`, "Eval harness" in `apps/api/CLAUDE.md`). Rules:
+
+- **A new tool, a changed tool, or a new or changed intent must add eval cases in the same PR**: YAML under `evals/suites/core/` (or a new suite with its own `suite.yaml` and targets). Cover the happy path, paraphrases / slang / speech-to-text noise, a case where the tool must *not* be used or comes back empty, and, for anything that acts (booking, SMS, escalation), `no_false_confirmation`. `tests/evals/test_cases.py` pins the core suite's coverage; extend it if you raise the bar.
+- A prompt or `PLATFORM_RULES` change is checked with a run before merge, and the summary lines go in the PR description next to the previous baseline.
+- A new scorer goes in `evals/scorers.py` (`score(case, transcript, operations) -> Score`, one short failure reason, ids and synthetic phrases only) with unit tests in `tests/evals/test_scorers.py`.
+- Utterances are written for the demo salon; never paste real customer text. Run `--check` (no model calls) before spending a budget.
 
 ## Checklist before handing off
 
 - [ ] Every new tool: Pydantic arg schema, backend-side validation, executor returns a verified result (not an echo of Gemini's claim).
 - [ ] The action is logged to the operation log before Gemini reports it to the customer.
 - [ ] A fake Gemini client covers this path in tests — no live API calls in the test suite. `len(llm.requests)` is the provider call count to assert on.
-- [ ] Live smoke case added or updated for the new behavior.
+- [ ] Eval cases added for the new tool or intent behavior, and `tether-eval --check` passes.
+- [ ] Live smoke case added or updated if the behavior needs an always-on regression check.
 - [ ] No PRD §9.5 rule violated; no secrets or prompts leak into a response shown to a customer.
 
 Use the `gemini-tool` skill (`.claude/skills/`) for the step-by-step on adding a new tool.

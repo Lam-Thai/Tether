@@ -222,6 +222,30 @@ async def test_transient_errors_are_retryable_but_never_retried_here(transient: 
     assert len(models.calls) == 1  # the caller owns retries (retry_bounded + UsageGuard)
     assert "SYSTEM TEXT" not in str(raised.value)
     assert "hours" not in str(raised.value)
+    # Only a 429 is a rate limit (the eval harness backs off on it, never on an outage).
+    is_429 = isinstance(transient, genai_errors.APIError) and transient.code == 429
+    assert raised.value.rate_limited is is_429
+
+
+@pytest.mark.parametrize(
+    ("details", "expected"),
+    [
+        ([{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "39801s"}], 39801),
+        ([{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "1.5s"}], 1.5),
+        ([{"@type": "type.googleapis.com/google.rpc.QuotaFailure"}], None),
+        ([{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "soon"}], None),
+        ("not a list", None),
+    ],
+)
+async def test_a_429_reports_the_providers_retry_delay(details: Any, expected: float | None):
+    error = genai_errors.ClientError(
+        429, {"error": {"code": 429, "message": "quota", "details": details}}
+    )
+    sdk, _ = stub_sdk(error)
+    with pytest.raises(LLMUnavailableError) as raised:
+        await client(sdk).generate(REQUEST)
+    assert raised.value.rate_limited is True
+    assert raised.value.retry_after_seconds == expected
 
 
 async def test_reports_token_counts_with_thinking_as_output():

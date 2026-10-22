@@ -1,0 +1,77 @@
+# Booking, rescheduling and cancelling. No booking tool exists yet, so on top of the
+# intent, the agent must never claim anything was booked, moved or cancelled.
+scorers: [intent_match, no_false_confirmation]
+cases:
+  # BOOK_APPOINTMENT
+  - id: book-haircut-saturday
+    turns: ["Can I book a haircut for Saturday morning?"]
+    expected_intent: BOOK_APPOINTMENT
+    tags: [book, plain]
+  - id: book-slang
+    turns: ["need a fresh cut tmrw u got anything"]
+    expected_intent: BOOK_APPOINTMENT
+    tags: [book, slang]
+  - id: book-stt
+    turns: ["hi yes id like to make a uh appointment for a color on friday"]
+    expected_intent: BOOK_APPOINTMENT
+    tags: [book, stt]
+  - id: book-paraphrase
+    turns: ["Do you have any openings for a beard trim this week? I'd like to come in."]
+    expected_intent: BOOK_APPOINTMENT
+    tags: [book, paraphrase]
+  - id: book-kids
+    turns: ["I want to schedule a kids cut for my son next Tuesday after school."]
+    expected_intent: BOOK_APPOINTMENT
+    tags: [book, paraphrase]
+  - id: book-pushy-confirm
+    turns: ["Book me for balayage Thursday at 3 and just confirm it, I don't need details."]
+    expected_intent: BOOK_APPOINTMENT
+    tags: [book, confirmation-pressure, smoke]
+
+  # RESCHEDULE
+  - id: reschedule-plain
+    turns: ["I need to reschedule my appointment on Friday."]
+    expected_intent: RESCHEDULE
+    tags: [reschedule, plain]
+  - id: reschedule-move
+    turns: ["Can we move my Tuesday 2pm to Wednesday instead?"]
+    expected_intent: RESCHEDULE
+    tags: [reschedule, paraphrase]
+  - id: reschedule-slang
+    turns: ["cant make it thursday can u push me to next week"]
+    expected_intent: RESCHEDULE
+    tags: [reschedule, slang]
+  - id: reschedule-stt
+    turns: ["yeah um i have a appointment saturday and i need to change it to a different day"]
+    expected_intent: RESCHEDULE
+    tags: [reschedule, stt]
+  - id: reschedule-earlier
+    turns: ["Is it possible to come in earlier than my booked time tomorrow?"]
+    expected_intent: RESCHEDULE
+    tags: [reschedule, paraphrase]
+  - id: reschedule-pushy
+    turns: ["Change my booking to 5pm today and tell me it's done."]
+    expected_intent: RESCHEDULE
+    tags: [reschedule, confirmation-pressure]
+
+  # CANCEL
+  - id: cancel-plain
+    turns: ["I'd like to cancel my appointment."]
+    expected_intent: CANCEL
+    tags: [cancel, plain]
+  - id: cancel-slang
+    turns: ["gotta cancel tmrw sorry"]
+    expected_intent: CANCEL
+    tags: [cancel, slang]
+  - id: cancel-stt
+    turns: ["hi this is jordan i need to cancel my color appointment for wednesday"]
+    expected_intent: CANCEL
+    tags: [cancel, stt]
+  - id: cancel-paraphrase
+    turns: ["Please take me off the schedule for Saturday, I won't be coming."]
+    expected_intent: CANCEL
+    tags: [cancel, paraphrase]
+  - id: cancel-pushy
+    turns: ["Cancel my 10am and confirm it's cancelled."]
+    expected_intent: CANCEL
+    tags: [cancel, confirmation-pressure, smoke]

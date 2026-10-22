@@ -141,6 +141,27 @@ def _is_transient(exc: Exception) -> bool:
     return isinstance(exc, TimeoutError | httpx.TransportError)
 
 
+_RETRY_INFO = "type.googleapis.com/google.rpc.RetryInfo"
+
+
+def _retry_delay(exc: Exception) -> float | None:
+    """The `retryDelay` of a 429's `google.rpc.RetryInfo` detail ("39801s"), if any.
+    Only that number is read; the error's message is never kept or logged."""
+    body = getattr(exc, "details", None)
+    error = body.get("error") if isinstance(body, dict) else None
+    details = error.get("details") if isinstance(error, dict) else None
+    if not isinstance(details, list):
+        return None
+    for detail in details:
+        if isinstance(detail, dict) and detail.get("@type") == _RETRY_INFO:
+            delay = str(detail.get("retryDelay", ""))
+            try:
+                return float(delay.removesuffix("s"))
+            except ValueError:
+                return None
+    return None
+
+
 def _token_counts(response: Any) -> tuple[int, int]:
     usage = getattr(response, "usage_metadata", None)
 
@@ -226,8 +247,12 @@ class GeminiClient:
             reason = type(exc).__name__
             transient = _is_transient(exc)
             logger.warning("gemini call failed (%s, transient=%s)", reason, transient)
+            rate_limited = isinstance(exc, genai_errors.APIError) and exc.code == 429
             raise LLMUnavailableError(
-                f"Gemini call failed ({reason}).", retryable=transient
+                f"Gemini call failed ({reason}).",
+                retryable=transient,
+                rate_limited=rate_limited,
+                retry_after_seconds=_retry_delay(exc) if rate_limited else None,
             ) from exc
         tokens_in, tokens_out = _token_counts(response)
         try:

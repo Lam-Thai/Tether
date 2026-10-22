@@ -6,15 +6,21 @@ touching `os.environ` directly.
 """
 
 import json
+import os
 from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+# `TETHER_ENV_FILE=` (empty) reads no env file at all: `scripts/test.sh` sets it so tests
+# see only the CI-like settings it exports, never a developer's .env (real keys, a remote
+# database). Unset, the app reads `.env` as before.
+_ENV_FILE = os.environ.get("TETHER_ENV_FILE", ".env") or None
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
 
     database_url: str
     # `NoDecode` stops pydantic-settings from eagerly JSON-decoding this env
@@ -78,6 +84,13 @@ class Settings(BaseSettings):
     # Flash paid-tier list price; update alongside GEMINI_MODEL.
     gemini_input_usd_per_million_tokens: Decimal = Field(default=Decimal("0.30"), ge=0)
     gemini_output_usd_per_million_tokens: Decimal = Field(default=Decimal("2.50"), ge=0)
+
+    # Eval harness (`uv run tether-eval`, evals/runner.py). The tier picks the defaults
+    # in `evals.runner.TIER_LIMITS`; each value below overrides one of them when set.
+    eval_tier: Literal["free", "paid"] = "free"
+    eval_max_requests: int | None = Field(default=None, ge=1, le=5000)
+    eval_requests_per_minute: float | None = Field(default=None, gt=0, le=2000)
+    eval_concurrency: int | None = Field(default=None, ge=1, le=16)
 
     @field_validator("stripe_secret_key")
     @classmethod

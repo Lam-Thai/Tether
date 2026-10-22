@@ -63,7 +63,9 @@ See the root `CLAUDE.md` for the full command reference (per-app lint/typecheck/
 `git push` runs the Husky `pre-push` hook (`.husky/pre-push`) and is rejected if any check fails:
 
 1. `pnpm test`, the Vitest suite.
-2. `uv run pytest` in `apps/api` (skipped only if `apps/api/pyproject.toml` is missing, which is no longer the normal case).
+2. At the same time, `apps/api/scripts/test.sh`: the API suite with CI-like settings (your `.env` is not read, so no real key or remote database reaches a test), migrations, then pytest in parallel. It needs the local Postgres (`docker compose up -d`, which on Windows needs WSL) and refuses a remote `TEST_DATABASE_URL` unless `TEST_DATABASE_ALLOW_REMOTE=1`.
+
+Both halves together take about 40 seconds.
 
 The suite includes `tooling/repo-hygiene.test.ts`, which fails if any env file other than `.env.example` is tracked (`.env*`, `.envrc`, `*.env`).
 

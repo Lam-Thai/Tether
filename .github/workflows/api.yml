@@ -64,5 +64,5 @@ jobs:
       - name: Run migrations against an empty database
         run: uv run alembic upgrade head
 
-      - name: Test (pytest)
-        run: uv run pytest
+      - name: Test (pytest, parallel)
+        run: uv run pytest -n auto --dist loadfile

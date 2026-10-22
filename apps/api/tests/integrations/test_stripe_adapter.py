@@ -72,6 +72,8 @@ def test_parse_webhook_accepts_an_expanded_customer(gateway):
         "t=1,v1=deadbeef",
         _stripe_signature(b"{}", secret="whsec_someone_else"),
     ],
+    # Fixed ids: the last signature embeds the time, and parallel workers must agree.
+    ids=["missing", "empty", "malformed", "wrong-secret"],
 )
 def test_parse_webhook_rejects_bad_signatures(gateway, signature):
     payload = _event("customer.subscription.updated", {"id": "sub_1", "customer": "cus_1"})

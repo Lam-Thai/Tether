@@ -1,0 +1,126 @@
+# FAQ grounding: answers must come from the salon's FAQs (or its services) retrieved
+# in that turn. Cases with `must_contain` are answerable and must state that fact.
+# Cases without it are questions no active FAQ answers: the agent must say it doesn't
+# know (or answer without inventing anything in `must_not_contain`).
+# Not used on purpose: women's / men's cut prices, where the seed's FAQ ("from 55",
+# "from 30") and its "Haircut" service (40) disagree.
+scorers: [grounded_in_faq]
+cases:
+  # Answerable.
+  - id: grounded-walk-ins
+    turns: ["can I just walk in?"]
+    expected_tools: [search_faq]
+    must_contain: ["3"]
+    tags: [answerable, plain, smoke]
+  - id: grounded-walk-ins-stt
+    turns: ["um do yall take walk ins on saturday afternoon"]
+    expected_tools: [search_faq]
+    must_contain: ["3"]
+    tags: [answerable, stt]
+  - id: grounded-cancellation-policy
+    turns: ["What's your cancellation policy?"]
+    expected_tools: [search_faq]
+    must_contain: ["24"]
+    tags: [answerable, plain]
+  - id: grounded-late-cancel-fee
+    turns: ["what happens if i cancel last minute, do i get charged?"]
+    expected_tools: [search_faq]
+    must_contain: ["50"]
+    tags: [answerable, paraphrase]
+  - id: grounded-running-late
+    turns: ["I'm running late, how long will you hold my spot?"]
+    expected_tools: [search_faq]
+    must_contain: ["15"]
+    tags: [answerable, plain]
+  - id: grounded-kids-cut
+    turns: ["do you cut kids hair? how much"]
+    must_contain: ["18"]
+    tags: [answerable, price]
+  - id: grounded-kids-cut-length
+    turns: ["how long does a children's haircut take"]
+    must_contain: ["20"]
+    tags: [answerable, duration]
+  - id: grounded-highlights
+    turns: ["do u guys do highlights"]
+    expected_tools: [search_faq]
+    must_contain: ["highlight"]
+    tags: [answerable, slang]
+  - id: grounded-colour-consultation
+    turns: ["Is the colour consultation free?"]
+    must_contain: ["free"]
+    tags: [answerable, plain]
+  - id: grounded-beard-trim-length
+    turns: ["how long does a beard trim take"]
+    must_contain: ["15"]
+    tags: [answerable, duration]
+  - id: grounded-balayage-price
+    turns: ["How much does balayage cost?"]
+    must_contain: ["160"]
+    tags: [answerable, price]
+  - id: grounded-apple-pay
+    turns: ["can I pay with apple pay"]
+    expected_tools: [search_faq]
+    must_contain: ["contactless"]
+    tags: [answerable, paraphrase]
+  - id: grounded-cash
+    turns: ["Do you take cash?"]
+    expected_tools: [search_faq]
+    must_contain: ["cash"]
+    tags: [answerable, plain]
+  - id: grounded-gift-cards
+    turns: ["do you sell gift cards"]
+    expected_tools: [search_faq]
+    must_contain: ["gift card"]
+    tags: [answerable, plain]
+  - id: grounded-accessible-restroom
+    turns: ["is there an accessible bathroom"]
+    expected_tools: [search_faq]
+    must_contain: ["restroom"]
+    tags: [answerable, paraphrase]
+  - id: grounded-parking-stt
+    turns: ["where am i supposed to park when i come in"]
+    expected_tools: [search_faq]
+    # Not "street": the salon's own address is "100 Example Street".
+    must_contain: ["free"]
+    tags: [answerable, stt]
+
+  # Not answerable: no active FAQ covers these.
+  - id: unanswerable-validate-parking
+    turns: ["Do you validate parking?"]
+    expected_tools: [search_faq]
+    must_not_contain: ["we validate", "validated parking is", "yes, we do validate"]
+    tags: [unanswerable, smoke]
+  - id: unanswerable-wifi
+    turns: ["do you have wifi while I wait?"]
+    expected_tools: [search_faq]
+    must_not_contain: ["password", "we have wifi", "we have free wifi", "wifi is available"]
+    tags: [unanswerable]
+  - id: unanswerable-disabled-keratin
+    # The keratin FAQ is disabled: its answer must never reach the customer.
+    turns: ["Do you offer keratin treatments?"]
+    must_not_contain: ["no longer offer", "we offer keratin", "keratin treatments are available"]
+    tags: [unanswerable, disabled-faq, smoke]
+  - id: unanswerable-lashes
+    turns: ["do you do eyelash extensions"]
+    must_not_contain: ["we do eyelash", "we offer eyelash", "lash extensions start"]
+    tags: [unanswerable]
+  - id: unanswerable-hiring
+    turns: ["Are you hiring stylists right now?"]
+    expected_tools: [search_faq]
+    must_not_contain: ["we are hiring", "we're hiring", "send your resume", "send us your cv"]
+    tags: [unanswerable]
+  - id: unanswerable-dogs
+    turns: ["can I bring my dog with me"]
+    expected_tools: [search_faq]
+    must_not_contain: ["dogs are welcome", "pets are welcome", "pet-friendly", "dog-friendly"]
+    tags: [unanswerable]
+  - id: unanswerable-loyalty
+    turns: ["Do you have a loyalty program or punch card?"]
+    expected_tools: [search_faq]
+    must_not_contain: ["we have a loyalty", "we offer a loyalty", "every 10th", "earn points"]
+    tags: [unanswerable]
+  - id: unanswerable-student-discount
+    turns: ["is there a student discount"]
+    expected_tools: [search_faq]
+    must_not_contain: ["% off", "percent off", "students get", "we offer a student"]
+    tags: [unanswerable]

@@ -41,6 +41,6 @@ Only ask if the answer isn't already clear from the issue or the existing code â
 - [ ] Every repository query scoped by `business_id` from `TenantContext`.
 - [ ] New provider calls wrapped by `UsageGuard`, bounded retries, and a fake exists for tests.
 - [ ] Migration reviewed by hand (indexes, FKs, constraints) and downgrade tested.
-- [ ] Tests at the service/repository boundary, including a cross-tenant test for any new business data. DB tests pay ~15s of `entitled_tenants` setup each on Neon: assert a whole flow in one test.
+- [ ] Tests at the service/repository boundary, including a cross-tenant test for any new business data. Run them with `sh scripts/test.sh` (local Postgres, parallel workers); keep each test independent so it is parallel-safe.
 
 Use the `api-endpoint`, `db-migration` and `provider-adapter` skills (`.claude/skills/`) for the step-by-step for those two shapes of change. Use the plugin's `tdd` skill for the red/green loop itself.

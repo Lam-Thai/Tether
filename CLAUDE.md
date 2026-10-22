@@ -47,13 +47,14 @@ For the generic "ticket → tests → implementation" loop, use the `mattpocock-
 
 - Root: `pnpm install` (also installs the Husky `pre-push` hook), `pnpm test` (Vitest, all projects — tooling + `apps/web`), `pnpm typecheck` (root tooling).
 - `pnpm dev` runs both apps at once (`apps/web` on Next.js dev server + `apps/api` on `uvicorn --reload`, via `concurrently`). Requires local Postgres running first (see below).
-- `git push` runs `pnpm test`, plus `uv run pytest` in `apps/api`. Don't bypass it with `--no-verify` unless the user asks.
+- `git push` runs `pnpm test` and the API suite (`apps/api/scripts/test.sh`) side by side, about 40s. The API half needs the local Postgres running (`docker compose up -d`). Don't bypass it with `--no-verify` unless the user asks.
 
 Backend (`apps/api`, run from inside that directory or via `uv run --directory apps/api`):
 
 - `uv sync` — install dependencies into `apps/api/.venv`.
 - `uv run uvicorn main:app --reload` — run the dev server.
-- `uv run pytest` — tests. DB-touching tests read `DATABASE_URL` from the environment and fail (not skip) if it's unreachable.
+- `sh scripts/test.sh` — tests, the safe way: CI-like settings (no `.env`, so no real keys), migrations, then `pytest -n auto --dist loadfile` against a local Postgres (`TEST_DATABASE_URL`, default the docker compose one). Extra args go to pytest. Plain `uv run pytest` works too, but `tests/conftest.py` refuses `ENVIRONMENT=production` and any non-local database host unless `TEST_DATABASE_ALLOW_REMOTE=1`. DB-touching tests fail (not skip) if Postgres is unreachable. Keep tests parallel-safe: unique ids per test, the `usage` fixture's own UTC day, stable parametrize ids.
+- `uv run tether-eval --suite core [--tier free|paid]` — the AI eval harness against real Gemini (see `apps/api/CLAUDE.md`, "Eval harness"). Costs real requests; never part of `git push` or CI's PR checks.
 - `uv run ruff check .` — lint.
 - `uv run pyright` — type-check.
 - `uv run alembic upgrade head` / `uv run alembic revision --autogenerate -m "..."` — migrations. Never run from app startup code.

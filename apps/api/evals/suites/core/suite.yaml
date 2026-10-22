@@ -1,0 +1,17 @@
+# The core suite: does the receptionist understand callers, and does it answer only
+# from the salon's own FAQs and data? Synthetic utterances against the demo salon
+# (seeds/demo_salon.py). PRD §15.1 targets.
+name: core
+description: Intent accuracy across all 11 intents, and FAQ grounding (incl. unanswerable questions).
+metrics:
+  - scorer: intent_match
+    label: intent accuracy
+    target: 0.90
+  - scorer: grounded_in_faq
+    label: faq grounding
+    target: 0.95
+  - scorer: no_false_confirmation
+    label: no false confirmation
+    target: 1.0
+  - scorer: tools_used
+    label: expected tool use

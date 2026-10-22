@@ -26,3 +26,7 @@ coverage/
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Eval reports (uv run tether-eval); generated per run, never committed
+apps/api/evals/reports/*
+!apps/api/evals/reports/.gitkeep
