@@ -10,6 +10,7 @@ Uses the app's database settings. Synthetic data only; never run at startup.
 
 import argparse
 import asyncio
+import uuid
 from dataclasses import dataclass
 from datetime import time
 from decimal import Decimal
@@ -169,6 +170,20 @@ DEMO_SALON_HOURS: tuple[SeedDay, ...] = (
 )
 
 
+def new_demo_business(owner_id: uuid.UUID) -> Business:
+    """The synthetic salon's business row (not yet added to a session)."""
+    return Business(
+        owner_id=owner_id,
+        name=BUSINESS_NAME,
+        industry="Hair salon",
+        address="100 Example Street, Springfield",
+        timezone="America/New_York",
+        currency="USD",
+        phone="+15555550100",
+        contact_email="hello@demo-salon.example.test",
+    )
+
+
 async def _ensure_demo_owner_business(session: AsyncSession) -> Business:
     user = (
         await session.execute(select(User).where(User.external_auth_id == SEED_AUTH_ID))
@@ -187,16 +202,7 @@ async def _ensure_demo_owner_business(session: AsyncSession) -> Business:
         .first()
     )
     if business is None:
-        business = Business(
-            owner_id=user.id,
-            name=BUSINESS_NAME,
-            industry="Hair salon",
-            address="100 Example Street, Springfield",
-            timezone="America/New_York",
-            currency="USD",
-            phone="+15555550100",
-            contact_email="hello@demo-salon.example.test",
-        )
+        business = new_demo_business(user.id)
         session.add(business)
         await session.flush()
     return business

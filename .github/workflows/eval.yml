@@ -1,0 +1,149 @@
+name: AI eval
+
+# Manual only: runs an eval suite against real Gemini with the GEMINI_API_KEY secret and a
+# request budget, on a throwaway Postgres. Synthetic data only. See apps/api/evals/.
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Suite to run (a directory under apps/api/evals/suites)"
+        default: core
+        required: true
+        type: string
+      tier:
+        description: "Gemini API tier defaults (pacing, concurrency, budget)"
+        default: free
+        required: true
+        type: choice
+        options: [free, paid]
+      tag:
+        description: "Only cases with this tag (empty: the whole suite). The free tier fits smoke (about 20 requests a day)."
+        default: smoke
+        required: false
+        type: string
+      max_requests:
+        description: "Gemini request budget (empty: the tier's default, free 20 / paid 600)"
+        default: ""
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    name: Eval (${{ inputs.suite }}, ${{ inputs.tier }} tier)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tether
+          POSTGRES_PASSWORD: tether
+          POSTGRES_DB: tether
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tether -d tether"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://tether:tether@localhost:5432/tether
+      CORS_ORIGINS: https://example.com
+      ENVIRONMENT: ci
+      APP_VERSION: ci
+      CLERK_ISSUER: https://example.clerk.accounts.dev
+      # Placeholders: the eval never calls Stripe.
+      STRIPE_SECRET_KEY: sk_test_ci_placeholder
+      STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder
+      STRIPE_PRICE_ID: price_ci_placeholder
+      APP_BASE_URL: https://example.com
+      # GEMINI_API_KEY is set only on the two steps that need it, not job-wide.
+      # A fresh database: the global cap only sees this run, the budget below still binds.
+      GEMINI_REQUESTS_PER_DAY: "5000"
+      # Inputs reach the shell as env vars only, never interpolated into the script.
+      EVAL_SUITE: ${{ inputs.suite }}
+      EVAL_TIER: ${{ inputs.tier }}
+      EVAL_TAG_INPUT: ${{ inputs.tag }}
+      EVAL_MAX_REQUESTS_INPUT: ${{ inputs.max_requests }}
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check the API key secret is set
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::Add a GEMINI_API_KEY repository secret to run evals."
+            exit 1
+          fi
+
+      - name: Validate the inputs and the suite (no model calls)
+        run: |
+          for value in "$EVAL_SUITE" "$EVAL_TAG_INPUT"; do
+            case "$value" in
+              *[!a-zA-Z0-9_-]*) echo "::error::suite and tag may only use letters, digits, - and _"; exit 1 ;;
+            esac
+          done
+          case "$EVAL_MAX_REQUESTS_INPUT" in
+            *[!0-9]*) echo "::error::max_requests must be a whole number"; exit 1 ;;
+          esac
+          uv run tether-eval --suite "$EVAL_SUITE" --check
+
+      - name: Migrate the throwaway database
+        run: uv run alembic upgrade head
+
+      - name: Run the eval
+        id: eval
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set +e
+          set -- --suite "$EVAL_SUITE" --tier "$EVAL_TIER"
+          if [ -n "$EVAL_TAG_INPUT" ]; then set -- "$@" --tag "$EVAL_TAG_INPUT"; fi
+          if [ -n "$EVAL_MAX_REQUESTS_INPUT" ]; then
+            set -- "$@" --max-requests "$EVAL_MAX_REQUESTS_INPUT"
+          fi
+          uv run tether-eval "$@"
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          for report in evals/reports/*.md; do
+            [ -f "$report" ] && cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit 0
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ inputs.suite }}-${{ github.run_id }}
+          path: apps/api/evals/reports/*
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail on a missed target or a partial run
+        if: steps.eval.outputs.status != '0'
+        run: |
+          echo "::error::tether-eval exited with ${{ steps.eval.outputs.status }} (1: a target missed, 2: partial run, 3: refused, 4: crashed)."
+          exit 1

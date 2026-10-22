@@ -18,6 +18,7 @@ dependencies = [
     "stripe>=16.0.0",
     "httpx>=0.27",
     "google-genai>=2.31.0",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]
@@ -26,14 +27,25 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
     "pyright>=1.1",
+    "types-pyyaml>=6.0",
+    "pytest-xdist>=3.6",
 ]
+
+[project.scripts]
+tether-eval = "evals.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
 build-backend = "uv_build"
 
 [tool.uv]
-package = false
+# Installed (editable) only so `uv run tether-eval` exists. `module-root = ""` puts this
+# directory on the path, the same layout the app and tests already import from.
+package = true
+
+[tool.uv.build-backend]
+module-name = "evals"
+module-root = ""
 
 [tool.ruff]
 line-length = 100

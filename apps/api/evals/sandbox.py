@@ -1,0 +1,171 @@
+"""The Postgres sandbox: a throwaway synthetic salon tenant for one eval run.
+
+`postgres_sandbox(spec)` creates a fresh owner and business (`eval|<random>`),
+seeds it with the demo salon's FAQs, services and hours (`seeds/demo_salon.py`,
+synthetic only), and deletes both afterwards, whatever happened; every row
+the run wrote (agent, interactions, messages, operations, usage) cascades
+with the business. Nothing else in the database is read or changed, apart
+from the global usage counters, which keep counting real Gemini calls.
+
+Each case gets its own session, committed after every turn and after the
+conversation ends (as the chat API commits each request), and the production
+engine and tool registry (`core.conversation.build_conversation_engine`), with:
+
+- a `UsageGuard` over the real usage tables, whose per-business Gemini cap
+  is the run's `max_requests` (the tenant is new, so its counter starts at 0)
+  and whose per-business concurrency cap fits the run's concurrency;
+- a business clock pinned to `EVAL_NOW`, so "today" and the next 7 days of
+  hours in the prompt are the same on every run;
+- the per-turn deadline plus the runner's pacing allowance.
+"""
+
+import asyncio
+import logging
+import uuid
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import delete, select
+
+from core.config import settings
+from core.conversation import build_conversation_engine
+from core.db import async_session_factory
+from core.tenant import Tenant
+from core.usage import SqlUsageStore, cost_rates, usage_limits
+from evals.playback import CaseEnv, Operation
+from evals.runner import SandboxSpec
+from integrations.llm.port import LLMClient
+from models.business import Business
+from models.user import User
+from repositories.operations import list_operations
+from seeds.demo_salon import add_faqs, add_services, new_demo_business, set_hours_if_missing
+from services.usage import DailyLimit, UsageGuard, UsageKind, UsageLimits
+
+# A Wednesday, 14:00 in the salon's timezone (America/New_York): open today.
+EVAL_NOW = datetime(2026, 6, 3, 18, 0, tzinfo=UTC)
+EVAL_AUTH_PREFIX = "eval|"
+
+logger = logging.getLogger("tether.evals")
+
+
+def eval_usage_limits(base: UsageLimits, spec: SandboxSpec) -> UsageLimits:
+    """The app's limits, with the run's budget as the tenant's Gemini cap.
+
+    The global caps stay as configured: eval calls are real calls and count
+    against the same daily quota as everything else.
+    """
+    daily = dict(base.daily)
+    gemini = daily[UsageKind.GEMINI_REQUEST]
+    daily[UsageKind.GEMINI_REQUEST] = DailyLimit(
+        per_day=gemini.per_day, per_business_per_day=spec.max_requests
+    )
+    return replace(
+        base,
+        daily=daily,
+        max_concurrent_interactions_per_business=max(
+            base.max_concurrent_interactions_per_business, spec.concurrency
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _PostgresSandbox:
+    tenant: Tenant
+    usage: UsageGuard
+    spec: SandboxSpec
+
+    @asynccontextmanager
+    async def case(self, llm: LLMClient) -> AsyncIterator[CaseEnv]:
+        async with async_session_factory() as session:
+            engine = build_conversation_engine(
+                session,
+                llm,
+                self.usage,
+                clock=lambda: EVAL_NOW,
+                extra_turn_seconds=self.spec.pacing_allowance_seconds,
+            )
+            business_id = self.tenant.business.id if self.tenant.business else None
+            assert business_id is not None
+
+            async def operations(interaction_id: uuid.UUID) -> Sequence[Operation]:
+                rows = await list_operations(session, business_id, interaction_id)
+                return [Operation(r.tool_name, r.status, dict(r.result or {})) for r in rows]
+
+            yield CaseEnv(
+                tenant=self.tenant, engine=engine, operations=operations, commit=session.commit
+            )
+
+
+@asynccontextmanager
+async def postgres_sandbox(
+    spec: SandboxSpec, *, usage_clock: Callable[[], datetime] | None = None
+) -> AsyncIterator[_PostgresSandbox]:
+    """`usage_clock` pins the usage window (tests); real runs count on the real UTC day."""
+    # Everything that can fail without touching the database happens first, so once the
+    # tenant is committed nothing stands between it and the `finally` that removes it.
+    usage = UsageGuard(
+        SqlUsageStore(async_session_factory),
+        eval_usage_limits(usage_limits(settings), spec),
+        cost_rates(settings),
+        clock=usage_clock or (lambda: datetime.now(UTC)),
+    )
+    token = uuid.uuid4().hex
+    async with async_session_factory() as session:
+        user = User(
+            external_auth_id=f"{EVAL_AUTH_PREFIX}{token}",
+            email=f"eval-{token[:12]}@example.test",
+        )
+        session.add(user)
+        await session.flush()
+        business = new_demo_business(user.id)
+        session.add(business)
+        await session.flush()
+        await add_faqs(session, business)
+        await add_services(session, business)
+        await set_hours_if_missing(session, business)
+        await session.commit()
+    try:
+        yield _PostgresSandbox(Tenant(user=user, business=business), usage, spec)
+    finally:
+        try:
+            # Shielded: a cancelled run (Ctrl-C, a CI timeout) still removes its tenant.
+            await asyncio.shield(_delete_tenants([business.id], [user.id]))
+        except Exception:
+            # Never mask the run's own error; `tether-eval --purge` removes leftovers.
+            logger.warning("eval sandbox cleanup failed", extra={"eval_tenant": token})
+
+
+async def _delete_tenants(business_ids: Sequence[uuid.UUID], user_ids: Sequence[uuid.UUID]) -> None:
+    async with async_session_factory() as session:
+        # Businesses first: `owner_id` references the user with no cascade. Everything
+        # the run wrote (agent, interactions, messages, operations, usage) cascades.
+        await session.execute(delete(Business).where(Business.id.in_(business_ids)))
+        await session.execute(delete(User).where(User.id.in_(user_ids)))
+        await session.commit()
+
+
+# Longer than any run can last, so a purge never removes a running eval's tenant.
+PURGE_MIN_AGE = timedelta(hours=2)
+
+
+async def purge_eval_tenants(min_age: timedelta = PURGE_MIN_AGE) -> int:
+    """Delete leftover eval tenants (owner `eval|...`, created over `min_age` ago),
+    e.g. after a hard kill. Only eval-owned rows match. Returns how many owners
+    were removed."""
+    cutoff = datetime.now(UTC) - min_age
+    async with async_session_factory() as session:
+        users = (
+            await session.execute(
+                select(User.id).where(
+                    User.external_auth_id.startswith(EVAL_AUTH_PREFIX), User.created_at < cutoff
+                )
+            )
+        ).scalars().all()
+        businesses = (
+            await session.execute(select(Business.id).where(Business.owner_id.in_(users)))
+        ).scalars().all()
+    if users:
+        await _delete_tenants(businesses, users)
+    return len(users)

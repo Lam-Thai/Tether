@@ -1,17 +1,43 @@
 #!/usr/bin/env sh
 # Blocks the push if any test fails. Emergency bypass: git push --no-verify (CI still gates merges).
+#
+# JS/TS tests and API tests run at the same time; both must pass. The API tests go through
+# apps/api/scripts/test.sh: CI-like settings (no .env, so no real keys), a local Postgres
+# only (start it with `docker compose up -d`), migrations first, tests in parallel.
 set -eu
 
-echo "pre-push: running JS/TS tests (pnpm test)"
-pnpm test
-
+api_log=""
+api_pid=""
 if [ -f apps/api/pyproject.toml ]; then
   if ! command -v uv >/dev/null 2>&1; then
     echo "pre-push: uv is required to run API tests. Install it: https://docs.astral.sh/uv/" >&2
     exit 1
   fi
-  echo "pre-push: running API tests (uv run pytest)"
-  uv run --directory apps/api pytest -q
+  api_log=$(mktemp)
+  # On Ctrl-C or any exit, stop the background API run too, and drop its log.
+  trap '[ -n "$api_pid" ] && kill "$api_pid" 2>/dev/null; rm -f "$api_log"' EXIT
+  trap 'exit 130' INT TERM
+  echo "pre-push: running API tests (apps/api/scripts/test.sh) in the background"
+  sh apps/api/scripts/test.sh >"$api_log" 2>&1 &
+  api_pid=$!
 else
   echo "pre-push: apps/api/pyproject.toml not found, skipping pytest"
 fi
+
+echo "pre-push: running JS/TS tests (pnpm test)"
+js_status=0
+pnpm test || js_status=$?
+
+api_status=0
+if [ -n "$api_pid" ]; then
+  wait "$api_pid" || api_status=$?
+  api_pid=""
+  echo "pre-push: API test output:"
+  cat "$api_log"
+fi
+
+if [ "$js_status" -ne 0 ] || [ "$api_status" -ne 0 ]; then
+  echo "pre-push: tests failed (js=$js_status, api=$api_status); push blocked." >&2
+  exit 1
+fi
+echo "pre-push: all tests passed."

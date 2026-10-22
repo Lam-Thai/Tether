@@ -1,5 +1,6 @@
 """Dependencies that build the `ConversationEngine` and the agent store for a request."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from fastapi import Depends
@@ -33,8 +34,22 @@ def get_conversation_engine(
     llm: LLMClient = Depends(get_llm_client),
     usage: UsageGuard = Depends(get_usage_guard),
 ) -> ConversationEngine:
+    return build_conversation_engine(session, llm, usage)
+
+
+def build_conversation_engine(
+    session: AsyncSession,
+    llm: LLMClient,
+    usage: UsageGuard,
+    *,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    extra_turn_seconds: float = 0.0,
+) -> ConversationEngine:
+    """The production engine and tool registry over one session. The eval harness
+    (`evals/sandbox.py`) builds the same one with a pinned business clock, and
+    extra turn time for its own request pacing."""
     # One directory for the prompt's facts and the tools, so both read the same rows.
-    directory = BusinessDirectory(SqlDirectoryStore(session), lambda: datetime.now(UTC))
+    directory = BusinessDirectory(SqlDirectoryStore(session), clock)
     return ConversationEngine(
         store=_ConversationStore(session),
         llm=llm,
@@ -48,7 +63,7 @@ def get_conversation_engine(
             ]
         ),
         history_limit=settings.conversation_history_limit,
-        turn_timeout_seconds=settings.conversation_turn_timeout_seconds,
+        turn_timeout_seconds=settings.conversation_turn_timeout_seconds + extra_turn_seconds,
         usage=usage,
         directory=directory,
     )

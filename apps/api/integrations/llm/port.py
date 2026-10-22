@@ -28,14 +28,28 @@ class LLMUnavailableError(Exception):
     or no API key configured. The engine answers with its safe fallback.
 
     `retryable` is true only for transient failures (timeouts, transport errors,
-    HTTP 408/429/5xx) where another attempt might succeed. Token counts are
-    set when the provider consumed tokens anyway (a blocked or truncated reply)."""
+    HTTP 408/429/5xx) where another attempt might succeed. `rate_limited` is
+    true only for HTTP 429 (the provider's quota or rate limit), so a batch
+    caller like the eval harness can back off instead of treating it as an
+    outage; `retry_after_seconds` is the provider's own retry delay when it gave
+    one (hours for a daily quota, seconds for a per-minute one). Token counts
+    are set when the provider consumed tokens anyway (a blocked or truncated
+    reply)."""
 
     def __init__(
-        self, message: str, *, retryable: bool = False, tokens_in: int = 0, tokens_out: int = 0
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        rate_limited: bool = False,
+        retry_after_seconds: float | None = None,
+        tokens_in: int = 0,
+        tokens_out: int = 0,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.rate_limited = rate_limited
+        self.retry_after_seconds = retry_after_seconds
         self.tokens_in = tokens_in
         self.tokens_out = tokens_out
 

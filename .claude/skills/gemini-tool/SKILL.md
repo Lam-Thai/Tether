@@ -16,7 +16,8 @@ Gemini proposes a tool call; it never executes anything. Tool requests travel in
 5. **Grounding.** If the tool returns facts the customer may be told, put them in `ToolResult.evidence` and check that `ACCEPTED_SOURCES` / `GROUNDED_INTENTS` in `services/grounding.py` cover the intents that state them. Prices and durations are also checked as numbers in the reply text, so a tool returning a new kind of amount must feed the amount check.
 6. **Prompt rules.** If the tool can make the model claim something happened (a booking, an SMS), check `PLATFORM_RULES` / `platform_rules()` in `services/prompt_builder.py` still forbid claiming it without a TOOL RESULTS confirmation. Two tools declaring the same argument name with different types are refused by `response_schema_for_gemini`.
 7. **Tests.** Test the executor directly (`tests/services/test_tools.py` style) and the full loop with `FakeLLMClient` scripting `agent_turn(tool_calls=[...])` then the final reply, using `tests/services/memory_conversation_store.py` / `memory_faq_store.py`. Never a live call in the suite. Cover: a verified result reaching the next request, invalid args rejected without executing, cross-tenant scoping, and the model *not* calling the tool when it shouldn't.
-8. **Live smoke case.** There's no eval harness yet: add an opt-in `-m live` case to `tests/integrations/test_gemini_live.py` over synthetic seed data (`seeds/`), including one case where the tool must not be used or must come back empty.
+8. **Eval cases (required).** Every new tool, changed tool or intent change adds cases to `apps/api/evals/suites/core/` (YAML: `id`, `turns`, `expected_intent`, `expected_tools`, `must_contain`, `must_not_contain`, `tags`), written for the demo salon: the happy path, paraphrases / slang / speech-to-text noise, at least one case where the tool must not be used or comes back empty, and `no_false_confirmation` for any tool that acts. Validate with `uv run tether-eval --check`, then run `uv run tether-eval --suite core --tag <your tag>` and put the summary in the PR. If seed data is missing for the new tool, extend `seeds/demo_salon.py` (synthetic only).
+9. **Live smoke case (optional).** For an always-on check of one critical path, add an opt-in `-m live` case to `tests/integrations/test_gemini_live.py` over the same seed data.
 
 ## Checklist
 
@@ -24,4 +25,5 @@ Gemini proposes a tool call; it never executes anything. Tool requests travel in
 - [ ] Executor scoped by `ctx.tenant`; writes re-validate before committing.
 - [ ] `ToolResult` is the verified outcome, and `for_log` holds no free text.
 - [ ] Registered in `core/conversation.py`; no engine change needed.
-- [ ] Fake-LLM loop test + live smoke case added.
+- [ ] Fake-LLM loop test added.
+- [ ] Eval cases added (incl. a must-not-use case); `tether-eval --check` passes and a tagged run's summary is in the PR.
