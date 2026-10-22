@@ -1,7 +1,8 @@
 import Link from "next/link";
 
-import type { AgentResult } from "@/lib/api/client";
+import type { AgentResult, FaqListResult } from "@/lib/api/client";
 import { AgentBuilder } from "@/components/agent/agent-builder";
+import { FaqManager } from "@/components/agent/faq-manager";
 import { TestChat, type ChatLoad } from "@/components/agent/test-chat";
 import { buttonVariants } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -10,14 +11,25 @@ import { Callout } from "@/components/ui/callout";
  * Presentational view of `/dashboard/agent`: switches exhaustively on the
  * `GET /agent` result. The chat's own load state travels in `chat`.
  */
-export function AgentWorkspace({ agent, chat }: { agent: AgentResult; chat: ChatLoad }) {
+export function AgentWorkspace({
+  agent,
+  chat,
+  faqs,
+}: {
+  agent: AgentResult;
+  chat: ChatLoad;
+  faqs: FaqListResult;
+}) {
   switch (agent.kind) {
     case "ok":
       return (
         <div className="flex w-full max-w-[1280px] flex-col gap-6">
           <h1 className="text-h1 font-bold tracking-tight uppercase">Agent</h1>
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-            <AgentBuilder agent={agent.data} />
+            <div className="flex min-w-0 flex-col gap-6">
+              <AgentBuilder agent={agent.data} />
+              <FaqManager result={faqs} />
+            </div>
             <TestChat agentName={agent.data.name} chat={chat} />
           </div>
         </div>

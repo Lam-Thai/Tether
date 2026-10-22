@@ -47,6 +47,7 @@ def agent_turn(
     requires_human: bool = False,
     entities: dict[str, Any] | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
+    sources: list[str] | None = None,
 ) -> dict[str, Any]:
     """A valid `AgentTurn` payload for scripting `FakeLLMClient`."""
     return {
@@ -55,4 +56,5 @@ def agent_turn(
         "entities": entities or {},
         "requires_human": requires_human,
         "tool_calls": tool_calls or [],
+        "sources": sources or [],
     }

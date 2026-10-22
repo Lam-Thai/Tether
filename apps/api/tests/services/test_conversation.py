@@ -3,114 +3,33 @@
 import asyncio
 import time
 import uuid
-from datetime import UTC, datetime
 
 import pytest
 
 from core.retry import RetryPolicy
 from core.tenant import Tenant
 from integrations.llm.fake import FakeLLMClient, agent_turn
-from integrations.llm.port import LLMUnavailableError, ModelReply, ToolDeclaration
-from models.agent import Agent
+from integrations.llm.port import LLMUnavailableError, ModelReply
 from models.business import Business
-from models.interaction import Interaction, InteractionMessage
 from models.user import User
 from services import agent as agent_service
 from services.conversation import (
     INVALID_OUTPUT_FALLBACK,
+    MAX_TOOL_ROUNDS,
     PROVIDER_FALLBACK,
     ConversationEngine,
     InteractionEndedError,
     InteractionNotFoundError,
+    no_info_fallback,
     quota_fallback,
 )
+from services.faq_search import search_faq_tool
+from services.knowledge import KnowledgeBase
 from services.tools import ToolRegistry
 from services.usage import ConcurrencyLimitedError, DailyLimit, UsageKind
+from tests.services.memory_conversation_store import MemoryStore
+from tests.services.memory_faq_store import MemoryFaqStore
 from tests.services.memory_usage_store import MemoryUsageStore, guard, limits
-
-
-class MemoryStore:
-    """Same contract as `SqlConversationStore`, scoped by business id like the real one."""
-
-    def __init__(self) -> None:
-        self.agents: dict[uuid.UUID, Agent] = {}
-        self.interactions: dict[uuid.UUID, Interaction] = {}
-        self.messages: list[InteractionMessage] = []
-        self.calls: list[str] = []
-
-    async def get_or_create(self, business_id, *, name, tone, greeting):
-        if business_id not in self.agents:
-            self.agents[business_id] = Agent(
-                id=uuid.uuid4(),
-                business_id=business_id,
-                name=name,
-                tone=tone,
-                greeting=greeting,
-                custom_instructions="",
-                active=True,
-            )
-        return self.agents[business_id]
-
-    async def save(self, agent):
-        return agent
-
-    async def create_interaction(self, business_id, channel):
-        interaction = Interaction(
-            id=uuid.uuid4(),
-            business_id=business_id,
-            channel=channel,
-            status="active",
-            state={},
-            started_at=_NOW,
-            ended_at=None,
-        )
-        self.interactions[interaction.id] = interaction
-        return interaction
-
-    async def lock_admission_and_count(self, business_id, idle_minutes):
-        self.calls.append("admission")
-        active = [i for i in self.interactions.values() if i.status == "active"]
-        mine = sum(1 for i in active if i.business_id == business_id)
-        return len(active), mine
-
-    async def get_interaction(self, business_id, interaction_id, channel):
-        found = self.interactions.get(interaction_id)
-        if found and found.business_id == business_id and found.channel == channel:
-            return found
-        return None
-
-    lock_interaction = get_interaction
-
-    async def append_message(self, interaction, speaker, message_text):
-        number = 1 + sum(1 for m in self.messages if m.interaction_id == interaction.id)
-        message = InteractionMessage(
-            id=uuid.uuid4(),
-            interaction_id=interaction.id,
-            business_id=interaction.business_id,
-            speaker=speaker,
-            message_text=message_text,
-            sequence_number=number,
-            created_at=_NOW,
-        )
-        self.messages.append(message)
-        return message
-
-    async def list_messages(self, business_id, interaction_id, limit=None):
-        rows = [
-            m
-            for m in self.messages
-            if m.business_id == business_id and m.interaction_id == interaction_id
-        ]
-        return rows[-limit:] if limit else rows
-
-    async def save_interaction(self, interaction):
-        return interaction
-
-    async def checkpoint(self):
-        self.calls.append("checkpoint")
-
-
-_NOW = datetime(2026, 10, 20, tzinfo=UTC)
 
 
 def _tenant(name: str = "Alpha Salon") -> Tenant:
@@ -159,9 +78,9 @@ def _texts(request) -> list[tuple[str, str]]:
 
 async def test_new_chat_persists_the_owners_greeting_as_message_one(store, llm):
     tenant = _tenant()
-    llm.queue(agent_turn("We open at nine.", intent="BUSINESS_HOURS"))
+    llm.queue(agent_turn("We're at 1 Main St.", intent="LOCATION"))
 
-    result = await _engine(store, llm).handle_turn(tenant, None, "When do you open?", "test_chat")
+    result = await _engine(store, llm).handle_turn(tenant, None, "Where are you?", "test_chat")
 
     assert [(m.sequence_number, m.speaker) for m in result.messages] == [
         (1, "agent"),
@@ -172,13 +91,13 @@ async def test_new_chat_persists_the_owners_greeting_as_message_one(store, llm):
         result.messages[0].text
         == "Hi, thanks for contacting Alpha Salon! How can I help you today?"
     )
-    assert result.reply_text == "We open at nine."
-    assert result.intent == "BUSINESS_HOURS"
+    assert result.reply_text == "We're at 1 Main St."
+    assert result.intent == "LOCATION"
     assert result.fallback is False and result.ended is False and result.status == "active"
     # Gemini saw the greeting as the opening model message, then the question.
     assert _texts(llm.requests[0]) == [
         ("model", result.messages[0].text),
-        ("user", "When do you open?"),
+        ("user", "Where are you?"),
     ]
 
 
@@ -238,16 +157,6 @@ async def test_unregistered_tool_call_is_invalid_and_never_executed(store, llm):
     assert "Booked!" not in {m.message_text for m in store.messages}
     interaction = next(iter(store.interactions.values()))
     assert {f["detail"] for f in interaction.state["failures"]} == {"unregistered_tool"}
-
-
-async def test_a_registered_tool_name_passes_validation(store, llm):
-    tools = ToolRegistry.of([ToolDeclaration(name="search_faq", description="Search FAQs.")])
-    llm.queue(agent_turn("Let me check.", tool_calls=[{"name": "search_faq", "arguments": {}}]))
-
-    result = await _engine(store, llm, tools=tools).handle_turn(_tenant(), None, "q", "test_chat")
-
-    assert result.fallback is False
-    assert llm.requests[0].tools == tools.declarations()
 
 
 async def test_persona_changes_apply_to_the_next_turn_without_restart(store, llm):
@@ -616,3 +525,336 @@ async def test_new_chats_are_refused_past_the_concurrency_limit(store, llm):
     llm.queue(agent_turn("welcome"))
     await engine.handle_turn(tenant, None, "now?", "test_chat")
 
+
+# --- FAQ tool loop, operation log and grounding guard (slice #6) -------------
+
+
+def _faqs_engine(store, llm, faqs: MemoryFaqStore, **kwargs):
+    tools = ToolRegistry.of([search_faq_tool(KnowledgeBase(faqs))])
+    return _engine(store, llm, tools=tools, **kwargs)
+
+
+def _search(query: str = "walk in", text: str = "Let me check.") -> dict:
+    return agent_turn(text, tool_calls=[{"name": "search_faq", "arguments": {"query": query}}])
+
+
+def _salon(faqs: MemoryFaqStore, *, phone: str | None = None):
+    tenant = _tenant()
+    _biz(tenant).phone = phone
+    walk_in = faqs.add(_biz(tenant).id, "Do you take walk-ins?", "Yes, before 3 PM.")
+    return tenant, walk_in
+
+
+async def test_faq_question_is_answered_from_a_search_faq_result(store):
+    faqs = MemoryFaqStore()
+    tenant, walk_in = _salon(faqs)
+    llm = _OrderedLLM(store.calls)
+    usage_store, usage = _limited()
+    llm.queue(
+        _search("walk in", text="CHECKING-NEVER-SHOWN"),
+        agent_turn(
+            "Yes, walk-ins are welcome before 3 PM.", intent="FAQ", sources=[str(walk_in.id)]
+        ),
+    )
+    engine = _faqs_engine(store, llm, faqs, usage=usage)
+
+    result = await engine.handle_turn(tenant, None, "can I just walk in?", "test_chat")
+
+    assert result.reply_text == "Yes, walk-ins are welcome before 3 PM."
+    assert result.intent == "FAQ" and result.fallback is False
+    first, second = llm.requests
+    # Tool-only retrieval: the first request carries no FAQ at all.
+    assert "Yes, before 3 PM." not in first.system_instruction
+    assert "Yes, before 3 PM." in second.system_instruction
+    assert f"FAQ id: {walk_in.id}" in second.system_instruction
+    assert "1. search_faq: succeeded" in second.system_instruction
+    assert "Tool rounds used: 1 of 3." in second.system_instruction
+    # Same conversation, rebuilt instruction; no new message roles.
+    assert second.messages == first.messages and first.tools == second.tools
+    assert [d.name for d in first.tools] == ["search_faq"]
+    assert usage_store.count(UsageKind.GEMINI_REQUEST, _biz(tenant).id) == 2
+    (op,) = store.operations
+    assert op["tool_name"] == "search_faq" and op["status"] == "succeeded"
+    assert op["arguments"] == {"query": "walk in"}
+    assert op["result"] == {"faq_ids": [str(walk_in.id)], "count": 1}
+    assert op["interaction_id"] == result.interaction_id
+    # Logged and committed before the model hears about it; nothing open across a call.
+    assert store.calls == [
+        "admission",
+        "checkpoint",
+        "generate",
+        "savepoint",
+        "record_operation",
+        "checkpoint",
+        "generate",
+    ]
+    assert "CHECKING-NEVER-SHOWN" not in {m.message_text for m in store.messages}
+    state = store.interactions[result.interaction_id].state
+    assert "failures" not in state and state["requires_human"] is False
+
+
+async def test_editing_an_faq_changes_the_next_turns_faq_results(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, walk_in = _salon(faqs)
+    engine = _faqs_engine(store, llm, faqs)
+    cite = {"intent": "FAQ", "sources": [str(walk_in.id)]}
+    llm.queue(_search(), agent_turn("Before 3 PM.", **cite))
+    first = await engine.handle_turn(tenant, None, "walk in?", "test_chat")
+
+    walk_in.answer = "Yes, but only before noon."
+    llm.queue(_search(), agent_turn("Before noon.", **cite))
+    second = await engine.handle_turn(tenant, first.interaction_id, "walk in today?", "test_chat")
+
+    turn_two_results = llm.requests[3].system_instruction
+    assert "Yes, but only before noon." in turn_two_results
+    assert "Yes, before 3 PM." not in turn_two_results
+    assert second.reply_text == "Before noon." and second.fallback is False
+
+
+async def test_a_disabled_faq_never_reaches_a_request_or_tool_result(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, walk_in = _salon(faqs)
+    walk_in.active = False
+    llm.queue(
+        _search(),
+        agent_turn("Yes, before 3 PM.", intent="FAQ", sources=[str(walk_in.id)]),
+    )
+
+    result = await _faqs_engine(store, llm, faqs).handle_turn(tenant, None, "walk in?", "test_chat")
+
+    for request in llm.requests:
+        assert "Yes, before 3 PM." not in request.system_instruction
+        assert str(walk_in.id) not in request.system_instruction
+    assert "no matching FAQs" in llm.requests[1].system_instruction
+    assert store.operations[0]["result"] == {"faq_ids": [], "count": 0}
+    # Citing it anyway is ungrounded: the made-up answer never reaches the customer.
+    assert result.reply_text == no_info_fallback(_biz(tenant))
+    assert "Yes, before 3 PM." not in {m.message_text for m in store.messages}
+
+
+RETRIEVED = "<the id search_faq returned>"
+UNGROUNDED = [
+    ("no_sources", [_search(), agent_turn("Sure!", intent="FAQ")], "missing_sources"),
+    (
+        "unknown_id",
+        [_search(), agent_turn("Sure!", intent="FAQ", sources=[str(uuid.uuid4())])],
+        "unknown_source",
+    ),
+    (
+        "garbage_id",
+        [_search(), agent_turn("Sure!", intent="FAQ", sources=["the walk-in one"])],
+        "unknown_source",
+    ),
+    ("no_search", [agent_turn("Sure!", intent="FAQ", sources=[RETRIEVED])], "unknown_source"),
+    (
+        "hours_without_search",
+        [agent_turn("We're open 9 to 5.", intent="BUSINESS_HOURS")],
+        "missing_sources",
+    ),
+    (
+        "price_without_sources",
+        [_search(), agent_turn("A cut is $40.", intent="PRICE_INQUIRY")],
+        "missing_sources",
+    ),
+    (
+        "other_intent_citing_unretrieved",
+        [agent_turn("Sure!", intent="PRICE_INQUIRY", sources=[str(uuid.uuid4())])],
+        "unknown_source",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("script", "detail"), [c[1:] for c in UNGROUNDED], ids=[c[0] for c in UNGROUNDED]
+)
+async def test_an_ungrounded_answer_is_replaced_by_the_no_info_fallback(store, llm, script, detail):
+    faqs = MemoryFaqStore()
+    tenant, walk_in = _salon(faqs, phone="+1 (312) 847-1928")
+    llm.queue(
+        *[
+            {**s, "sources": [str(walk_in.id) if x == RETRIEVED else x for x in s["sources"]]}
+            for s in script
+        ]
+    )
+
+    result = await _faqs_engine(store, llm, faqs).handle_turn(tenant, None, "walk in?", "test_chat")
+
+    assert result.reply_text == no_info_fallback(_biz(tenant))
+    assert "+1 (312) 847-1928" in result.reply_text
+    assert result.fallback is True and result.intent == "UNKNOWN" and not result.usage_limited
+    assert "Sure!" not in {m.message_text for m in store.messages}
+    state = store.interactions[result.interaction_id].state
+    assert state["requires_human"] is True
+    assert (state["failures"][-1]["kind"], state["failures"][-1]["detail"]) == (
+        "ungrounded",
+        detail,
+    )
+    assert state["fallback_messages"] == [result.messages[-1].sequence_number]
+    assert "clarification_attempts" not in state
+
+
+async def test_grounded_intents_accept_cited_faqs_and_location_needs_none(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, walk_in = _salon(faqs)
+    engine = _faqs_engine(store, llm, faqs)
+    llm.queue(
+        _search("hours"),
+        agent_turn("Walk-ins before 3 PM.", intent="BUSINESS_HOURS", sources=[str(walk_in.id)]),
+    )
+    hours = await engine.handle_turn(tenant, None, "when can I come?", "test_chat")
+
+    # The address is in BUSINESS FACTS, so a LOCATION answer needs no FAQ.
+    llm.queue(agent_turn("We're at 1 Main St.", intent="LOCATION"))
+    where = await engine.handle_turn(tenant, hours.interaction_id, "where are you?", "test_chat")
+
+    assert (hours.fallback, hours.reply_text) == (False, "Walk-ins before 3 PM.")
+    assert (where.fallback, where.reply_text) == (False, "We're at 1 Main St.")
+
+
+async def test_an_faq_id_from_an_earlier_turn_does_not_ground_this_one(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, walk_in = _salon(faqs)
+    engine = _faqs_engine(store, llm, faqs)
+    cite = {"intent": "FAQ", "sources": [str(walk_in.id)]}
+    llm.queue(_search(), agent_turn("Before 3 PM.", **cite))
+    first = await engine.handle_turn(tenant, None, "walk in?", "test_chat")
+
+    llm.queue(agent_turn("Still before 3 PM.", **cite))  # no search this turn
+    second = await engine.handle_turn(tenant, first.interaction_id, "and today?", "test_chat")
+
+    assert first.fallback is False
+    assert second.reply_text == no_info_fallback(_biz(tenant)) and second.fallback is True
+    failure = store.interactions[first.interaction_id].state["failures"][-1]
+    assert (failure["kind"], failure["detail"]) == ("ungrounded", "unknown_source")
+
+
+async def test_no_info_fallback_points_to_the_contacts_and_promises_nothing():
+    tenant = _tenant("Alpha Salon")
+    assert no_info_fallback(_biz(tenant)) == (
+        "Sorry, I don't have that information. Please contact Alpha Salon directly."
+    )
+    _biz(tenant).phone, _biz(tenant).contact_email = "+1 555 0100", "team@alpha.test"
+    assert no_info_fallback(_biz(tenant)) == (
+        "Sorry, I don't have that information. "
+        "You can reach the team at +1 555 0100 or team@alpha.test."
+    )
+
+
+async def test_an_honest_no_answer_after_an_empty_search_is_kept(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, walk_in = _salon(faqs)
+    walk_in.active = False  # nothing searchable at all
+    honest = "Sorry, I don't have that information. Please contact Alpha Salon directly."
+    llm.queue(_search("parking validation"), agent_turn(honest, intent="UNKNOWN"))
+
+    result = await _faqs_engine(store, llm, faqs).handle_turn(
+        tenant, None, "do you validate parking?", "test_chat"
+    )
+
+    assert result.reply_text == honest and result.fallback is False
+
+
+async def test_invalid_tool_args_are_rejected_logged_and_the_loop_continues(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, walk_in = _salon(faqs)
+    llm.queue(
+        agent_turn("x", tool_calls=[{"name": "search_faq", "arguments": {"query": "   "}}]),
+        _search(),
+        agent_turn("Before 3 PM.", intent="FAQ", sources=[str(walk_in.id)]),
+    )
+
+    result = await _faqs_engine(store, llm, faqs).handle_turn(tenant, None, "walk in?", "test_chat")
+
+    assert result.reply_text == "Before 3 PM." and result.fallback is False
+    assert len(llm.requests) == 3
+    assert [op["status"] for op in store.operations] == ["rejected", "succeeded"]
+    rejected = store.operations[0]
+    assert rejected["arguments"] == {"argument_names": ["query"]}
+    assert rejected["result"] == {"reason": "invalid_arguments", "fields": ["query"]}
+    assert faqs.reads == 2  # only the valid call reached the store (count, then list)
+    second = llm.requests[1].system_instruction
+    assert '1. search_faq: rejected {"error": "invalid_arguments", "fields": ["query"]}' in second
+    assert "Yes, before 3 PM." not in second
+
+
+async def test_a_failing_tool_is_reported_as_unavailable_and_logged(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, _ = _salon(faqs)
+    faqs.fail = True
+    llm.queue(_search(), agent_turn("Sorry, I can't check that right now.", intent="UNKNOWN"))
+
+    result = await _faqs_engine(store, llm, faqs).handle_turn(tenant, None, "walk in?", "test_chat")
+
+    assert result.fallback is False
+    assert store.operations[0]["status"] == "failed"
+    assert store.operations[0]["result"] == {"reason": "executor_error"}
+    second = llm.requests[1].system_instruction
+    assert '1. search_faq: failed {"error": "tool_unavailable"}' in second
+
+
+async def test_the_tool_loop_stops_when_the_model_keeps_requesting_tools(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, _ = _salon(faqs)
+    llm.queue(*[_search(f"q{i}") for i in range(MAX_TOOL_ROUNDS + 2)])
+
+    result = await _faqs_engine(store, llm, faqs).handle_turn(tenant, None, "walk in?", "test_chat")
+
+    assert len(llm.requests) == MAX_TOOL_ROUNDS + 1  # 3 rounds, then the reply that asked again
+    assert len(llm.script) == 1  # never called again
+    assert len(store.operations) == MAX_TOOL_ROUNDS
+    assert "No more tool calls" in llm.requests[-1].system_instruction
+    assert result.reply_text == no_info_fallback(_biz(tenant)) and result.fallback is True
+    state = store.interactions[result.interaction_id].state
+    assert state["requires_human"] is True
+    failure = state["failures"][-1]
+    assert (failure["kind"], failure["detail"]) == ("tool_rounds_exhausted", "max_tool_rounds")
+
+
+async def test_total_model_calls_stay_bounded_with_the_invalid_output_retry(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, _ = _salon(faqs)
+    llm.queue("not json", *[_search(f"q{i}") for i in range(MAX_TOOL_ROUNDS + 3)])
+
+    await _faqs_engine(store, llm, faqs).handle_turn(tenant, None, "walk in?", "test_chat")
+
+    assert len(llm.requests) == MAX_TOOL_ROUNDS + 2  # + final + the one invalid-output retry
+
+
+async def test_a_quota_hit_mid_loop_answers_with_the_quota_fallback_and_stops(store, llm):
+    faqs = MemoryFaqStore()
+    tenant, _ = _salon(faqs)
+    _, usage = _limited(per_business=1)
+    llm.queue(_search(), agent_turn("never sent"))
+
+    result = await _faqs_engine(store, llm, faqs, usage=usage).handle_turn(
+        tenant, None, "walk in?", "test_chat"
+    )
+
+    assert len(llm.requests) == 1
+    assert result.usage_limited is True and result.reply_text == quota_fallback(_biz(tenant))
+    assert [op["status"] for op in store.operations] == ["succeeded"]  # already logged
+    assert store.interactions[result.interaction_id].state["requires_human"] is True
+
+
+class _SlowAfterFirstLLM(FakeLLMClient):
+    async def generate(self, request):
+        if self.requests:
+            await asyncio.sleep(1)
+        return await super().generate(request)
+
+
+async def test_the_turn_deadline_covers_every_round_of_the_tool_loop(store):
+    faqs = MemoryFaqStore()
+    tenant, _ = _salon(faqs)
+    llm = _SlowAfterFirstLLM()
+    llm.queue(_search(), agent_turn("never seen"))
+
+    result = await _faqs_engine(store, llm, faqs, timeout=0.1).handle_turn(
+        tenant, None, "walk in?", "test_chat"
+    )
+
+    assert result.reply_text == PROVIDER_FALLBACK and result.fallback is True
+    assert store.calls.count("checkpoint") == 2  # the op-log row was committed first
+    assert len(store.operations) == 1
+    failure = store.interactions[result.interaction_id].state["failures"][-1]
+    assert (failure["kind"], failure["detail"]) == ("provider_unavailable", "turn_timeout")

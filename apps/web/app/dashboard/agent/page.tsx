@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 
-import { getAgent, getTestTranscript } from "@/lib/api/client";
+import { getAgent, getTestTranscript, listFaqs } from "@/lib/api/client";
 import type { ChatLoad } from "@/components/agent/test-chat";
 import { AgentWorkspace } from "@/components/agent/agent-workspace";
 
@@ -25,13 +25,16 @@ export default async function AgentPage({
   const { chat } = await searchParams;
   const chatId = typeof chat === "string" && UUID.test(chat) ? chat : null;
 
-  const [agent, transcript] = await Promise.all([
+  const [agent, transcript, faqs] = await Promise.all([
     getAgent(token),
     chatId ? getTestTranscript(token, chatId) : Promise.resolve(null),
+    listFaqs(token),
   ]);
 
   if (agent.kind === "unauthorized") redirect("/sign-in");
   if (agent.kind === "subscription_required") redirect("/billing/plan");
+  if (faqs.kind === "unauthorized") redirect("/sign-in");
+  if (faqs.kind === "subscription_required") redirect("/billing/plan");
 
   let chatLoad: ChatLoad = { kind: "none" };
   if (chat !== undefined && !chatId) {
@@ -57,5 +60,5 @@ export default async function AgentPage({
     }
   }
 
-  return <AgentWorkspace agent={agent} chat={chatLoad} />;
+  return <AgentWorkspace agent={agent} chat={chatLoad} faqs={faqs} />;
 }

@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     # web client's turn timeout and the API's serverless function limit.
     conversation_turn_timeout_seconds: float = Field(default=25.0, gt=0, le=120)
 
+    # Most FAQs one business may keep (PRD §8.4); creating more is 409 faq_limit_reached.
+    faq_max_per_business: int = Field(default=200, ge=1, le=1000)
+
     # Usage limits (services/usage.py, PRD §14.5). "Per day" is the UTC day; a
     # global cap covers all businesses together. 0 blocks the feature entirely.
     gemini_requests_per_day: int = Field(default=200, ge=0)

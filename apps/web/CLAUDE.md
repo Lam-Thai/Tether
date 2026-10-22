@@ -45,6 +45,10 @@ Vitest config is scoped to this package (`apps/web/vitest.config.ts`, `happy-dom
 - After an unknown outcome (timeout/unreachable) on a send, re-fetch the transcript before offering Retry, so a committed turn isn't sent twice. 409 means either `interaction_ended` (show New chat) or `interaction_busy` (keep the draft, retry); branch on `error.code`.
 - Feature Zod schemas and limits live in `lib/validation/<feature>.ts` and mirror the API's; PATCH forms send only the changed fields.
 
+- FAQs (`components/agent/faq-manager.tsx`, builder section 4) load via `listFaqs` in parallel with the agent; a failed list renders a Callout in that section only (401/402 redirect in the page). Local state is the source after mount: a FAQ is added, changed, toggled or removed in the list only after the API confirms (create 201, PATCH 200, DELETE 204). The active switch (`role="switch"`) disables itself while in flight and never moves on failure; delete always goes through a confirm dialog.
+- Modals use `components/agent/faq-dialog.tsx`: a native `<dialog>` opened with `showModal()` (focus trap, Esc, backdrop click) labelled by its `<h2>`. Children mount only while open, so forms reset on each open. Reuse it rather than adding a dialog dependency.
+- `fetchApi` returns `body: null` for 204, so DELETE-style endpoints work; only treat 204 as success.
+
 ## Usage limits
 
 - `/dashboard/settings/usage` follows the server page → presentational component pattern (`components/settings/usage-panel.tsx`). `GET /usage` carries this business's meters only; platform-wide state arrives as `global_limit_reached` flags and drives a warning, never a number.

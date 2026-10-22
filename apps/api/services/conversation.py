@@ -9,18 +9,38 @@ conversation correct:
   applies to the very next message with no restart.
 - Gemini proposes, the backend validates. The raw reply is parsed against
   `AgentTurn`; a bad reply, or one asking for a tool that isn't registered,
-  is invalid and is never acted on. One retry, then a fixed fallback line.
-  The fallback lines below are the only agent text that does not come
-  from the model or from the owner's greeting.
+  is invalid and is never acted on. One retry per turn, then a fixed
+  fallback line.
+- Tool loop (bounded). A valid reply with `tool_calls` is never shown: the
+  calls go through `ToolExecutor` (validated, executed, written to the
+  operation log), the store checkpoints so the log rows are durable and no
+  transaction stays open, and the request is rebuilt with the same messages
+  plus FAQ RESULTS / TOOL RESULTS in the system instruction. At most
+  `MAX_TOOL_ROUNDS` rounds; a model that still asks for tools after that
+  gets the no-info fallback. So one turn makes at most
+  `MAX_TOOL_ROUNDS + 2` model calls (rounds, the final reply, one retry).
+- Grounding guard. A final reply with intent `FAQ`, `BUSINESS_HOURS` or
+  `PRICE_INQUIRY` (`GROUNDED_INTENTS`) must cite `sources`, and
+  every cited id (whatever the intent) must be an FAQ that `search_faq`
+  returned in this turn. Otherwise the reply is replaced by the no-info
+  fallback and the interaction is flagged for a human. Earlier turns never
+  ground a later one: the owner may have edited or disabled the FAQ since.
+- The fallback lines below (invalid output, provider, `quota_fallback`,
+  `no_info_fallback`) are the only agent text that does not come from the
+  model or from the owner's greeting. The last two point the customer to the
+  business's own contact details and never promise a callback.
 - Every model call goes through `UsageGuard.metered`, inside `retry_bounded`
   (so each attempt is metered). A reached limit means no model call at all:
   the turn answers with the quota fallback, which points the customer to the
   business's own contact details, and the interaction is flagged for a human.
   It is never retried. A new conversation is admitted only while the
   concurrency limits allow it.
-- A row lock on the interaction is taken only after the model call, just to
+- A row lock on the interaction is taken only after the model calls, just to
   allocate message sequence numbers and merge state. It is never held across
-  the (slow) model call.
+  a (slow) model call.
+- One deadline per turn covers every model call, tool rounds included. It
+  cancels model calls only: tool executors and checkpoints are DB work,
+  bounded by the statement timeout, and never cut off mid-statement.
 - Customer and model text are never logged at INFO or above.
 
 No FastAPI or SQLAlchemy imports: the router passes a `ConversationStore`
@@ -30,8 +50,9 @@ No FastAPI or SQLAlchemy imports: the router passes a `ConversationStore`
 import asyncio
 import logging
 import uuid
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Collection, Sequence
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
@@ -53,8 +74,9 @@ from models.business import Business
 from models.interaction import Interaction, InteractionMessage
 from schemas.agent_turn import AgentTurn
 from services.agent import AgentStore, load_agent, require_business
+from services.knowledge import FaqSnippet
 from services.prompt_builder import BusinessFacts, Channel, Persona, PromptContext, Tone, build
-from services.tools import ToolRegistry
+from services.tools import OperationLog, ToolContext, ToolExecutor, ToolOutcome, ToolRegistry
 from services.usage import (
     ActiveCounts,
     LimitExceededError,
@@ -69,8 +91,22 @@ INVALID_OUTPUT_FALLBACK = "Sorry, I didn't quite catch that. Could you say it an
 PROVIDER_FALLBACK = "Sorry, I'm having trouble responding right now. Please try again in a moment."
 FALLBACK_INTENT = "UNKNOWN"
 MAX_RECORDED_FAILURES = 50
+# Tool rounds per turn; each round runs at most `tools.MAX_CALLS_PER_ROUND` calls.
+MAX_TOOL_ROUNDS = 3
+# Distinct FAQs kept per turn (FAQ RESULTS and the ids the guard accepts), bounding the prompt.
+MAX_FAQS_PER_TURN = 10
+# Intents whose answer states facts that only FAQs hold (BUSINESS FACTS has no hours,
+# prices or policies), so the reply must cite FAQs retrieved this turn. LOCATION is
+# answerable from BUSINESS FACTS; the hours/services slices extend this with their tools.
+GROUNDED_INTENTS = frozenset({"FAQ", "BUSINESS_HOURS", "PRICE_INQUIRY"})
 
-FailureKind = Literal["invalid_output", "provider_unavailable", "usage_limited"]
+FailureKind = Literal[
+    "invalid_output",
+    "provider_unavailable",
+    "usage_limited",
+    "ungrounded",
+    "tool_rounds_exhausted",
+]
 
 
 def quota_fallback(business: Business) -> str:
@@ -89,6 +125,19 @@ def quota_fallback(business: Business) -> str:
     )
 
 
+def no_info_fallback(business: Business) -> str:
+    """The fixed reply when the agent can't ground an answer: the model's reply
+    cited no retrieved FAQ, or it kept asking for tools. Nothing invented, and a
+    human follow-up through the business's own contacts (no callback promised)."""
+    contacts = [c for c in (business.phone, business.contact_email) if c]
+    if contacts:
+        return (
+            "Sorry, I don't have that information. "
+            f"You can reach the team at {' or '.join(contacts)}."
+        )
+    return f"Sorry, I don't have that information. Please contact {business.name} directly."
+
+
 class InteractionNotFoundError(AppError):
     status_code = 404
     code = "interaction_not_found"
@@ -99,7 +148,7 @@ class InteractionEndedError(AppError):
     code = "interaction_ended"
 
 
-class ConversationStore(AgentStore, Protocol):
+class ConversationStore(AgentStore, OperationLog, Protocol):
     async def lock_admission_and_count(
         self, business_id: uuid.UUID, idle_minutes: int
     ) -> tuple[int, int]:
@@ -123,6 +172,11 @@ class ConversationStore(AgentStore, Protocol):
     async def save_interaction(self, interaction: Interaction) -> Interaction: ...
     async def checkpoint(self) -> None:
         """Commit what's written so far and end the transaction (called before the model)."""
+        ...
+
+    def savepoint(self) -> AbstractAsyncContextManager[Any]:
+        """A nested unit of work: an error inside rolls back only what ran inside it
+        (each tool executor runs in one, so its failure can still be logged)."""
         ...
 
 
@@ -166,6 +220,8 @@ class _Outcome:
     fallback_text: str
     failures: list[dict[str, str]]
     usage_limited: bool = False
+    # The fallback told the customer to reach the team: flag the interaction for a human.
+    needs_human: bool = False
 
 
 def _view(message: InteractionMessage, state: dict[str, Any] | None) -> MessageView:
@@ -233,34 +289,33 @@ class ConversationEngine:
         ]
         history.append(ModelMessage(role="user", text=utterance))
 
-        request = build(
-            PromptContext(
-                persona=Persona(
-                    name=agent.name,
-                    tone=_tone(agent.tone),
-                    greeting=agent.greeting,
-                    custom_instructions=agent.custom_instructions,
-                ),
-                business=BusinessFacts(
-                    name=business.name,
-                    industry=business.industry,
-                    address=business.address,
-                    timezone=business.timezone,
-                    phone=business.phone,
-                    contact_email=business.contact_email,
-                ),
-                channel=channel,
-                history=history,
-                state=dict(interaction.state or {}),
-                tools=self._tools.declarations(),
-            )
+        context = PromptContext(
+            persona=Persona(
+                name=agent.name,
+                tone=_tone(agent.tone),
+                greeting=agent.greeting,
+                custom_instructions=agent.custom_instructions,
+            ),
+            business=BusinessFacts(
+                name=business.name,
+                industry=business.industry,
+                address=business.address,
+                timezone=business.timezone,
+                phone=business.phone,
+                contact_email=business.contact_email,
+            ),
+            channel=channel,
+            history=history,
+            state=dict(interaction.state or {}),
+            tools=self._tools.declarations(),
+            max_tool_rounds=MAX_TOOL_ROUNDS,
         )
         # Own the ids before committing, and end the transaction so no connection
         # sits idle inside one during the (slow) model call. A new chat's
         # interaction and greeting are durable from here on, whatever happens next.
         business_id, interaction_id = business.id, interaction.id
         await self._store.checkpoint()
-        outcome = await self._generate(request, business, interaction_id)
+        outcome = await self._generate(context, tenant, business, interaction_id)
 
         reply_text = outcome.turn.response_text if outcome.turn else outcome.fallback_text
         intent = outcome.turn.intent if outcome.turn else FALLBACK_INTENT
@@ -360,41 +415,95 @@ class ConversationEngine:
         return await retry_bounded(attempt, self._llm_retry, is_retryable)
 
     async def _generate(
-        self, request: ModelRequest, business: Business, interaction_id: uuid.UUID
+        self,
+        context: PromptContext,
+        tenant: Tenant,
+        business: Business,
+        interaction_id: uuid.UUID,
     ) -> _Outcome:
-        """All model work for one turn, under a single deadline (retries included)."""
+        """All model work for one turn, tool rounds included, under a single deadline.
+
+        Bounded on every axis: at most one invalid-output retry and
+        `MAX_TOOL_ROUNDS` tool rounds, so at most `MAX_TOOL_ROUNDS + 2` model
+        calls (each metered, each retried only per `LLM_RETRY`).
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._turn_timeout
         failures: list[dict[str, str]] = []
+        executor = ToolExecutor(self._tools, self._store, isolate=self._store.savepoint)
+        tool_context = ToolContext(tenant=tenant, interaction_id=interaction_id)
+        # FAQs retrieved this turn, by id: the only ones the reply may cite.
+        retrieved: dict[str, FaqSnippet] = {}
+        results: list[ToolOutcome] = []
+        rounds = 0
+        retried = False
+        request = build(context)
         try:
-            async with asyncio.timeout(self._turn_timeout) as deadline:
-                for attempt in range(2):  # the first try plus at most one invalid-output retry
-                    try:
+            while True:
+                try:
+                    async with asyncio.timeout_at(deadline):
                         reply = await self._call_model(request, business.id, interaction_id)
-                    except LimitExceededError as exc:
-                        failures.append(
-                            _failure("usage_limited", f"{exc.kind.value}:{exc.scope}")
-                        )
-                        return _Outcome(
-                            None, quota_fallback(business), failures, usage_limited=True
-                        )
-                    except LLMUnavailableError:
-                        failures.append(_failure("provider_unavailable", "llm_unavailable"))
-                        return _Outcome(None, PROVIDER_FALLBACK, failures)
-                    except UsageUnavailableError:
-                        # Limits can't be checked: fail closed, no model call.
-                        failures.append(_failure("provider_unavailable", "usage_unavailable"))
-                        return _Outcome(None, PROVIDER_FALLBACK, failures)
-                    turn, reason = self._validate(reply.text)
-                    if turn is not None:
-                        return _Outcome(turn, "", failures)
+                except LimitExceededError as exc:
+                    failures.append(_failure("usage_limited", f"{exc.kind.value}:{exc.scope}"))
+                    return _Outcome(
+                        None,
+                        quota_fallback(business),
+                        failures,
+                        usage_limited=True,
+                        needs_human=True,
+                    )
+                except LLMUnavailableError:
+                    failures.append(_failure("provider_unavailable", "llm_unavailable"))
+                    return _Outcome(None, PROVIDER_FALLBACK, failures)
+                except UsageUnavailableError:
+                    # Limits can't be checked: fail closed, no model call.
+                    failures.append(_failure("provider_unavailable", "usage_unavailable"))
+                    return _Outcome(None, PROVIDER_FALLBACK, failures)
+
+                turn, reason = self._validate(reply.text)
+                if turn is None:
                     failures.append(_failure("invalid_output", reason))
-                    when = deadline.when()
-                    if attempt == 0 and when is not None:
-                        if asyncio.get_running_loop().time() >= when:
-                            raise TimeoutError  # out of time: don't start a retry
+                    if retried:
+                        return _Outcome(None, INVALID_OUTPUT_FALLBACK, failures)
+                    retried = True
+                    if loop.time() >= deadline:
+                        raise TimeoutError  # out of time: don't start a retry
+                    continue  # the same request, once
+
+                if not turn.tool_calls:
+                    problem = _grounding_problem(turn, retrieved)
+                    if problem is None:
+                        return _Outcome(turn, "", failures)
+                    failures.append(_failure("ungrounded", problem))
+                    return _Outcome(None, no_info_fallback(business), failures, needs_human=True)
+
+                if rounds == MAX_TOOL_ROUNDS:
+                    failures.append(_failure("tool_rounds_exhausted", "max_tool_rounds"))
+                    return _Outcome(None, no_info_fallback(business), failures, needs_human=True)
+                if loop.time() >= deadline:
+                    raise TimeoutError  # out of time: don't start another round
+
+                rounds += 1
+                outcomes = await executor.run_round(tool_context, turn.tool_calls)
+                # Op-log rows are durable before the model hears about them, and no
+                # transaction stays open across the next model call.
+                await self._store.checkpoint()
+                results.extend(outcomes)
+                for outcome in outcomes:
+                    for snippet in outcome.faqs:
+                        if len(retrieved) < MAX_FAQS_PER_TURN:
+                            retrieved.setdefault(str(snippet.id), snippet)
+                request = build(
+                    replace(
+                        context,
+                        faqs=tuple(retrieved.values()),
+                        tool_results=tuple(results),
+                        tool_rounds_used=rounds,
+                    )
+                )
         except TimeoutError:
             failures.append(_failure("provider_unavailable", "turn_timeout"))
             return _Outcome(None, PROVIDER_FALLBACK, failures)
-        return _Outcome(None, INVALID_OUTPUT_FALLBACK, failures)
 
     def _validate(self, raw: str) -> tuple[AgentTurn | None, str]:
         try:
@@ -415,9 +524,10 @@ class ConversationEngine:
             state["failures"] = failures[-MAX_RECORDED_FAILURES:]
         if outcome.turn is None:
             state["fallback_messages"] = [*state.get("fallback_messages", []), reply_sequence]
-            if outcome.usage_limited:
+            if outcome.needs_human:
                 # The customer was told to reach the team: flag it for a human.
                 state["requires_human"] = True
+            if outcome.usage_limited:
                 state["usage_limited_messages"] = [
                     *state.get("usage_limited_messages", []),
                     reply_sequence,
@@ -430,6 +540,16 @@ class ConversationEngine:
             state["entities"] = entities
             state["requires_human"] = outcome.turn.requires_human
         interaction.state = state
+
+
+def _grounding_problem(turn: AgentTurn, retrieved: Collection[str]) -> str | None:
+    """Why `turn` isn't grounded in this turn's FAQ results, as a fixed code (or None)."""
+    cited = {source.strip().lower() for source in turn.sources}
+    if turn.intent in GROUNDED_INTENTS and not cited:
+        return "missing_sources"
+    if not cited <= set(retrieved):
+        return "unknown_source"
+    return None
 
 
 def _tone(value: str) -> Tone:

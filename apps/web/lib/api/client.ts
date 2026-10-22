@@ -348,6 +348,11 @@ async function fetchApi(
     };
   }
 
+  // 204 No Content (e.g. DELETE) has no body to parse.
+  if (response.status === 204) {
+    return { kind: "responded", status: 204, body: null };
+  }
+
   let body: unknown;
   try {
     body = await response.json();
@@ -959,5 +964,146 @@ export async function getUsage(token: string): Promise<UsageResult> {
   if (outcome.status === 401) return { kind: "unauthorized" };
   if (outcome.status === 402) return { kind: "subscription_required" };
   if (outcome.status === 200 && isUsageRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+// FAQs (`/faqs`): the owner's approved answers the receptionist may use.
+
+export interface FaqRead {
+  id: string;
+  question: string;
+  answer: string;
+  category: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FaqList {
+  faqs: FaqRead[];
+  max_faqs: number;
+}
+
+/** `POST /faqs` body. A blank or null category means none. */
+export interface FaqCreate {
+  question: string;
+  answer: string;
+  category?: string | null;
+  active?: boolean;
+}
+
+/** `PATCH /faqs/{id}` body: send only the fields that changed. */
+export type FaqUpdate = Partial<FaqCreate>;
+
+export type FaqListResult =
+  | { kind: "ok"; data: FaqList }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type CreateFaqResult =
+  | { kind: "ok"; data: FaqRead }
+  | { kind: "validation"; message: string; fieldErrors: FieldErrors }
+  /** 409 `faq_limit_reached`: the business is at its FAQ cap. */
+  | { kind: "limit_reached" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type UpdateFaqResult =
+  | { kind: "ok"; data: FaqRead }
+  | { kind: "validation"; message: string; fieldErrors: FieldErrors }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type DeleteFaqResult =
+  | { kind: "ok" }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isFaqRead(value: unknown): value is FaqRead {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.question === "string" &&
+    typeof value.answer === "string" &&
+    isNullableString(value.category) &&
+    typeof value.active === "boolean" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
+}
+
+function isFaqList(value: unknown): value is FaqList {
+  if (!isRecord(value)) return false;
+  return Array.isArray(value.faqs) && value.faqs.every(isFaqRead) && isCount(value.max_faqs);
+}
+
+/** Calls `GET /api/v1/faqs`. */
+export async function listFaqs(token: string): Promise<FaqListResult> {
+  const outcome = await fetchApi("/faqs", { headers: authHeaders(token) }, AGENT_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isFaqList(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/faqs`. */
+export async function createFaq(token: string, input: FaqCreate): Promise<CreateFaqResult> {
+  const outcome = await fetchApi(
+    "/faqs",
+    { method: "POST", headers: jsonAuthHeaders(token), body: JSON.stringify(input) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 409) return { kind: "limit_reached" };
+  if (outcome.status === 422) {
+    return { kind: "validation", ...validationFrom(outcome.body, "The FAQ details are invalid.") };
+  }
+  if (outcome.status === 201 && isFaqRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `PATCH /api/v1/faqs/{id}`. */
+export async function updateFaq(token: string, id: string, patch: FaqUpdate): Promise<UpdateFaqResult> {
+  const outcome = await fetchApi(
+    `/faqs/${encodeURIComponent(id)}`,
+    { method: "PATCH", headers: jsonAuthHeaders(token), body: JSON.stringify(patch) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 422) {
+    return { kind: "validation", ...validationFrom(outcome.body, "The FAQ details are invalid.") };
+  }
+  if (outcome.status === 200 && isFaqRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `DELETE /api/v1/faqs/{id}`; only a 204 counts as deleted. */
+export async function deleteFaq(token: string, id: string): Promise<DeleteFaqResult> {
+  const outcome = await fetchApi(
+    `/faqs/${encodeURIComponent(id)}`,
+    { method: "DELETE", headers: authHeaders(token) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 204) return { kind: "ok" };
   return UNEXPECTED;
 }
