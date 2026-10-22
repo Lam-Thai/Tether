@@ -20,6 +20,7 @@ the utterances are written for the demo salon (`seeds/demo_salon.py`), never
 copied from real customers.
 """
 
+from collections.abc import Hashable
 from pathlib import Path
 from typing import Annotated
 
@@ -98,6 +99,10 @@ class _UniqueKeyLoader(yaml.SafeLoader):
         seen: set[object] = set()
         for key_node, _ in node.value:
             key = self.construct_object(key_node, deep=deep)  # pyright: ignore[reportArgumentType]
+            if not isinstance(key, Hashable):  # e.g. `? [a, b]`: a refused file, not a crash
+                raise yaml.constructor.ConstructorError(
+                    None, None, "unhashable key", key_node.start_mark
+                )
             if key in seen:
                 raise yaml.constructor.ConstructorError(
                     None, None, f"duplicate key {key!r}", key_node.start_mark
