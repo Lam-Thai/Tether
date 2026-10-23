@@ -67,7 +67,12 @@ Vitest config is scoped to this package (`apps/web/vitest.config.ts`, `happy-dom
 - Disconnect always goes through the confirm dialog. `revoked: false` means the connection is gone but Google did not confirm, so show the warning linking `https://myaccount.google.com/permissions`. A 409 `calendar_reconnect_needed` from the list or save moves the panel to Reconnect needed (the API has already committed that state).
 - Error code → copy lives in `components/settings/calendar-messages.ts`; the usage panel labels the `calendar_call` meter "Calendar checks".
 
+## Auth (Clerk custom flows)
+
+- `components/auth/sign-in-form.tsx` / `sign-up-form.tsx` are custom forms over the `@clerk/nextjs/legacy` hooks (no Clerk prebuilt UI). They collect **email + password only**, so the Clerk dashboard must not require anything else (username, names, legal acceptance). If it does, the forms say which field is missing (`components/auth/clerk-status.ts`) and never blame the code or password.
+- Branch on Clerk's status, never collapse "not complete" into a generic error: sign-up `missing_requirements` (with `missingFields`); sign-in `needs_client_trust` (a new device) and `needs_second_factor` get the emailed-code step (`prepareSecondFactor` / `attemptSecondFactor` with `email_code`); any other second factor, `needs_new_password` and the rest get a plain message. `setActive` failing is its own message (the account exists; point to sign-in). Navigate only after `setActive` resolves.
+- Google / GitHub: `components/auth/oauth-buttons.tsx` calls `signIn` / `signUp.authenticateWithRedirect({ strategy, redirectUrl: "/sso-callback", redirectUrlComplete })`; `app/sso-callback` renders `AuthenticateWithRedirectCallback` (public in middleware). Clerk owns the whole OAuth exchange; no provider keys live in this app. Development instances use Clerk's shared OAuth credentials; production needs the owner's own Google/GitHub OAuth apps configured in the Clerk dashboard. Buttons are text-only (lucide-react has no brand marks).
+
 ## Pending (future slices)
 
-- Clerk integration: where auth state lives, how a page gets the current business.
 - Form pattern: React Hook Form + Zod, shared schema between client validation and the API call.
