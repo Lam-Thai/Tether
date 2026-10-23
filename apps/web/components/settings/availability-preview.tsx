@@ -65,11 +65,9 @@ export function AvailabilityPreview() {
   });
 
   async function loadServices() {
-    let token: string | null;
-    try {
-      token = await latest.current.getToken();
-    } catch {
-      // Clerk couldn't issue a token (e.g. offline): show the error with its retry.
+    // A rejected getToken (e.g. offline) is `undefined`: show the error with its retry.
+    const token = await latest.current.getToken().catch(() => undefined);
+    if (token === undefined) {
       setServices({ kind: "error", message: calendarMessage("unknown") });
       return;
     }
@@ -104,11 +102,9 @@ export function AvailabilityPreview() {
   async function check(serviceId: string) {
     const id = ++requestId.current;
     setPreview({ kind: "loading" });
-    let token: string | null;
-    try {
-      token = await getToken();
-    } catch {
-      // Never leave the controls disabled in "loading" when Clerk can't issue a token.
+    // Never leave the controls disabled in "loading" when Clerk can't issue a token.
+    const token = await getToken().catch(() => undefined);
+    if (token === undefined) {
       if (id === requestId.current) setPreview({ kind: "error", message: calendarMessage("unknown") });
       return;
     }
