@@ -65,7 +65,14 @@ export function AvailabilityPreview() {
   });
 
   async function loadServices() {
-    const token = await latest.current.getToken();
+    let token: string | null;
+    try {
+      token = await latest.current.getToken();
+    } catch {
+      // Clerk couldn't issue a token (e.g. offline): show the error with its retry.
+      setServices({ kind: "error", message: calendarMessage("unknown") });
+      return;
+    }
     const result = token ? await listServices(token) : ({ kind: "unauthorized" } as const);
     if (result.kind === "ok") {
       setServices({ kind: "ready", services: result.data.services.filter((s) => s.active) });
@@ -97,7 +104,14 @@ export function AvailabilityPreview() {
   async function check(serviceId: string) {
     const id = ++requestId.current;
     setPreview({ kind: "loading" });
-    const token = await getToken();
+    let token: string | null;
+    try {
+      token = await getToken();
+    } catch {
+      // Never leave the controls disabled in "loading" when Clerk can't issue a token.
+      if (id === requestId.current) setPreview({ kind: "error", message: calendarMessage("unknown") });
+      return;
+    }
     const result = token ? await getAvailability(token, serviceId, date) : ({ kind: "unauthorized" } as const);
     if (id !== requestId.current) return;
 

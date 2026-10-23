@@ -502,7 +502,7 @@ async def test_search_faq_rejects_blank_or_overlong_queries(query):
     assert log.rows[0]["result"]["fields"] == ["query"]
 
 
-async def test_a_failing_non_isolated_tool_is_framed_by_commit_and_rollback():
+async def test_a_failing_non_isolated_tool_is_committed_before_and_never_rolled_back():
     calls: list[str] = []
 
     class _Log:
@@ -512,19 +512,16 @@ async def test_a_failing_non_isolated_tool_is_framed_by_commit_and_rollback():
     async def checkpoint():
         calls.append("checkpoint")
 
-    async def rollback():
-        calls.append("rollback")
-
     async def boom(ctx, args):
         calls.append("run")
         raise RuntimeError("db went away")
 
     tool = Tool(name="provider_tool", description="d", args=LookupArgs, run=boom, isolated=False)
-    executor = ToolExecutor(
-        ToolRegistry.of([tool]), _Log(), checkpoint=checkpoint, rollback=rollback
-    )
+    executor = ToolExecutor(ToolRegistry.of([tool]), _Log(), checkpoint=checkpoint)
     ctx = ToolContext(tenant=_tenant(), interaction_id=uuid.uuid4())
     outcome = await executor.execute(ctx, ToolCall(name="provider_tool", arguments={"code": "x"}))
 
     assert outcome.status == "failed"
-    assert calls == ["checkpoint", "run", "rollback", "record:failed"]
+    # No rollback: it would expire the tenant's business mid-turn. The tool's own
+    # savepoints keep the session usable, so the failure is simply logged.
+    assert calls == ["checkpoint", "run", "record:failed"]

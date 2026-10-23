@@ -23,8 +23,9 @@ doesn't change.
   rolls back only its own work and the failure can still be logged. A tool that
   calls a provider sets `isolated=False`: it must commit before the call (no
   transaction held across it), which a savepoint would forbid, so it isolates
-  its own DB reads instead (`check_availability`). The executor commits before
-  running one and rolls back if it raises, so its failure is still logged.
+  each of its own DB operations instead (`check_availability`, and the calendar
+  store inside it), so a DB error never leaves the session unusable and the
+  failure can still be logged. The executor commits before running one.
 - Otherwise `succeeded`, with the executor's verified result: what the backend
   actually found, never an echo of what the model asked for. Its `evidence`
   (ids, prices, durations) is what the grounding guard lets the reply cite
@@ -208,17 +209,17 @@ class ToolExecutor:
         max_calls_per_round: int = MAX_CALLS_PER_ROUND,
         isolate: Isolate = nullcontext,
         checkpoint: Callable[[], Awaitable[None]] | None = None,
-        rollback: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """`checkpoint` / `rollback` (the store's commit and rollback) frame a
-        non-isolated tool: earlier work is committed before it runs, and if it raises
-        the transaction is rolled back, so the failure can still be logged."""
+        """`checkpoint` (the store's commit) runs before a non-isolated tool, so the
+        work of earlier calls is durable whatever it does. There is deliberately no
+        rollback: it would expire every object loaded in the session (the tenant's
+        business included) mid-turn. A non-isolated tool savepoints each of its own
+        DB operations instead, so a DB error never leaves the session unusable."""
         self._registry = registry
         self._log = log
         self._max_calls = max_calls_per_round
         self._isolate = isolate
         self._checkpoint = checkpoint
-        self._rollback = rollback
 
     async def run_round(self, ctx: ToolContext, calls: Sequence[ToolCall]) -> list[ToolOutcome]:
         """Runs one reply's calls in order (sequentially: they may share a DB session).
@@ -264,10 +265,6 @@ class ToolExecutor:
                     "error_type": type(exc).__name__,
                 },
             )
-            if not tool.isolated and self._rollback is not None:
-                # No savepoint to fall back to: a DB error may have left the session
-                # unusable, so drop its uncommitted work before logging the failure.
-                await self._rollback()
             await self._record(
                 ctx, tool.name, logged_args, "failed", {"reason": "executor_error"}, started
             )

@@ -458,3 +458,21 @@ async def test_a_date_in_words_is_rejected_with_the_format_and_today(store, salo
     assert salon.calendar.calls == []
     [operation] = store.operations
     assert operation["status"] == "rejected"
+
+
+async def test_a_fresh_fully_booked_check_retires_the_earlier_offer(store, salon):
+    llm = FakeLLMClient()
+    llm.queue(_check(time_of_day="afternoon"), _offer(GOOD_OFFER, salon))
+    first = await salon.turn(store, llm, "Can I get a haircut Friday afternoon?")
+
+    # Someone took the rest of Friday since: a re-check finds nothing.
+    salon.calendar.add(salon.business_id, FRIDAY, "12:00", "17:00")
+    stale = agent_turn("2:00 PM on Friday is still free!", intent="BOOK_APPOINTMENT")
+    llm.queue(_check(), stale, stale)
+    result = await salon.turn(store, llm, "is 2 still free?", first.interaction_id)
+
+    assert '"reason": "fully_booked"' in llm.requests[-1].system_instruction
+    assert result.fallback is True
+    state = _state(store)
+    assert state[OFFERED_SLOTS] is None
+    assert [f["kind"] for f in state["failures"]] == ["unverified_time"] * 2

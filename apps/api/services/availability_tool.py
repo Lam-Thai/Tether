@@ -125,10 +125,12 @@ def _service_view(service: ServiceFact) -> dict[str, Any]:
 
 
 def _service_evidence(service: ServiceFact, slots: tuple[Slot, ...] = ()) -> Evidence:
+    """With no slots, this check found nothing to offer: last turn's offer is stale."""
     return Evidence(
         sources={str(service.id): "service"},
         durations=(service.duration_minutes,),
         slot_times=frozenset(slot.start.time().replace(tzinfo=None) for slot in slots),
+        retires_earlier_offer=not slots,
     )
 
 

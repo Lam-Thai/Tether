@@ -221,10 +221,6 @@ class ConversationStore(AgentStore, OperationLog, Protocol):
         """Commit what's written so far and end the transaction (called before the model)."""
         ...
 
-    async def rollback(self) -> None:
-        """Discard what isn't committed (after a non-isolated tool failed)."""
-        ...
-
     def savepoint(self) -> AbstractAsyncContextManager[Any]:
         """A nested unit of work: an error inside rolls back only what ran inside it
         (each tool executor runs in one, so its failure can still be logged)."""
@@ -523,7 +519,6 @@ class ConversationEngine:
             self._store,
             isolate=self._store.savepoint,
             checkpoint=self._store.checkpoint,
-            rollback=self._store.rollback,
         )
         tool_context = ToolContext(tenant=tenant, interaction_id=interaction_id)
         # FAQs retrieved this turn, by id (FAQ RESULTS), and everything the reply may

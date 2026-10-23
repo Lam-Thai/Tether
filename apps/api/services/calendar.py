@@ -20,9 +20,10 @@ import hashlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from core.errors import AppError
 from core.retry import RetryPolicy, retry_bounded
@@ -401,6 +402,11 @@ class CalendarStore(Protocol):
         survives a request that then fails."""
         ...
 
+    def savepoint(self) -> AbstractAsyncContextManager[Any]:
+        """A nested unit of work: a DB error inside rolls back only its own work, so a
+        caller sharing the session (the conversation engine) can carry on."""
+        ...
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -564,7 +570,10 @@ class CalendarConnections:
         """
         if not self._config.client_configured:
             raise CalendarNotSelectedError("not_configured")
-        row = await self._store.get(business_id)
+        # Each DB step in its own savepoint: this runs inside a conversation turn, whose
+        # session must stay usable even if one of these statements fails.
+        async with self._store.savepoint():
+            row = await self._store.get(business_id)
         if row is None:
             raise CalendarNotSelectedError("not_connected")
         if row.connection_status == RECONNECT_NEEDED:
@@ -576,19 +585,21 @@ class CalendarConnections:
         try:
             return await self._gateway.free_busy(conn, window)
         except CalendarAuthRevokedError as exc:
-            await self._mark_reconnect(row, exc.reason)
+            async with self._store.savepoint():
+                await self._mark_reconnect(row, exc.reason)
             await self._store.checkpoint()  # the state survives whatever happens next
             raise
         except CalendarNotFoundError:
             # The chosen calendar is gone: the owner has to pick another one.
-            await self._store.mark_status(
-                business_id,
-                status=NEEDS_SELECTION,
-                last_error=ERR_CALENDAR_MISSING,
-                last_synced_at=self._clock(),
-                seen_updated_at=row.updated_at,
-                clear_selection=True,
-            )
+            async with self._store.savepoint():
+                await self._store.mark_status(
+                    business_id,
+                    status=NEEDS_SELECTION,
+                    last_error=ERR_CALENDAR_MISSING,
+                    last_synced_at=self._clock(),
+                    seen_updated_at=row.updated_at,
+                    clear_selection=True,
+                )
             await self._store.checkpoint()
             raise CalendarNotSelectedError(ERR_CALENDAR_MISSING) from None
 

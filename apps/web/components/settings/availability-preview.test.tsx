@@ -231,3 +231,36 @@ describe("formatSlotLabel", () => {
     expect(formatSlotLabel("noon")).toBe("noon");
   });
 });
+
+describe("AvailabilityPreview when Clerk can't issue a token", () => {
+  beforeEach(() => {
+    getTokenMock.mockReset();
+    listServicesMock.mockReset();
+    getAvailabilityMock.mockReset();
+  });
+
+  it("shows the services error with a retry instead of a stuck skeleton", async () => {
+    getTokenMock.mockRejectedValueOnce(new Error("offline")).mockResolvedValue("token-123");
+    servicesOk([service()]);
+    const user = userEvent.setup();
+    render(<AvailabilityPreview />);
+
+    expect(await screen.findByText("Can't load your services")).toBeInTheDocument();
+    expect(listServicesMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("button", { name: "Check availability" })).toBeEnabled();
+  });
+
+  it("leaves the loading state and re-enables the controls when a check can't get a token", async () => {
+    getTokenMock.mockResolvedValueOnce("token-123").mockRejectedValueOnce(new Error("offline"));
+    servicesOk([service()]);
+    const user = userEvent.setup();
+    render(<AvailabilityPreview />);
+
+    await check(user);
+
+    expect(await screen.findByRole("button", { name: "Check availability" })).toBeEnabled();
+    expect(getAvailabilityMock).not.toHaveBeenCalled();
+    expect(screen.queryByText("The receptionist would offer")).not.toBeInTheDocument();
+  });
+});

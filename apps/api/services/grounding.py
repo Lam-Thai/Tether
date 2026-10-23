@@ -27,11 +27,12 @@ or disabled the fact since).
   replaces an earlier one, so a time is only ever valid for the date and service
   it was offered for). With no offer this turn, a reply may repeat a start time of
   the offer the customer heard last turn (`earlier_offer_times`, the saved
-  `offered_slots`), and an hours, FAQ or location reply (`HOURS_TIME_INTENTS`)
-  that doesn't use offer wording ("available", "book", "works", ...) may state
-  opening or closing times shown this turn or times in an FAQ answer retrieved
-  this turn. Intent is the model's word, so an hours reply that offers a time is
-  held to the slots like a booking one. A time without am/pm counts if either
+  `offered_slots`) unless a check this turn found nothing to offer, and an hours,
+  FAQ or location reply (`HOURS_TIME_INTENTS`) that doesn't use offer wording
+  ("available", "book", "works", ...) may state opening or closing times shown
+  this turn or times in an FAQ answer retrieved this turn. Intent is the model's
+  word, so an hours reply that offers a time is held to the slots like a booking
+  one. A time without am/pm counts if either
   reading is allowed. A miss is `unverified_time`, which the engine answers with
   one regeneration and then the availability fallback.
 
@@ -97,6 +98,9 @@ class Evidence:
     # Local start times of the slots offered to the customer (`check_availability`).
     # Non-empty means "this is an offer": it replaces any earlier offer this turn.
     slot_times: frozenset[time] = frozenset()
+    # A fresh availability check found nothing to offer: last turn's offer is stale
+    # and may no longer be repeated.
+    retires_earlier_offer: bool = False
     # Local opening and closing times of hours shown to the model.
     hour_times: frozenset[time] = frozenset()
 
@@ -136,6 +140,8 @@ class TurnEvidence:
         self._unresolved.update(evidence.unresolved)
         if evidence.slot_times:
             self._slot_times = set(evidence.slot_times)  # the latest offer wins
+        if evidence.retires_earlier_offer:
+            self._earlier_offer_times.clear()
         self._hour_times.update(evidence.hour_times)
 
     def kind_of(self, source: str) -> SourceKind | None:
