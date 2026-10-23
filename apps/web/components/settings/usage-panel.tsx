@@ -23,6 +23,7 @@ const KNOWN_LABELS: Record<string, string> = {
   tts_request: "Voice replies",
   call: "Phone calls",
   sms: "Text messages",
+  calendar_call: "Calendar checks",
 };
 
 /** Known kinds get a plain label; unknown kinds get one derived from the kind string. */

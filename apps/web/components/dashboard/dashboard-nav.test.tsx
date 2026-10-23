@@ -7,7 +7,7 @@ vi.mock("next/navigation", () => ({ usePathname: () => pathname }));
 import { DashboardNav } from "./dashboard-nav";
 
 describe("DashboardNav", () => {
-  it("links Agent and Settings and leaves the other sections disabled", () => {
+  it("links Agent, Calendar and Settings and leaves the other sections disabled", () => {
     pathname = "/dashboard";
     render(<DashboardNav />);
 
@@ -18,9 +18,13 @@ describe("DashboardNav", () => {
       "href",
       "/dashboard/settings",
     );
-    expect(screen.getAllByRole("link")).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "Calendar" })).toHaveAttribute(
+      "href",
+      "/dashboard/settings/calendar",
+    );
+    expect(screen.getAllByRole("link")).toHaveLength(3);
 
-    for (const label of ["FAQs", "Services", "Calendar", "Inbox", "Phone"]) {
+    for (const label of ["FAQs", "Services", "Inbox", "Phone"]) {
       expect(screen.getByText(label)).toHaveAttribute("aria-disabled", "true");
     }
   });
@@ -36,5 +40,12 @@ describe("DashboardNav", () => {
     render(<DashboardNav />);
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Agent" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("marks Calendar, not Settings, as current on the calendar routes", () => {
+    pathname = "/dashboard/settings/calendar/callback";
+    render(<DashboardNav />);
+    expect(screen.getByRole("link", { name: "Calendar" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
   });
 });

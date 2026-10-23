@@ -1359,3 +1359,246 @@ export async function putBusinessHours(token: string, days: DayHours[]): Promise
   if (outcome.status === 200 && isBusinessHours(outcome.body)) return { kind: "ok", data: outcome.body };
   return UNEXPECTED;
 }
+
+// Google Calendar connection (`/calendar`). The API owns every token: this
+// app only ever sees the Google authorization URL and the status payload.
+
+export type CalendarConnectionStatus =
+  | "not_connected"
+  | "needs_selection"
+  | "connected"
+  | "reconnect_needed";
+
+export interface CalendarStatus {
+  status: CalendarConnectionStatus;
+  calendar_id: string | null;
+  calendar_name: string | null;
+  /** A fixed reason code (`auth_revoked`, `unavailable`, `calendar_missing`, ...), never provider text. */
+  last_error: string | null;
+  last_synced_at: string | null;
+}
+
+export interface CalendarOption {
+  id: string;
+  name: string;
+  primary: boolean;
+  time_zone: string | null;
+}
+
+/** Failures every calendar call can end in, besides its own. */
+export type CalendarCommonFailure =
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  /** 503 `calendar_not_configured`: this deployment has no Google credentials. */
+  | { kind: "not_configured" }
+  /** 503 `calendar_unavailable`: Google could not be reached. */
+  | { kind: "unavailable" }
+  | { kind: "unreachable"; reason: string };
+
+export type CalendarStatusResult = { kind: "ok"; data: CalendarStatus } | CalendarCommonFailure;
+
+export type CalendarConnectResult =
+  | { kind: "ok"; url: string }
+  /** The API sent a URL that is not an `https://accounts.google.com` one; it is never followed. */
+  | { kind: "invalid_url" }
+  | CalendarCommonFailure;
+
+export type CompleteCalendarResult =
+  | { kind: "ok"; data: CalendarStatus }
+  | { kind: "invalid_state" }
+  | { kind: "scopes_missing" }
+  | { kind: "grant_incomplete" }
+  | CalendarCommonFailure;
+
+export type ListCalendarsResult =
+  | { kind: "ok"; calendars: CalendarOption[] }
+  | { kind: "not_connected" }
+  | { kind: "reconnect_needed" }
+  | CalendarCommonFailure;
+
+export type SelectCalendarResult =
+  | { kind: "ok"; data: CalendarStatus }
+  | { kind: "calendar_not_found" }
+  | { kind: "not_connected" }
+  | { kind: "reconnect_needed" }
+  | CalendarCommonFailure;
+
+export type DisconnectCalendarResult =
+  /** `revoked: false` means the connection is gone here but Google did not confirm the revoke. */
+  | { kind: "ok"; revoked: boolean }
+  | { kind: "not_connected" }
+  | CalendarCommonFailure;
+
+const CALENDAR_STATUSES: readonly string[] = [
+  "not_connected",
+  "needs_selection",
+  "connected",
+  "reconnect_needed",
+];
+
+const GOOGLE_AUTH_HOST = "accounts.google.com";
+
+function isCalendarStatus(value: unknown): value is CalendarStatus {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.status === "string" &&
+    CALENDAR_STATUSES.includes(value.status) &&
+    isNullableString(value.calendar_id) &&
+    isNullableString(value.calendar_name) &&
+    isNullableString(value.last_error) &&
+    isNullableString(value.last_synced_at)
+  );
+}
+
+function isCalendarOption(value: unknown): value is CalendarOption {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.primary === "boolean" &&
+    isNullableString(value.time_zone)
+  );
+}
+
+/** Only follow a redirect to Google's own consent screen, even though it comes from our API. */
+function isGoogleAuthUrl(value: unknown): value is { url: string } {
+  if (!isRecord(value) || typeof value.url !== "string") return false;
+  try {
+    const parsed = new URL(value.url);
+    return parsed.protocol === "https:" && parsed.hostname === GOOGLE_AUTH_HOST;
+  } catch {
+    return false;
+  }
+}
+
+/** The failures that look the same on every calendar endpoint; null when the response is something else. */
+function calendarCommonFailure(outcome: {
+  status: number;
+  body: unknown;
+}): Exclude<CalendarCommonFailure, { kind: "unreachable" }> | null {
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 503) {
+    const code = errorCode(outcome.body);
+    if (code === "calendar_not_configured") return { kind: "not_configured" };
+    if (code === "calendar_unavailable") return { kind: "unavailable" };
+  }
+  return null;
+}
+
+/** Calls `GET /api/v1/calendar/status`. */
+export async function getCalendarStatus(token: string): Promise<CalendarStatusResult> {
+  const outcome = await fetchApi("/calendar/status", { headers: authHeaders(token) }, BILLING_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = calendarCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 200 && isCalendarStatus(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `GET /api/v1/calendar/connect`; on success, send the browser to `url`. */
+export async function getCalendarConnectUrl(token: string): Promise<CalendarConnectResult> {
+  const outcome = await fetchApi("/calendar/connect", { headers: authHeaders(token) }, BILLING_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = calendarCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 200) {
+    return isGoogleAuthUrl(outcome.body) ? { kind: "ok", url: outcome.body.url } : { kind: "invalid_url" };
+  }
+  return UNEXPECTED;
+}
+
+/**
+ * Calls `POST /api/v1/calendar/callback` with the `code` and `state` Google
+ * put in the redirect. A code is single-use, so callers must send it once.
+ */
+export async function completeCalendarConnection(
+  token: string,
+  code: string,
+  state: string,
+): Promise<CompleteCalendarResult> {
+  const outcome = await fetchApi(
+    "/calendar/callback",
+    { method: "POST", headers: jsonAuthHeaders(token), body: JSON.stringify({ code, state }) },
+    BILLING_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = calendarCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 400) {
+    const reason = errorCode(outcome.body);
+    if (reason === "invalid_oauth_state") return { kind: "invalid_state" };
+    if (reason === "calendar_scopes_missing") return { kind: "scopes_missing" };
+    if (reason === "calendar_grant_incomplete") return { kind: "grant_incomplete" };
+    return UNEXPECTED;
+  }
+  if (outcome.status === 200 && isCalendarStatus(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `GET /api/v1/calendar/calendars`: the calendars the owner may pick from. */
+export async function listCalendars(token: string): Promise<ListCalendarsResult> {
+  const outcome = await fetchApi("/calendar/calendars", { headers: authHeaders(token) }, BILLING_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = calendarCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 404 && errorCode(outcome.body) === "calendar_not_connected") {
+    return { kind: "not_connected" };
+  }
+  if (outcome.status === 409 && errorCode(outcome.body) === "calendar_reconnect_needed") {
+    return { kind: "reconnect_needed" };
+  }
+  if (
+    outcome.status === 200 &&
+    isRecord(outcome.body) &&
+    Array.isArray(outcome.body.calendars) &&
+    outcome.body.calendars.every(isCalendarOption)
+  ) {
+    return { kind: "ok", calendars: outcome.body.calendars };
+  }
+  return UNEXPECTED;
+}
+
+/** Calls `PATCH /api/v1/calendar`: choose which calendar bookings go to. */
+export async function selectCalendar(token: string, calendarId: string): Promise<SelectCalendarResult> {
+  const outcome = await fetchApi(
+    "/calendar",
+    { method: "PATCH", headers: jsonAuthHeaders(token), body: JSON.stringify({ calendar_id: calendarId }) },
+    BILLING_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = calendarCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 404) {
+    return errorCode(outcome.body) === "calendar_not_connected"
+      ? { kind: "not_connected" }
+      : { kind: "calendar_not_found" };
+  }
+  if (outcome.status === 409 && errorCode(outcome.body) === "calendar_reconnect_needed") {
+    return { kind: "reconnect_needed" };
+  }
+  if (outcome.status === 422) return { kind: "calendar_not_found" };
+  if (outcome.status === 200 && isCalendarStatus(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `DELETE /api/v1/calendar`; the stored connection is gone on any 200. */
+export async function disconnectCalendar(token: string): Promise<DisconnectCalendarResult> {
+  const outcome = await fetchApi("/calendar", { method: "DELETE", headers: authHeaders(token) }, BILLING_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = calendarCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 404 && errorCode(outcome.body) === "calendar_not_connected") {
+    return { kind: "not_connected" };
+  }
+  if (outcome.status === 200 && isRecord(outcome.body) && typeof outcome.body.revoked === "boolean") {
+    return { kind: "ok", revoked: outcome.body.revoked };
+  }
+  return UNEXPECTED;
+}

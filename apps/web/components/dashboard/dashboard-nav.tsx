@@ -10,10 +10,10 @@ const NAV_ITEMS = [
   { label: "Agent", href: "/dashboard/agent" },
   { label: "FAQs" },
   { label: "Services" },
-  { label: "Calendar" },
+  { label: "Calendar", href: "/dashboard/settings/calendar" },
   { label: "Inbox" },
   { label: "Phone" },
-  { label: "Settings", href: "/dashboard/settings" },
+  { label: "Settings", href: "/dashboard/settings", exclude: "/dashboard/settings/calendar" },
 ] as const;
 
 export function DashboardNav() {
@@ -36,7 +36,9 @@ export function DashboardNav() {
             );
           }
 
-          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+          const within = (base: string) => pathname === base || pathname.startsWith(`${base}/`);
+          // Calendar lives under /settings but has its own entry, so Settings steps aside.
+          const active = within(item.href) && !("exclude" in item && within(item.exclude));
           return (
             <li key={item.label}>
               <Link
