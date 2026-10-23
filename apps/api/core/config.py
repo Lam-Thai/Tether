@@ -5,8 +5,11 @@ variables. Every other layer must import `settings` from here instead of
 touching `os.environ` directly.
 """
 
+import base64
+import binascii
 import json
 import os
+import re
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -20,7 +23,9 @@ _ENV_FILE = os.environ.get("TETHER_ENV_FILE", ".env") or None
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
+    # `hide_input_in_errors`: a bad value (a malformed token key, a database URL with a
+    # password) must never be echoed back in the startup error.
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore", hide_input_in_errors=True)
 
     database_url: str
     # `NoDecode` stops pydantic-settings from eagerly JSON-decoding this env
@@ -85,6 +90,23 @@ class Settings(BaseSettings):
     gemini_input_usd_per_million_tokens: Decimal = Field(default=Decimal("0.30"), ge=0)
     gemini_output_usd_per_million_tokens: Decimal = Field(default=Decimal("2.50"), ge=0)
 
+    # Google Calendar (integrations/google_calendar). Every value is optional so the app
+    # starts without them; the feature is "configured" only when all four secrets below
+    # are set, and until then every calendar endpoint but GET /status answers 503
+    # `calendar_not_configured`. Generate keys with `uv run python -m core.keygen`.
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: SecretStr | None = None
+    # Comma-separated `key_id:base64url(32 bytes)`; the FIRST key seals new tokens, the
+    # rest only decrypt (rotation).
+    calendar_token_keys: SecretStr | None = None
+    # HMAC secret for the OAuth `state` JWT and the PKCE verifier derivation.
+    oauth_state_secret: SecretStr | None = None
+    calendar_oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    # A stored connection is probed against Google when it was last confirmed longer ago.
+    calendar_status_check_seconds: int = Field(default=300, ge=0, le=86400)
+    # Per attempt; calls retry at most once (services/calendar.CALENDAR_RETRY).
+    google_calendar_timeout_seconds: float = Field(default=10.0, gt=0, le=30)
+
     # Eval harness (`uv run tether-eval`, evals/runner.py). The tier picks the defaults
     # in `evals.runner.TIER_LIMITS`; each value below overrides one of them when set.
     eval_tier: Literal["free", "paid"] = "free"
@@ -125,6 +147,34 @@ class Settings(BaseSettings):
             raise ValueError("GEMINI_API_KEY is required when ENVIRONMENT=production.")
         return self
 
+    @field_validator(
+        "google_oauth_client_id",
+        "google_oauth_client_secret",
+        "calendar_token_keys",
+        "oauth_state_secret",
+        mode="before",
+    )
+    @classmethod
+    def _blank_calendar_setting_is_unset(cls, value: object) -> object:
+        # `GOOGLE_OAUTH_CLIENT_ID=` in a .env means "not configured", not an empty value.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("calendar_token_keys")
+    @classmethod
+    def _token_keys_are_well_formed(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            parse_token_keys(value.get_secret_value())  # raises ValueError on a bad format
+        return value
+
+    @field_validator("oauth_state_secret")
+    @classmethod
+    def _state_secret_is_long_enough(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and len(value.get_secret_value()) < 32:
+            raise ValueError("OAUTH_STATE_SECRET must be at least 32 characters.")
+        return value
+
     @field_validator("app_base_url")
     @classmethod
     def _strip_trailing_slash(cls, value: str) -> str:
@@ -142,8 +192,53 @@ class Settings(BaseSettings):
         return _split_csv_or_json(value)
 
     @property
+    def calendar_redirect_uri(self) -> str:
+        """Where Google sends the owner back: a page of the web app, never the API."""
+        return f"{self.app_base_url}/dashboard/settings/calendar/callback"
+
+    @property
+    def calendar_configured(self) -> bool:
+        return all(
+            (
+                self.google_oauth_client_id,
+                self.google_oauth_client_secret,
+                self.calendar_token_keys,
+                self.oauth_state_secret,
+            )
+        )
+
+    @property
     def clerk_jwks_url(self) -> str:
         return f"{self.clerk_issuer.rstrip('/')}/.well-known/jwks.json"
+
+
+_KEY_ID = re.compile(r"[a-z0-9_-]{1,32}")
+
+
+def parse_token_keys(raw: str) -> tuple[dict[str, bytes], str]:
+    """Parses `id:base64url,id2:base64url` into (keys, active key id = the first).
+
+    Errors name the position, never the key material."""
+    keys: dict[str, bytes] = {}
+    active = ""
+    for position, entry in enumerate(raw.split(","), start=1):
+        key_id, sep, encoded = entry.strip().partition(":")
+        if not sep or not _KEY_ID.fullmatch(key_id):
+            raise ValueError(
+                f"CALENDAR_TOKEN_KEYS entry {position} must look like <id>:<base64url key>, "
+                "with an id of 1-32 characters from a-z, 0-9, _ and -."
+            )
+        if key_id in keys:
+            raise ValueError("CALENDAR_TOKEN_KEYS ids must be unique.")
+        try:
+            key = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        except (binascii.Error, ValueError):
+            key = b""
+        if len(key) != 32:
+            raise ValueError(f"CALENDAR_TOKEN_KEYS entry {position} must be 32 bytes, base64url.")
+        keys[key_id] = key
+        active = active or key_id
+    return keys, active
 
 
 def _split_csv_or_json(value: object) -> object:

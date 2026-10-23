@@ -59,6 +59,14 @@ Vitest config is scoped to this package (`apps/web/vitest.config.ts`, `happy-dom
 - Render viewer-local times with `useSyncExternalStore` and a `null` server snapshot (no hydration mismatch); the `react-hooks/set-state-in-effect` lint rule rejects the effect + `setState` version.
 - Money arrives as a decimal string: format client-side and label it as an estimate.
 
+## Calendar
+
+- `/dashboard/settings/calendar` follows the server page → presentational pattern (`components/settings/calendar-panel.tsx`); the nav's Calendar entry links to it and Settings steps aside there. Status is one of `not_connected | needs_selection | connected | reconnect_needed`, and the panel only shows `Connected · "<name>"` from a status the API returned (picker save, status GET), never from a click.
+- OAuth is redirect-only: `getCalendarConnectUrl` returns Google's URL and the client only follows `https:` + host exactly `accounts.google.com` (else `invalid_url`). No token, secret or scope list ever reaches this app; it sees the URL and the status payload.
+- Google redirects to `/dashboard/settings/calendar/callback` (`components/settings/calendar-callback.tsx`). The server page passes `code`/`state`/`error` as props; the component keeps them in state, strips the URL with `router.replace` at once, and posts `code` + `state` exactly once (a `useRef` guard, because strict mode double-runs effects and a code is single-use). A `?error=` from Google, or a missing code/state, shows a message and makes no API call; the raw error value is never echoed. Failure offers "Try again" back to settings (a new connect), never a replay.
+- Disconnect always goes through the confirm dialog. `revoked: false` means the connection is gone but Google did not confirm, so show the warning linking `https://myaccount.google.com/permissions`. A 409 `calendar_reconnect_needed` from the list or save moves the panel to Reconnect needed (the API has already committed that state).
+- Error code → copy lives in `components/settings/calendar-messages.ts`; the usage panel labels the `calendar_call` meter "Calendar checks".
+
 ## Pending (future slices)
 
 - Clerk integration: where auth state lives, how a page gets the current business.

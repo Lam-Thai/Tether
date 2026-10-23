@@ -6,6 +6,7 @@ imports `models` or `models.base`.
 from models.agent import Agent
 from models.billing import StripeEvent, Subscription
 from models.business import Business
+from models.calendar import CalendarConnection
 from models.faq import Faq
 from models.hours import BusinessHours
 from models.interaction import Interaction, InteractionMessage
@@ -18,6 +19,7 @@ __all__ = [
     "Agent",
     "Business",
     "BusinessHours",
+    "CalendarConnection",
     "Faq",
     "Interaction",
     "InteractionMessage",

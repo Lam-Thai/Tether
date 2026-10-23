@@ -2,6 +2,7 @@
 touches business-scoped data.
 """
 
+import os
 import random
 import uuid
 from collections.abc import AsyncIterator
@@ -18,12 +19,19 @@ from sqlalchemy.engine import make_url
 
 from core.app import create_app
 from core.billing import get_billing_gateway
+from core.calendar import (
+    get_calendar_api,
+    get_calendar_config,
+    get_oauth_state_signer,
+    get_token_vault,
+)
 from core.config import settings
 from core.db import async_session_factory, is_local_database
 from core.llm import get_llm_client
 from core.tenant import get_signing_key_resolver
 from core.usage import SqlUsageStore, cost_rates, get_usage_guard, usage_limits
 from integrations.clerk.fake import build_fake_signing_key_resolver
+from integrations.google_calendar.fake import FakeGoogleCalendarApi
 from integrations.llm.fake import FakeLLMClient
 from integrations.stripe.fake import FakeBillingGateway
 from integrations.stripe.port import SubscriptionInfo
@@ -31,6 +39,9 @@ from models.billing import Subscription
 from models.business import Business
 from models.usage import UsageCounter, UsageEvent
 from models.user import User
+from services.calendar import CalendarConfig
+from services.oauth_state import OAuthStateSigner
+from services.token_vault import TokenVault
 from services.usage import DailyLimit, UsageGuard, UsageKind, UsageLimits
 
 
@@ -296,3 +307,44 @@ async def entitled_tenants(
         for tenant in two_tenants:
             await _start_trial(client, tenant)
     return two_tenants
+
+
+@dataclass
+class CalendarHarness:
+    """A configured Google Calendar for the test app: the fake provider, a vault on a
+    random test key and a signer on a test secret, wired in as the app's dependencies.
+    Tests script Google through `api` and change `config` (e.g. `status_check_seconds`)
+    between calls. Booking tests compose `GoogleCalendarGateway(harness.api,
+    harness.vault, usage.guard())` to exercise metering for real."""
+
+    api: FakeGoogleCalendarApi
+    vault: TokenVault
+    state_secret: str
+    config: CalendarConfig
+    key: bytes  # the vault's key `test`, for building a rotated vault
+
+    def signer(self, clock=None) -> OAuthStateSigner:
+        if clock is None:
+            return OAuthStateSigner(self.state_secret, 600)
+        return OAuthStateSigner(self.state_secret, 600, clock=clock)
+
+
+@pytest.fixture
+def calendar(app) -> CalendarHarness:
+    key = os.urandom(32)
+    harness = CalendarHarness(
+        api=FakeGoogleCalendarApi(),
+        vault=TokenVault({"test": key}, "test"),
+        key=key,
+        state_secret="test-state-secret-" + uuid.uuid4().hex,
+        config=CalendarConfig(
+            client_configured=True,
+            redirect_uri="https://example.com/dashboard/settings/calendar/callback",
+            status_check_seconds=300,
+        ),
+    )
+    app.dependency_overrides[get_calendar_api] = lambda: harness.api
+    app.dependency_overrides[get_token_vault] = lambda: harness.vault
+    app.dependency_overrides[get_oauth_state_signer] = lambda: harness.signer()
+    app.dependency_overrides[get_calendar_config] = lambda: harness.config
+    return harness
