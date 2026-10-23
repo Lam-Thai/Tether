@@ -235,7 +235,7 @@ class EvalRunner:
         for attempt in range(self._limits.max_rate_limit_retries + 1):
             recorder = Recorder(pacer)
             try:
-                async with sandbox.case(recorder) as env:
+                async with sandbox.case(recorder, case.calendar) as env:
                     playback = await play(env, recorder, case.turns)
             except Exception as exc:  # recorded by type only, see `CaseResult.error`
                 state.errors_in_a_row += 1

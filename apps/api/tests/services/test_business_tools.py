@@ -4,8 +4,9 @@ In-memory directory store, pinned clock, no DB, no model.
 """
 
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -22,8 +23,9 @@ from services.business_tools import (
     MAX_LISTED_SERVICES,
     get_business_info_tool,
     get_services_tool,
+    hour_times,
 )
-from services.directory import BusinessDirectory
+from services.directory import BusinessDirectory, Open
 from services.tools import ToolContext, ToolExecutor, ToolRegistry
 from tests.services.memory_directory_store import MemoryDirectoryStore
 from tests.services.memory_faq_store import MemoryOperationLog
@@ -420,3 +422,78 @@ async def test_hours_are_scoped_to_the_tenant():
 
     assert outcome.for_model["hours_listed"] is False
     assert {d["status"] for d in outcome.for_model["days"]} == {"not_set"}
+
+
+# --- Hour times for the grounding guard ------------------------------------------
+
+
+async def test_business_info_evidence_carries_the_opening_and_closing_times_of_open_days(salon):
+    # Next 7 days: Wed/Fri/Tue 09-18, Thu 09-20, Sat 10-16, Sun and Mon closed.
+    outcome = await salon.call(GET_BUSINESS_INFO)
+
+    assert outcome.evidence.hour_times == {
+        time(9, 0),
+        time(18, 0),
+        time(20, 0),
+        time(10, 0),
+        time(16, 0),
+    }
+    assert all(t.tzinfo is None for t in outcome.evidence.hour_times)
+
+
+async def test_only_the_days_returned_contribute_hour_times(salon):
+    saturday = await salon.call(GET_BUSINESS_INFO, date="2026-10-24")
+    assert saturday.evidence.hour_times == {time(10, 0), time(16, 0)}
+
+    thursday = await salon.call(GET_BUSINESS_INFO, date="2026-10-22")
+    assert thursday.evidence.hour_times == {time(9, 0), time(20, 0)}
+
+
+async def test_closed_days_add_no_hour_times(salon):
+    sunday = await salon.call(GET_BUSINESS_INFO, date="2026-10-25")
+
+    assert sunday.for_model["days"][0]["status"] == "closed"
+    assert sunday.evidence.hour_times == frozenset()
+    # Hours are listed (so citable), there is just nothing to state for that day.
+    assert "business_hours" in sunday.evidence.sources
+
+
+async def test_days_with_hours_not_set_add_no_hour_times():
+    outcome = await Setup().call(GET_BUSINESS_INFO)
+
+    assert outcome.evidence.hour_times == frozenset()
+    assert "business_hours" not in outcome.evidence.sources
+
+
+async def test_hour_times_are_local_wall_times_across_the_spring_forward_gap():
+    setup = Setup(now=datetime(2026, 3, 1, 15, 0, tzinfo=UTC))
+    setup.store.set_week(_id(setup.tenant), {**WEEK, 6: ("02:30", "05:00")})
+
+    gap_day = await setup.call(GET_BUSINESS_INFO, date="2026-03-08")
+    normal_day = await setup.call(GET_BUSINESS_INFO, date="2026-03-15")
+
+    # 02:30 does not exist on 2026-03-08: the shown (and so the quotable) time is 03:30.
+    assert gap_day.evidence.hour_times == {time(3, 30), time(5, 0)}
+    assert normal_day.evidence.hour_times == {time(2, 30), time(5, 0)}
+
+
+def test_hour_times_follow_the_wall_clock_not_the_utc_offset():
+    zone = ZoneInfo(NEW_YORK)
+    summer, winter = date(2026, 10, 31), date(2026, 11, 2)  # UTC-4 and UTC-5
+    windows = [
+        Open(
+            day,
+            datetime.combine(day, time(9), tzinfo=zone),
+            datetime.combine(day, time(17), tzinfo=zone),
+        )
+        for day in (summer, winter)
+    ]
+    assert hour_times(windows) == {time(9, 0), time(17, 0)}
+    assert hour_times([]) == frozenset()
+
+
+def test_hour_times_reads_the_window_in_its_own_zone_whatever_the_process_zone():
+    # 13:00 UTC is 09:00 in New York in summer; the guard compares the local reading.
+    start = datetime(2026, 10, 21, 13, 0, tzinfo=UTC).astimezone(ZoneInfo(NEW_YORK))
+    end = datetime(2026, 10, 21, 22, 0, tzinfo=UTC).astimezone(ZoneInfo(NEW_YORK))
+    assert hour_times([Open(date(2026, 10, 21), start, end)]) == {time(9, 0), time(18, 0)}

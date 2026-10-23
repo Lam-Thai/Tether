@@ -14,7 +14,7 @@ Read-only: inspect, don't edit. Read the root `CLAUDE.md` first for the hard rul
 Flag every violation found, each as **Blocker** or **Suggestion**, with the file and line.
 
 1. **Tenant isolation.** Does any query, route, or service method accept a `business_id` (or equivalent) from the client and use it directly, instead of resolving it from the authenticated tenant? This is the single most important check — a trusted client-supplied `business_id` is always a Blocker.
-2. **No false confirmations.** Does any response, prompt, or UI state claim a booking, SMS, call, or other external action succeeded before a backend/provider result confirms it?
+2. **No false confirmations.** Does any response, prompt, or UI state claim a booking, SMS, call, or other external action succeeded before a backend/provider result confirms it? Does any agent reply or UI show an appointment time that didn't come from a `check_availability` / availability result in the same turn or response (the engine's time guard and `offered_times` are the only source of times)?
 3. **Depth of modules.** Is the interface proportional to what it hides? Flag a service or route exposing its internal steps instead of one capability, and flag a "deep" name wrapping something trivial.
 4. **Secrets and PII.** Any credential, token, or real customer data in code, logs, fixtures, or test data. Any PII logged at a level that isn't strictly necessary.
 5. **Webhook idempotency.** Does a webhook handler (Twilio or otherwise) tolerate being called twice with the same payload without double-processing (duplicate booking, duplicate SMS, duplicate escalation)?

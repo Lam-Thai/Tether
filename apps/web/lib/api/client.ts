@@ -1602,3 +1602,193 @@ export async function disconnectCalendar(token: string): Promise<DisconnectCalen
   }
   return UNEXPECTED;
 }
+
+// Booking rules (`/business/booking-rules`): how the receptionist offers slots.
+
+export interface BookingRules {
+  slot_interval_minutes: number;
+  min_notice_minutes: number;
+  max_days_ahead: number;
+  buffer_minutes: number;
+}
+
+export interface BookingRulesRead extends BookingRules {
+  /** False: the business has saved nothing, so these are the server defaults. */
+  customized: boolean;
+}
+
+export type BookingRulesResult =
+  | { kind: "ok"; data: BookingRulesRead }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type PutBookingRulesResult =
+  | { kind: "ok"; data: BookingRulesRead }
+  | { kind: "validation"; message: string; fieldErrors: FieldErrors }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isBookingRulesRead(value: unknown): value is BookingRulesRead {
+  if (!isRecord(value)) return false;
+  return (
+    isCount(value.slot_interval_minutes) &&
+    isCount(value.min_notice_minutes) &&
+    isCount(value.max_days_ahead) &&
+    isCount(value.buffer_minutes) &&
+    typeof value.customized === "boolean"
+  );
+}
+
+/** Calls `GET /api/v1/business/booking-rules`. */
+export async function getBookingRules(token: string): Promise<BookingRulesResult> {
+  const outcome = await fetchApi("/business/booking-rules", { headers: authHeaders(token) }, AGENT_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isBookingRulesRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `PUT /api/v1/business/booking-rules`: all four numbers, replacing the rules. */
+export async function putBookingRules(token: string, rules: BookingRules): Promise<PutBookingRulesResult> {
+  const body: BookingRules = {
+    slot_interval_minutes: rules.slot_interval_minutes,
+    min_notice_minutes: rules.min_notice_minutes,
+    max_days_ahead: rules.max_days_ahead,
+    buffer_minutes: rules.buffer_minutes,
+  };
+  const outcome = await fetchApi(
+    "/business/booking-rules",
+    { method: "PUT", headers: jsonAuthHeaders(token), body: JSON.stringify(body) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 422) {
+    return { kind: "validation", ...validationFrom(outcome.body, "The booking rules are invalid.") };
+  }
+  if (outcome.status === 200 && isBookingRulesRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+// Availability preview (`/calendar/availability`): what the receptionist would offer.
+
+export type AvailabilityStatus = "available" | "no_availability" | "calendar_unavailable";
+
+export type AvailabilityReason =
+  | "closed"
+  | "hours_not_set"
+  | "fully_booked"
+  | "no_time_left"
+  | "past_date"
+  | "beyond_horizon"
+  | "service_too_long"
+  | "too_soon"
+  | "not_connected"
+  | "reconnect_needed"
+  | "unavailable";
+
+const AVAILABILITY_STATUSES: readonly string[] = ["available", "no_availability", "calendar_unavailable"];
+const AVAILABILITY_REASONS: readonly string[] = [
+  "closed",
+  "hours_not_set",
+  "fully_booked",
+  "no_time_left",
+  "past_date",
+  "beyond_horizon",
+  "service_too_long",
+  "too_soon",
+  "not_connected",
+  "reconnect_needed",
+  "unavailable",
+];
+
+export interface AvailabilitySlot {
+  start: string;
+  end: string;
+  /** 24-hour "HH:MM" in the business timezone. */
+  label: string;
+}
+
+export interface Availability {
+  status: AvailabilityStatus;
+  date: string;
+  timezone: string;
+  service: { id: string; name: string; duration_minutes: number } | null;
+  slots: AvailabilitySlot[];
+  offered: AvailabilitySlot[];
+  reason: AvailabilityReason | null;
+}
+
+export type AvailabilityResult =
+  | { kind: "ok"; data: Availability }
+  | { kind: "service_not_found" }
+  | { kind: "validation"; message: string }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isAvailabilitySlot(value: unknown): value is AvailabilitySlot {
+  return (
+    isRecord(value) &&
+    typeof value.start === "string" &&
+    typeof value.end === "string" &&
+    typeof value.label === "string"
+  );
+}
+
+function isAvailability(value: unknown): value is Availability {
+  if (!isRecord(value)) return false;
+  const service = value.service;
+  return (
+    typeof value.status === "string" &&
+    AVAILABILITY_STATUSES.includes(value.status) &&
+    typeof value.date === "string" &&
+    typeof value.timezone === "string" &&
+    (service === null ||
+      (isRecord(service) &&
+        typeof service.id === "string" &&
+        typeof service.name === "string" &&
+        isCount(service.duration_minutes))) &&
+    Array.isArray(value.slots) &&
+    value.slots.every(isAvailabilitySlot) &&
+    Array.isArray(value.offered) &&
+    value.offered.every(isAvailabilitySlot) &&
+    (value.reason === null || (typeof value.reason === "string" && AVAILABILITY_REASONS.includes(value.reason)))
+  );
+}
+
+/** Calls `GET /api/v1/calendar/availability` for one service and one day (`YYYY-MM-DD`). */
+export async function getAvailability(
+  token: string,
+  serviceId: string,
+  date: string,
+): Promise<AvailabilityResult> {
+  const query = new URLSearchParams({ service_id: serviceId, date });
+  const outcome = await fetchApi(
+    `/calendar/availability?${query.toString()}`,
+    { headers: authHeaders(token) },
+    BILLING_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404 && errorCode(outcome.body) === "service_not_found") {
+    return { kind: "service_not_found" };
+  }
+  if (outcome.status === 422) {
+    return { kind: "validation", message: invalidMessageFor(outcome.body, "That service or date is invalid.") };
+  }
+  if (outcome.status === 200 && isAvailability(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+function invalidMessageFor(body: unknown, fallback: string): string {
+  return isApiErrorBody(body) ? body.error.message : fallback;
+}

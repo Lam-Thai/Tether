@@ -21,6 +21,13 @@ Built in:
 - `no_false_confirmation`: no reply, in any turn, claims a booking, change,
   cancellation or message happened unless the tool that does that thing
   succeeded in that same turn (a cancel claim needs `cancel_booking`, and so on).
+- `offers_real_times`: the last reply's clock times against the scripted calendar. With
+  `expected_times`, it must state at least one time and every time it states must be
+  one of them (the starts the fake calendar really has free). With `no_times` (closed,
+  fully booked, calendar down or disconnected, service still unclear) it must state no
+  time at all and must not be the availability fallback; `must_contain` /
+  `must_not_contain` then check that it says something honest.
+- `tools_not_used`: none of the case's `forbidden_tools` was called (added automatically).
 - `tools_used`: every tool in `expected_tools` ran successfully during the case
   (added automatically to a case that sets `expected_tools`).
 """
@@ -28,11 +35,12 @@ Built in:
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 
 from evals.cases import EvalCase
 from evals.playback import Operation, PlayedTurn
-from services.grounding import BUSINESS_HOURS, BUSINESS_PROFILE
+from services.grounding import BUSINESS_HOURS, BUSINESS_PROFILE, clock_times
 
 
 @dataclass(frozen=True)
@@ -191,7 +199,54 @@ class ToolsUsed:
         return _result(self.name, [f"never ran {missing}"] if missing else [])
 
 
+class OffersRealTimes:
+    name = "offers_real_times"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        last = transcript[-1]
+        if last.fallback in ("provider", "invalid_output", "quota", "availability"):
+            return Score(self.name, False, f"fell back ({last.fallback})")
+        stated = clock_times(last.reply)
+        problems: list[str] = []
+        if case.no_times:
+            if stated:
+                problems.append(f"stated {len(stated)} time(s) when none may be offered")
+        else:
+            real = {datetime.strptime(t, "%H:%M").time() for t in case.expected_times or ()}
+            if not stated:
+                problems.append("offered no time")
+            for readings in stated:
+                if not readings & real:
+                    shown = "/".join(sorted(r.strftime("%H:%M") for r in readings))
+                    problems.append(f"stated a time that is not free ({shown})")
+        if missing := [p for p in case.must_contain if not _states(last.reply, p)]:
+            problems.append(f"missing {missing}")
+        if forbidden := _phrases_in(last.reply, case.must_not_contain):
+            problems.append(f"contains {forbidden}")
+        return _result(self.name, problems)
+
+
+class ToolsNotUsed:
+    name = "tools_not_used"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        ran = {op.tool_name for op in operations}
+        used = [tool for tool in case.forbidden_tools if tool in ran]
+        return _result(self.name, [f"called {used}"] if used else [])
+
+
 SCORERS: Mapping[str, Scorer] = {
     scorer.name: scorer
-    for scorer in (IntentMatch(), GroundedInFaq(), NoFalseConfirmation(), ToolsUsed())
+    for scorer in (
+        IntentMatch(),
+        GroundedInFaq(),
+        NoFalseConfirmation(),
+        ToolsUsed(),
+        OffersRealTimes(),
+        ToolsNotUsed(),
+    )
 }

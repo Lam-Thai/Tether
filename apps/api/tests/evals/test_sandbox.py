@@ -4,10 +4,12 @@ The model is the fake; the usage window is the `usage` fixture's far-future day,
 real quota counter moves.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from functools import partial
 
+import pytest
 from sqlalchemy import delete, func, select
 
 from core.db import async_session_factory
@@ -22,6 +24,7 @@ from evals.sandbox import (
 )
 from integrations.llm.fake import FakeLLMClient, agent_turn
 from models.business import Business
+from models.calendar import CalendarConnection
 from models.faq import Faq
 from models.interaction import Interaction
 from models.user import User
@@ -78,9 +81,12 @@ async def test_plays_a_case_on_a_seeded_tenant_and_deletes_it_afterwards(usage):
         )
         assert owned == len(search.result["faq_ids"])
         # The conversation was ended after the case.
-        assert await _count(
-            Interaction, Interaction.business_id == business.id, Interaction.status == "active"
-        ) == 0
+        assert (
+            await _count(
+                Interaction, Interaction.business_id == business.id, Interaction.status == "active"
+            )
+            == 0
+        )
         business_id, user_id = business.id, sandbox.tenant.user.id
 
     assert await _count(Business, Business.id == business_id) == 0
@@ -143,3 +149,77 @@ async def test_purge_removes_only_old_eval_tenants():
             await session.execute(delete(Business).where(Business.id == fresh_business))
             await session.execute(delete(User).where(User.id == fresh_user))
             await session.commit()
+
+
+FRIDAY = "2026-06-05"
+
+
+async def _lookup(sandbox, mode: str, date: str = FRIDAY):
+    """One scripted turn: the model asks for a haircut on `date`, then replies."""
+    llm = FakeLLMClient()
+    llm.queue(
+        agent_turn(
+            "Checking.",
+            intent="BOOK_APPOINTMENT",
+            tool_calls=[
+                {
+                    "name": "check_availability",
+                    "arguments": {
+                        "service": "Haircut",
+                        "appointment_date": date,
+                        "time_of_day": "afternoon",
+                    },
+                }
+            ],
+        ),
+        agent_turn("Let me tell you what I found.", intent="BOOK_APPOINTMENT"),
+    )
+    recorder = Recorder(llm)
+    async with sandbox.case(recorder, mode) as env:
+        playback = await play(env, recorder, ["anything friday afternoon for a haircut?"])
+    (turn,) = playback.turns
+    (op,) = [o for o in turn.operations if o.tool_name == "check_availability"]
+    return op
+
+
+@pytest.mark.parametrize(
+    ("mode", "date", "expected"),
+    [
+        # Haircut is 45 min. Friday is open 09-18; the busy week leaves 14:00-15:30 free.
+        ("busy", FRIDAY, {"result": "available", "free": 4}),
+        ("open", FRIDAY, {"result": "available", "free": 34}),
+        ("fully_booked", "2026-06-09", {"result": "no_availability", "reason": "fully_booked"}),
+        ("down", FRIDAY, {"result": "calendar_unavailable", "reason": "unavailable"}),
+        ("disconnected", FRIDAY, {"result": "calendar_unavailable", "reason": "not_connected"}),
+    ],
+)
+async def test_each_case_gets_its_own_scripted_calendar(usage, mode, date, expected):
+    async with postgres_sandbox(SPEC, usage_clock=lambda: usage.day) as sandbox:
+        op = await _lookup(sandbox, mode, date)
+    assert op.status == "succeeded"
+    assert {key: op.result[key] for key in expected} == expected
+
+
+async def test_the_tenant_has_a_connected_calendar_row_with_a_sealed_token(usage):
+    async with postgres_sandbox(SPEC, usage_clock=lambda: usage.day) as sandbox:
+        business = sandbox.tenant.business
+        assert business is not None
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(CalendarConnection).where(CalendarConnection.business_id == business.id)
+                )
+            ).scalar_one()
+        assert row.connection_status == "connected" and row.calendar_id
+        assert b"eval-refresh-token" not in bytes(row.encrypted_refresh_token)
+        business_id = business.id
+    assert await _count(CalendarConnection, CalendarConnection.business_id == business_id) == 0
+
+
+async def test_cases_running_at_once_do_not_share_busy_time(usage):
+    async with postgres_sandbox(SPEC, usage_clock=lambda: usage.day) as sandbox:
+        booked, free = await asyncio.gather(
+            _lookup(sandbox, "fully_booked", FRIDAY), _lookup(sandbox, "open", FRIDAY)
+        )
+    assert booked.result["result"] == "no_availability"
+    assert free.result["result"] == "available"

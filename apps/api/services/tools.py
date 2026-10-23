@@ -20,7 +20,11 @@ doesn't change.
 - An executor that raises is `failed`; the model is told only that the tool
   is unavailable, and only the tool name is logged. Each executor runs inside
   `isolate()` (a savepoint, from the store), so one that fails on a DB error
-  rolls back only its own work and the failure can still be logged.
+  rolls back only its own work and the failure can still be logged. A tool that
+  calls a provider sets `isolated=False`: it must commit before the call (no
+  transaction held across it), which a savepoint would forbid, so it isolates
+  its own DB reads instead (`check_availability`). The executor commits before
+  running one and rolls back if it raises, so its failure is still logged.
 - Otherwise `succeeded`, with the executor's verified result: what the backend
   actually found, never an echo of what the model asked for. Its `evidence`
   (ids, prices, durations) is what the grounding guard lets the reply cite
@@ -99,8 +103,14 @@ class ToolResult:
     # the only ids the grounding guard accepts as `sources` this turn.
     faqs: tuple[FaqSnippet, ...] = ()
     # Other verified facts in `for_model` the reply may cite or quote (service
-    # ids, prices, durations, `business_hours`). Empty for a tool that states none.
+    # ids, prices, durations, `business_hours`, offered slot times). Empty for a
+    # tool that states none.
     evidence: Evidence = field(default_factory=Evidence)
+    # Keys to merge into `interactions.state`, only if this turn's reply is shown
+    # (offered slots). Backend values, never model or customer text.
+    state: Mapping[str, Any] = field(default_factory=dict)
+    # The customer needs a person (e.g. the calendar can't be checked): flag it.
+    requires_human: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,6 +122,8 @@ class ToolOutcome:
     for_model: Mapping[str, Any]
     faqs: tuple[FaqSnippet, ...] = ()
     evidence: Evidence = field(default_factory=Evidence)
+    state: Mapping[str, Any] = field(default_factory=dict)
+    requires_human: bool = False
 
 
 class ToolRejection(Exception):
@@ -138,6 +150,9 @@ class Tool[ArgsT: BaseModel]:
     # Must set `extra="forbid"` and use flat, JSON-schema-friendly fields.
     args: type[ArgsT]
     run: Callable[[ToolContext, ArgsT], Awaitable[ToolResult]]
+    # False: the executor runs outside the store's savepoint, because it commits
+    # before a provider call; it must isolate its own DB work.
+    isolated: bool = True
 
     def declaration(self) -> ToolDeclaration:
         return ToolDeclaration(
@@ -192,11 +207,18 @@ class ToolExecutor:
         *,
         max_calls_per_round: int = MAX_CALLS_PER_ROUND,
         isolate: Isolate = nullcontext,
+        checkpoint: Callable[[], Awaitable[None]] | None = None,
+        rollback: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
+        """`checkpoint` / `rollback` (the store's commit and rollback) frame a
+        non-isolated tool: earlier work is committed before it runs, and if it raises
+        the transaction is rolled back, so the failure can still be logged."""
         self._registry = registry
         self._log = log
         self._max_calls = max_calls_per_round
         self._isolate = isolate
+        self._checkpoint = checkpoint
+        self._rollback = rollback
 
     async def run_round(self, ctx: ToolContext, calls: Sequence[ToolCall]) -> list[ToolOutcome]:
         """Runs one reply's calls in order (sequentially: they may share a DB session).
@@ -224,8 +246,10 @@ class ToolExecutor:
             return await self._reject(ctx, call, _invalid(exc, tool.args), started=started)
 
         logged_args = _sanitize(args.model_dump(mode="json"))
+        if not tool.isolated and self._checkpoint is not None:
+            await self._checkpoint()  # nothing earlier is lost if this tool fails
         try:
-            async with self._isolate():
+            async with self._isolate() if tool.isolated else nullcontext():
                 result = await tool.run(ctx, args)
         except ToolRejection as exc:
             reason = {"reason": exc.reason, "fields": sorted(exc.fields), **exc.details}
@@ -240,6 +264,10 @@ class ToolExecutor:
                     "error_type": type(exc).__name__,
                 },
             )
+            if not tool.isolated and self._rollback is not None:
+                # No savepoint to fall back to: a DB error may have left the session
+                # unusable, so drop its uncommitted work before logging the failure.
+                await self._rollback()
             await self._record(
                 ctx, tool.name, logged_args, "failed", {"reason": "executor_error"}, started
             )
@@ -249,7 +277,13 @@ class ToolExecutor:
             ctx, tool.name, logged_args, "succeeded", _sanitize(result.for_log), started
         )
         return ToolOutcome(
-            tool.name, "succeeded", dict(result.for_model), tuple(result.faqs), result.evidence
+            tool.name,
+            "succeeded",
+            dict(result.for_model),
+            tuple(result.faqs),
+            result.evidence,
+            dict(result.state),
+            result.requires_human,
         )
 
     async def _reject(

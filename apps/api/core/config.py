@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     faq_max_per_business: int = Field(default=200, ge=1, le=1000)
     service_max_per_business: int = Field(default=100, ge=1, le=1000)
 
+    # Default booking rules (slice 10); a business overrides them in `booking_rules`.
+    # Bounds match the CHECK constraints on that table.
+    booking_slot_interval_minutes: int = Field(default=15, ge=5, le=240, multiple_of=5)
+    booking_min_notice_minutes: int = Field(default=120, ge=0, le=20160)
+    booking_max_days_ahead: int = Field(default=60, ge=1, le=365)
+    booking_buffer_minutes: int = Field(default=0, ge=0, le=240)
+
     # Usage limits (services/usage.py, PRD §14.5). "Per day" is the UTC day; a
     # global cap covers all businesses together. 0 blocks the feature entirely.
     gemini_requests_per_day: int = Field(default=200, ge=0)

@@ -1,4 +1,5 @@
-"""In-memory `DirectoryStore` (services + weekly hours), scoped by business id like the SQL one."""
+"""In-memory `DirectoryStore` (services, weekly hours, booking rules), scoped by business id
+like the SQL one."""
 
 import uuid
 from dataclasses import dataclass, field
@@ -7,6 +8,7 @@ from decimal import Decimal
 
 from models.hours import BusinessHours
 from models.service import Service
+from services.booking_rules import BookingRules
 
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -15,6 +17,7 @@ _NOW = datetime(2026, 1, 1, tzinfo=UTC)
 class MemoryDirectoryStore:
     services: list[Service] = field(default_factory=list)
     hours: list[BusinessHours] = field(default_factory=list)
+    booking_rules: dict[uuid.UUID, BookingRules] = field(default_factory=dict)
     reads: int = 0
 
     def add_service(
@@ -71,3 +74,7 @@ class MemoryDirectoryStore:
         return sorted(
             (h for h in self.hours if h.business_id == business_id), key=lambda h: h.day_of_week
         )
+
+    async def get_booking_rules(self, business_id: uuid.UUID) -> BookingRules | None:
+        self.reads += 1
+        return self.booking_rules.get(business_id)

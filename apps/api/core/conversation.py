@@ -6,21 +6,36 @@ from datetime import UTC, datetime
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.booking_rules import default_booking_rules
+from core.calendar import (
+    get_calendar_api,
+    get_calendar_config,
+    get_oauth_state_signer,
+    get_token_vault,
+)
 from core.config import settings
 from core.db import get_session
 from core.directory import SqlDirectoryStore
 from core.llm import get_llm_client
 from core.usage import get_usage_guard
+from integrations.google_calendar import GoogleCalendarApi
 from integrations.llm.port import LLMClient
 from repositories.agents import SqlAgentStore
+from repositories.calendar import SqlCalendarStore
 from repositories.faqs import SqlFaqStore
 from repositories.interactions import SqlConversationStore
 from repositories.operations import SqlOperationLog
+from services.availability import AvailabilityService
+from services.availability_tool import check_availability_tool
+from services.booking_rules import BookingRules
 from services.business_tools import get_business_info_tool, get_services_tool
+from services.calendar import CalendarConfig, CalendarConnections, GoogleCalendarGateway
 from services.conversation import ConversationEngine
 from services.directory import BusinessDirectory
 from services.faq_search import search_faq_tool
 from services.knowledge import KnowledgeBase
+from services.oauth_state import OAuthStateSigner
+from services.token_vault import TokenVault
 from services.tools import ToolRegistry
 from services.usage import UsageGuard
 
@@ -33,8 +48,53 @@ def get_conversation_engine(
     session: AsyncSession = Depends(get_session),
     llm: LLMClient = Depends(get_llm_client),
     usage: UsageGuard = Depends(get_usage_guard),
+    calendar_api: GoogleCalendarApi = Depends(get_calendar_api),
+    vault: TokenVault = Depends(get_token_vault),
+    signer: OAuthStateSigner = Depends(get_oauth_state_signer),
+    calendar_config: CalendarConfig = Depends(get_calendar_config),
+    booking_defaults: BookingRules = Depends(default_booking_rules),
 ) -> ConversationEngine:
-    return build_conversation_engine(session, llm, usage)
+    return build_conversation_engine(
+        session,
+        llm,
+        usage,
+        calendar=CalendarDeps(calendar_api, vault, signer, calendar_config),
+        booking_defaults=booking_defaults,
+    )
+
+
+class CalendarDeps:
+    """What the availability lookup needs to reach Google Calendar for this business."""
+
+    def __init__(
+        self,
+        api: GoogleCalendarApi,
+        vault: TokenVault,
+        signer: OAuthStateSigner,
+        config: CalendarConfig,
+    ) -> None:
+        self.api = api
+        self.vault = vault
+        self.signer = signer
+        self.config = config
+
+    @classmethod
+    def from_process(cls) -> "CalendarDeps":
+        """The process-wide ones (unconfigured placeholders until the feature is set up)."""
+        return cls(
+            get_calendar_api(), get_token_vault(), get_oauth_state_signer(), get_calendar_config()
+        )
+
+    def connections(self, session: AsyncSession, usage: UsageGuard) -> CalendarConnections:
+        return CalendarConnections(
+            store=SqlCalendarStore(session),
+            gateway=GoogleCalendarGateway(self.api, self.vault, usage),
+            api=self.api,
+            vault=self.vault,
+            signer=self.signer,
+            usage=usage,
+            config=self.config,
+        )
 
 
 def build_conversation_engine(
@@ -44,14 +104,23 @@ def build_conversation_engine(
     *,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     extra_turn_seconds: float = 0.0,
+    calendar: CalendarDeps | None = None,
+    booking_defaults: BookingRules | None = None,
 ) -> ConversationEngine:
     """The production engine and tool registry over one session. The eval harness
-    (`evals/sandbox.py`) builds the same one with a pinned business clock, and
-    extra turn time for its own request pacing."""
+    (`evals/sandbox.py`) builds the same one with a pinned business clock, a fake
+    calendar, and extra turn time for its own request pacing."""
+    store = _ConversationStore(session)
     # One directory for the prompt's facts and the tools, so both read the same rows.
-    directory = BusinessDirectory(SqlDirectoryStore(session), clock)
+    directory = BusinessDirectory(
+        SqlDirectoryStore(session), clock, booking_defaults or default_booking_rules()
+    )
+    calendar = calendar or CalendarDeps.from_process()
+    availability = AvailabilityService(
+        directory, calendar.connections(session, usage), savepoint=store.savepoint
+    )
     return ConversationEngine(
-        store=_ConversationStore(session),
+        store=store,
         llm=llm,
         # Bound to the request's session, like the store: tool reads and op-log
         # rows are committed by the engine's checkpoint before each model call.
@@ -60,6 +129,7 @@ def build_conversation_engine(
                 search_faq_tool(KnowledgeBase(SqlFaqStore(session))),
                 get_services_tool(directory),
                 get_business_info_tool(directory),
+                check_availability_tool(directory, availability, savepoint=store.savepoint),
             ]
         ),
         history_limit=settings.conversation_history_limit,

@@ -305,6 +305,135 @@ async def test_an_executor_rejection_is_rejected_logged_by_name_and_rolled_back(
     assert secret not in str(log.rows) and events == ["rolled_back"]
 
 
+# --- Isolation, state and requires_human (slice #10) ---------------------------
+
+
+class CountingSavepoint:
+    """An `isolate` that counts how often it is opened and whether it is open right now."""
+
+    def __init__(self) -> None:
+        self.opened = 0
+        self.open_now = False
+
+    @asynccontextmanager
+    async def __call__(self):
+        self.opened += 1
+        self.open_now = True
+        try:
+            yield
+        finally:
+            self.open_now = False
+
+
+def _stateful_tool(
+    *, isolated: bool, seen_open: list[bool], savepoint: CountingSavepoint, fail: bool = False
+):
+    async def run(ctx: ToolContext, args: LookupArgs) -> ToolResult:
+        seen_open.append(savepoint.open_now)
+        if fail:
+            raise RuntimeError("boom")
+        return ToolResult(
+            for_model={"ok": 1},
+            for_log={"ok": 1},
+            state={"offered_slots": ["2026-10-22T14:00"]},
+            requires_human=True,
+        )
+
+    return Tool(name="lookup", description="d", args=LookupArgs, run=run, isolated=isolated)
+
+
+async def _run_stateful(*, isolated: bool, fail: bool = False):
+    savepoint, seen_open = CountingSavepoint(), []
+    tool = _stateful_tool(isolated=isolated, seen_open=seen_open, fail=fail, savepoint=savepoint)
+    log = MemoryOperationLog()
+    executor = ToolExecutor(ToolRegistry.of([tool]), log, isolate=savepoint)
+    ctx = ToolContext(tenant=_tenant(), interaction_id=uuid.uuid4())
+    outcome = await executor.execute(ctx, ToolCall(name="lookup", arguments={"code": "A1"}))
+    return outcome, savepoint, seen_open, log
+
+
+async def test_an_isolated_tool_runs_inside_the_executors_savepoint():
+    outcome, savepoint, seen_open, _ = await _run_stateful(isolated=True)
+
+    assert outcome.status == "succeeded"
+    assert savepoint.opened == 1 and seen_open == [True]
+
+
+async def test_a_non_isolated_tool_runs_outside_the_savepoint():
+    outcome, savepoint, seen_open, _ = await _run_stateful(isolated=False)
+
+    assert outcome.status == "succeeded"
+    assert savepoint.opened == 0 and seen_open == [False]
+
+
+async def test_tools_are_isolated_by_default():
+    assert _lookup(Spy()).isolated is True
+
+
+@pytest.mark.parametrize("isolated", [True, False], ids=["isolated", "not-isolated"])
+async def test_state_and_requires_human_reach_the_outcome(isolated):
+    outcome, _, _, log = await _run_stateful(isolated=isolated)
+
+    assert outcome.state == {"offered_slots": ["2026-10-22T14:00"]}
+    assert outcome.requires_human is True
+    # Neither is written to the operation log, which holds only the machine summary.
+    assert log.rows[0]["result"] == {"ok": 1}
+
+
+async def test_a_plain_result_has_no_state_and_does_not_flag_a_human():
+    _, _, ctx, executor = _setup()
+    outcome = await executor.execute(ctx, ToolCall(name="lookup", arguments={"code": "A1"}))
+    assert outcome.state == {} and outcome.requires_human is False
+
+
+@pytest.mark.parametrize("isolated", [True, False], ids=["isolated", "not-isolated"])
+async def test_a_failed_call_carries_no_state_and_flags_no_human(isolated):
+    outcome, _, _, log = await _run_stateful(isolated=isolated, fail=True)
+
+    assert outcome.status == "failed"
+    assert outcome.state == {} and outcome.requires_human is False
+    assert outcome.for_model == {"error": "tool_unavailable"}
+    assert log.rows[0]["status"] == "failed"
+
+
+async def test_a_non_isolated_tool_that_fails_is_still_logged_as_failed_with_a_fixed_reason():
+    _, _, _, log = await _run_stateful(isolated=False, fail=True)
+    assert log.rows[0]["result"] == {"reason": "executor_error"}
+
+
+@pytest.mark.parametrize("isolated", [True, False], ids=["isolated", "not-isolated"])
+async def test_a_rejected_call_carries_no_state(isolated):
+    async def run(ctx, args):
+        raise ToolRejection("date_out_of_range", fields=["code"])
+
+    tool = Tool(name="lookup", description="d", args=LookupArgs, run=run, isolated=isolated)
+    executor = ToolExecutor(ToolRegistry.of([tool]), MemoryOperationLog())
+    ctx = ToolContext(tenant=_tenant(), interaction_id=uuid.uuid4())
+
+    rejected = await executor.execute(ctx, ToolCall(name="lookup", arguments={"code": "A1"}))
+    invalid = await executor.execute(ctx, ToolCall(name="lookup", arguments={}))
+    unknown = await executor.execute(ctx, ToolCall(name="nope", arguments={}))
+
+    for outcome in (rejected, invalid, unknown):
+        assert outcome.status == "rejected"
+        assert outcome.state == {} and outcome.requires_human is False
+
+
+async def test_a_call_past_the_round_cap_carries_no_state():
+    savepoint, seen_open = CountingSavepoint(), []
+    tool = _stateful_tool(isolated=True, seen_open=seen_open, savepoint=savepoint)
+    executor = ToolExecutor(
+        ToolRegistry.of([tool]), MemoryOperationLog(), max_calls_per_round=1, isolate=savepoint
+    )
+    ctx = ToolContext(tenant=_tenant(), interaction_id=uuid.uuid4())
+    calls = [ToolCall(name="lookup", arguments={"code": f"c{i}"}) for i in range(2)]
+
+    first, second = await executor.run_round(ctx, calls)
+
+    assert first.state and first.requires_human
+    assert second.status == "rejected" and second.state == {} and not second.requires_human
+
+
 # --- search_faq ----------------------------------------------------------------
 
 
@@ -371,3 +500,31 @@ async def test_search_faq_rejects_blank_or_overlong_queries(query):
     outcome = await executor.execute(ctx, ToolCall(name="search_faq", arguments={"query": query}))
     assert outcome.status == "rejected" and outcome.faqs == ()
     assert log.rows[0]["result"]["fields"] == ["query"]
+
+
+async def test_a_failing_non_isolated_tool_is_framed_by_commit_and_rollback():
+    calls: list[str] = []
+
+    class _Log:
+        async def record_operation(self, **row):
+            calls.append(f"record:{row['status']}")
+
+    async def checkpoint():
+        calls.append("checkpoint")
+
+    async def rollback():
+        calls.append("rollback")
+
+    async def boom(ctx, args):
+        calls.append("run")
+        raise RuntimeError("db went away")
+
+    tool = Tool(name="provider_tool", description="d", args=LookupArgs, run=boom, isolated=False)
+    executor = ToolExecutor(
+        ToolRegistry.of([tool]), _Log(), checkpoint=checkpoint, rollback=rollback
+    )
+    ctx = ToolContext(tenant=_tenant(), interaction_id=uuid.uuid4())
+    outcome = await executor.execute(ctx, ToolCall(name="provider_tool", arguments={"code": "x"}))
+
+    assert outcome.status == "failed"
+    assert calls == ["checkpoint", "run", "rollback", "record:failed"]

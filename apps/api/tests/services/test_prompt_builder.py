@@ -506,3 +506,94 @@ def test_the_full_prompt_stays_within_budget():
     # Rules + three tools + a week of hours + empty result blocks, before any lookup.
     prompt = system(tools=ALL_TOOLS, hours=week_hours(), max_tool_rounds=3)
     assert len(prompt) < 7000
+
+
+# --- Availability (slice #10) ---------------------------------------------------
+
+CHECK_AVAILABILITY = ToolDeclaration(
+    name="check_availability",
+    description="Check free appointment times.",
+    parameters={
+        "type": "object",
+        "properties": {"service": {"type": "string"}, "date": {"type": "string"}},
+    },
+)
+AVAILABILITY_PARAGRAPH = "Appointment times: never say a time is free"
+
+
+def test_with_check_availability_the_rules_carry_the_appointment_times_paragraph():
+    rules = " ".join(platform_rules(("check_availability",), hours=True).split())
+
+    assert AVAILABILITY_PARAGRAPH in rules
+    assert "without calling check_availability in this turn" in rules
+    assert "Offer only its offered_times" in rules
+    assert "Offering times is not booking" in rules
+    # The result section it reads from is named in rule 1.
+    assert "TOOL RESULTS" in rules.split("2.")[0]
+
+
+def test_without_check_availability_the_rules_leave_the_paragraph_out():
+    rules = " ".join(platform_rules(("search_faq", "get_services"), hours=True).split())
+
+    assert AVAILABILITY_PARAGRAPH not in rules and "offered_times" not in rules
+    assert "check_availability" not in rules
+    no_tools = " ".join(PLATFORM_RULES.split())
+    assert AVAILABILITY_PARAGRAPH not in no_tools and "TOOL RESULTS" not in no_tools.split("2.")[0]
+
+
+def test_check_availability_alone_adds_tool_results_to_the_places_facts_may_come_from():
+    only = " ".join(platform_rules(("check_availability",)).split())
+    assert "BUSINESS FACTS or TOOL RESULTS from this turn" in only
+
+
+def test_the_built_prompt_carries_the_availability_rules_only_when_the_tool_is_declared():
+    with_tool = system(tools=(CHECK_AVAILABILITY,), hours=week_hours())
+    without = system(tools=(SEARCH,), hours=week_hours())
+
+    assert with_tool.startswith(platform_rules(("check_availability",), hours=True))
+    assert AVAILABILITY_PARAGRAPH in " ".join(with_tool.split())
+    assert AVAILABILITY_PARAGRAPH not in " ".join(without.split())
+    assert TOOLS_OPEN in with_tool  # TOOL RESULTS exists to carry the offered times
+
+
+def test_the_rules_with_availability_stay_wrapped_like_the_others():
+    rules = platform_rules(("check_availability", *ALL_NAMES), hours=True)
+    assert max(len(line) for line in rules.splitlines()) <= 86
+
+
+def test_hours_facts_render_the_local_time_now_when_given():
+    hours = HoursFacts(
+        today=TODAY, weekly=week_hours().weekly, upcoming=week_hours().upcoming, now=time(14, 5)
+    )
+    rendered = block(system(hours=hours), HOURS_OPEN, HOURS_CLOSE)
+    assert "Today: Wednesday 2026-10-21, local time now 14:05" in rendered
+
+
+def test_the_local_time_now_is_zero_padded_and_shown_even_when_hours_are_unlisted():
+    hours = HoursFacts(today=TODAY, weekly=[], upcoming=[], now=time(9, 3))
+    rendered = block(system(hours=hours), HOURS_OPEN, HOURS_CLOSE)
+    assert "Today: Wednesday 2026-10-21, local time now 09:03" in rendered
+    assert "Opening hours: not listed" in rendered
+
+
+def test_no_local_time_is_stated_when_it_was_not_given():
+    assert "local time now" not in system(hours=week_hours())
+
+
+def test_a_correction_sits_after_tool_results_and_before_the_owner_settings():
+    note = "Your last reply named a time that was not offered. Use only offered times."
+    prompt = system(tools=(CHECK_AVAILABILITY,), hours=week_hours(), correction=note)
+
+    assert prompt.count("CORRECTION. ") == 1 and f"CORRECTION. {note}" in prompt
+    order = [
+        prompt.index(TOOLS_CLOSE),
+        prompt.index("CORRECTION. "),
+        prompt.index("CHANNEL:"),
+        prompt.index(OPEN),
+    ]
+    assert order == sorted(order)
+
+
+def test_no_correction_section_without_a_correction():
+    assert "CORRECTION" not in system(tools=(CHECK_AVAILABILITY,), hours=week_hours())
+    assert "CORRECTION" not in system(tools=(CHECK_AVAILABILITY,), correction=None)

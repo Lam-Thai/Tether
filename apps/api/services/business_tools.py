@@ -18,7 +18,8 @@ Both read `BusinessDirectory` (the one source of business facts), scoped by
 
 Each result's `evidence` is what the grounding guard accepts this turn: the
 service ids, prices and durations returned, and `business_hours` only when
-hours are listed. A lookup that found nothing, or several candidates, marks
+hours are listed (with their opening and closing times, so the reply may state
+them). A lookup that found nothing, or several candidates, marks
 `PRICE_INQUIRY` unresolved, so the honest "we don't list that" / "which one?"
 reply needs no source. The operation log gets ids, counts and match kinds,
 never names or descriptions (owner text).
@@ -61,14 +62,14 @@ WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", 
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
-def _blank_is_none(value: Any) -> Any:
+def blank_is_none(value: Any) -> Any:
     # Gemini sometimes sends "" for "not given"; the executor already drops nulls.
     return None if isinstance(value, str) and not value.strip() else value
 
 
-def _iso_date(value: Any) -> Any:
+def iso_date(value: Any) -> Any:
     """Exactly YYYY-MM-DD (a real date), never a timestamp or a looser format."""
-    value = _blank_is_none(value)
+    value = blank_is_none(value)
     if value is None or isinstance(value, dt.date):
         return value
     if isinstance(value, str) and _ISO_DATE.fullmatch(value.strip()):
@@ -85,7 +86,7 @@ class GetServicesArgs(BaseModel):
             StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUERY_CHARS),
         ]
         | None,
-        BeforeValidator(_blank_is_none),
+        BeforeValidator(blank_is_none),
         Field(
             description=(
                 "The service the customer asked about, in a few words, or its id. "
@@ -100,7 +101,7 @@ class GetBusinessInfoArgs(BaseModel):
 
     date: Annotated[
         dt.date | None,
-        BeforeValidator(_iso_date),
+        BeforeValidator(iso_date),
         Field(
             description=(
                 "First local date to report, YYYY-MM-DD, from today up to a year ahead. "
@@ -125,6 +126,15 @@ class GetBusinessInfoArgs(BaseModel):
 def wall_time(moment: dt.datetime | dt.time) -> str:
     """Local "HH:MM" (an `Open` window's datetimes are already in the business's zone)."""
     return moment.strftime("%H:%M")
+
+
+def hour_times(windows: Sequence[Open]) -> frozenset[dt.time]:
+    """Local opening and closing times, as the grounding guard compares times of day."""
+    return frozenset(
+        moment.time().replace(tzinfo=None)
+        for window in windows
+        for moment in (window.start, window.end)
+    )
 
 
 def window_view(window: OpeningWindow) -> dict[str, str]:
@@ -263,6 +273,7 @@ def get_business_info_tool(directory: BusinessDirectory) -> Tool[GetBusinessInfo
         sources: dict[str, SourceKind] = {BUSINESS_PROFILE: "business_profile"}
         if listed:
             sources[BUSINESS_HOURS] = "business_hours"
+        opened = [window for window in windows if isinstance(window, Open)]
         counts = {
             status: sum(1 for view in for_model["days"] if view["status"] == status)
             for status in ("open", "closed", "not_set")
@@ -270,7 +281,7 @@ def get_business_info_tool(directory: BusinessDirectory) -> Tool[GetBusinessInfo
         return ToolResult(
             for_model=for_model,
             for_log={"start": start.isoformat(), "days": len(windows), **counts},
-            evidence=Evidence(sources=sources),
+            evidence=Evidence(sources=sources, hour_times=hour_times(opened)),
         )
 
     return Tool(

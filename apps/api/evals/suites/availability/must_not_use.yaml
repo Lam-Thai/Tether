@@ -1,0 +1,13 @@
+# An hours question is answered from BUSINESS HOURS: no calendar lookup.
+scorers: [intent_match, no_false_confirmation]
+cases:
+  - id: hours-no-lookup
+    turns: ["What time do you close on Thursdays?"]
+    expected_intent: BUSINESS_HOURS
+    forbidden_tools: [check_availability]
+    tags: [must-not-use, smoke]
+  - id: hours-no-lookup-weekend
+    turns: ["are you guys open sundays at all"]
+    expected_intent: BUSINESS_HOURS
+    forbidden_tools: [check_availability]
+    tags: [must-not-use]

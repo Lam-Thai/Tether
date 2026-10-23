@@ -24,6 +24,7 @@ from typing import Any, Literal, Protocol
 from pydantic import ValidationError
 
 from core.tenant import Tenant
+from evals.cases import CalendarMode
 from integrations.llm.port import LLMClient, LLMUnavailableError, ModelReply, ModelRequest
 from schemas.agent_turn import AgentTurn
 from services.agent import require_business
@@ -31,13 +32,14 @@ from services.conversation import (
     INVALID_OUTPUT_FALLBACK,
     PROVIDER_FALLBACK,
     ConversationEngine,
+    availability_fallback,
     no_info_fallback,
     quota_fallback,
 )
 
 CHANNEL = "test_chat"
 
-FallbackKind = Literal["provider", "invalid_output", "no_info", "quota"]
+FallbackKind = Literal["provider", "invalid_output", "no_info", "quota", "availability"]
 
 
 @dataclass(frozen=True)
@@ -131,8 +133,11 @@ class CaseEnv:
 
 
 class Sandbox(Protocol):
-    def case(self, llm: LLMClient) -> AbstractAsyncContextManager[CaseEnv]:
-        """A fresh engine for one case, calling the model through `llm`."""
+    def case(
+        self, llm: LLMClient, calendar: CalendarMode = "busy"
+    ) -> AbstractAsyncContextManager[CaseEnv]:
+        """A fresh engine for one case, calling the model through `llm`, with the case's
+        scripted calendar."""
         ...
 
 
@@ -152,6 +157,7 @@ def _fallback_kind(env: CaseEnv, reply: str, fell_back: bool) -> FallbackKind | 
         INVALID_OUTPUT_FALLBACK: "invalid_output",
         no_info_fallback(business): "no_info",
         quota_fallback(business): "quota",
+        availability_fallback(business): "availability",
     }
     # Unknown text can't happen today; treat it as an outage rather than an answer.
     return kinds.get(reply, "provider")

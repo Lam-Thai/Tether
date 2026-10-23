@@ -49,21 +49,33 @@ cases:
 @pytest.mark.parametrize(
     ("cases_yaml", "message"),
     [
-        ("scorers: [intent_match]\ncases:\n  - {id: a, turns: [x], expected_intent: NOPE}\n",
-         "expected_intent"),
+        (
+            "scorers: [intent_match]\ncases:\n  - {id: a, turns: [x], expected_intent: NOPE}\n",
+            "expected_intent",
+        ),
         ("scorers: [intent_match]\ncases:\n  - {id: a, turns: [x], typo: 1}\n", "typo"),
-        ("scorers: [made_up]\ncases:\n  - {id: a, turns: [x], expected_intent: FAQ}\n",
-         "unknown scorer"),
+        (
+            "scorers: [made_up]\ncases:\n  - {id: a, turns: [x], expected_intent: FAQ}\n",
+            "unknown scorer",
+        ),
         ("scorers: [intent_match]\ncases:\n  - {id: a, turns: [x]}\n", "needs expected_intent"),
-        ("scorers: [intent_match]\ncases:\n  - {id: a, turns: [], expected_intent: FAQ}\n",
-         "turns"),
-        ("scorers: [intent_match]\ncases:\n"
-         "  - {id: a, turns: [x], expected_intent: FAQ}\n"
-         "  - {id: a, turns: [y], expected_intent: FAQ}\n", "Duplicate case id"),
+        (
+            "scorers: [intent_match]\ncases:\n  - {id: a, turns: [], expected_intent: FAQ}\n",
+            "turns",
+        ),
+        (
+            "scorers: [intent_match]\ncases:\n"
+            "  - {id: a, turns: [x], expected_intent: FAQ}\n"
+            "  - {id: a, turns: [y], expected_intent: FAQ}\n",
+            "Duplicate case id",
+        ),
         ("scorers: [intent_match]\ncases: [\n", "cannot read"),
         # A repeated key would silently drop the first list of checks.
-        ("scorers: [intent_match]\ncases:\n  - id: a\n    turns: [x]\n    expected_intent: FAQ\n"
-         "    must_not_contain: [one]\n    must_not_contain: [two]\n", "cannot read"),
+        (
+            "scorers: [intent_match]\ncases:\n  - id: a\n    turns: [x]\n    expected_intent: FAQ\n"
+            "    must_not_contain: [one]\n    must_not_contain: [two]\n",
+            "cannot read",
+        ),
         # A sequence as a key (`? [a, b]`) is refused, not a TypeError traceback.
         ("scorers: [intent_match]\ncases:\n  - id: a\n    ? [x, y]\n    : z\n", "cannot read"),
     ],
@@ -112,3 +124,80 @@ def test_core_suite_covers_every_intent_and_faq_grounding():
     for case in suite.cases:
         if case.expected_intent in ("BOOK_APPOINTMENT", "RESCHEDULE", "CANCEL"):
             assert "no_false_confirmation" in case.scorers, case.id
+
+
+def test_calendar_defaults_to_busy_and_must_be_a_known_mode(tmp_path):
+    path = write_suite(
+        tmp_path,
+        "scorers: [intent_match]\ncases:\n"
+        "  - {id: a, turns: [x], expected_intent: FAQ}\n"
+        "  - {id: b, turns: [x], expected_intent: FAQ, calendar: down}\n",
+    )
+    first, second = load_suite(path, known_scorers=KNOWN).cases
+    assert (first.calendar, second.calendar) == ("busy", "down")
+    path = write_suite(
+        tmp_path,
+        "scorers: [intent_match]\ncases:\n"
+        "  - {id: a, turns: [x], expected_intent: FAQ, calendar: gone}\n",
+    )
+    with pytest.raises(SuiteError, match="calendar"):
+        load_suite(path, known_scorers=KNOWN)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        "",  # neither
+        ", expected_times: ['14:00'], no_times: true",  # both
+        ", expected_times: ['2pm']",  # not HH:MM
+    ],
+    ids=["neither", "both", "bad-format"],
+)
+def test_offers_real_times_needs_exactly_one_of_expected_times_and_no_times(tmp_path, fields):
+    header = SUITE_YAML.split("metrics:")[0]
+    metrics = "metrics:\n  - {scorer: offers_real_times, label: real times}\n"
+    path = write_suite(
+        tmp_path,
+        f"scorers: [offers_real_times]\ncases:\n  - {{id: a, turns: [x]{fields}}}\n",
+        header + metrics,
+    )
+    with pytest.raises(SuiteError):
+        load_suite(path, known_scorers=KNOWN)
+
+
+def test_forbidden_tools_add_the_tools_not_used_scorer(tmp_path):
+    path = write_suite(
+        tmp_path,
+        "scorers: [intent_match]\ncases:\n"
+        "  - {id: a, turns: [x], expected_intent: FAQ, forbidden_tools: [check_availability]}\n",
+    )
+    (loaded,) = load_suite(path, known_scorers=KNOWN).cases
+    assert loaded.scorers == ("intent_match", "tools_not_used")
+
+
+def test_availability_suite_covers_the_slice_10_behaviors():
+    suite = load_suite("availability", known_scorers=KNOWN)
+    tags = {tag for c in suite.cases for tag in c.tags}
+    assert {
+        "relative-date",
+        "part-of-day",
+        "wanted-time",
+        "closed",
+        "fully-booked",
+        "calendar-down",
+        "calendar-disconnected",
+        "ambiguous-service",
+        "stt",
+        "slang",
+        "must-not-use",
+        "confirmation-pressure",
+    } <= tags
+    assert len([c for c in suite.cases if "smoke" in c.tags]) == 5
+    modes = {c.calendar for c in suite.cases}
+    assert modes == {"busy", "open", "fully_booked", "down", "disconnected"}
+    # Offering times is not booking: nothing here may claim a booking without a tool.
+    assert all("no_false_confirmation" in c.scorers for c in suite.cases)
+    # A case either lists the real free times or says none may be offered.
+    for c in suite.cases:
+        if "offers_real_times" in c.scorers:
+            assert bool(c.expected_times) != c.no_times, c.id

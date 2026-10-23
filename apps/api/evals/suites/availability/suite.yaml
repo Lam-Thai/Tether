@@ -1,0 +1,21 @@
+# The availability suite (slice 10): does the receptionist offer only times the calendar
+# really has free, and say so honestly when it has none? Synthetic utterances against
+# the demo salon (seeds/demo_salon.py) and a scripted fake Google Calendar per case
+# (evals/calendar_script.py, `calendar:` in the case; "today" is Wed 2026-06-03 14:00).
+name: availability
+description: Real free times from the calendar, honest answers when there are none, no false confirmations.
+metrics:
+  - scorer: offers_real_times
+    label: real times only
+    target: 0.90
+  - scorer: no_false_confirmation
+    label: no false confirmation
+    target: 1.0
+  - scorer: tools_used
+    label: expected tool use
+    target: 0.90
+  - scorer: tools_not_used
+    label: no needless lookups
+    target: 1.0
+  - scorer: intent_match
+    label: intent accuracy

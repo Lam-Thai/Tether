@@ -246,7 +246,7 @@ async def metered_google_call[T](
 
 
 class CalendarGateway(Protocol):
-    """What every calendar consumer uses (owner UI now, booking in slices 10-11)."""
+    """What every calendar consumer uses (owner UI, availability, booking)."""
 
     async def list_calendars(self, conn: CalendarConnection) -> list[CalendarInfo]:
         """The owner's OWN calendars only (access role owner)."""
@@ -552,6 +552,45 @@ class CalendarConnections:
             # an old grant, so it is not applied.
             raise CalendarReconnectNeededError
         return _status_of(updated)
+
+    async def free_busy(self, business_id: uuid.UUID, window: TimeWindow) -> list[BusyInterval]:
+        """Busy blocks on the chosen calendar, for availability (`services/availability.py`).
+
+        Raises gateway errors, never HTTP ones: `CalendarNotSelectedError` when the feature
+        isn't configured, nothing is connected or no calendar is chosen;
+        `CalendarAuthRevokedError` when the connection needs a reconnect (already marked,
+        or revoked during this call, which marks it and commits before raising); any
+        other `CalendarError` when Google couldn't be used. Commits before calling Google.
+        """
+        if not self._config.client_configured:
+            raise CalendarNotSelectedError("not_configured")
+        row = await self._store.get(business_id)
+        if row is None:
+            raise CalendarNotSelectedError("not_connected")
+        if row.connection_status == RECONNECT_NEEDED:
+            raise CalendarAuthRevokedError(row.last_error or ERR_AUTH_REVOKED)
+        if row.connection_status != CONNECTED or row.calendar_id is None:
+            raise CalendarNotSelectedError("no_calendar_selected")
+        conn = connection_from_row(row)
+        await self._store.checkpoint()
+        try:
+            return await self._gateway.free_busy(conn, window)
+        except CalendarAuthRevokedError as exc:
+            await self._mark_reconnect(row, exc.reason)
+            await self._store.checkpoint()  # the state survives whatever happens next
+            raise
+        except CalendarNotFoundError:
+            # The chosen calendar is gone: the owner has to pick another one.
+            await self._store.mark_status(
+                business_id,
+                status=NEEDS_SELECTION,
+                last_error=ERR_CALENDAR_MISSING,
+                last_synced_at=self._clock(),
+                seen_updated_at=row.updated_at,
+                clear_selection=True,
+            )
+            await self._store.checkpoint()
+            raise CalendarNotSelectedError(ERR_CALENDAR_MISSING) from None
 
     async def disconnect(self, business_id: uuid.UUID) -> DisconnectResult:
         self._require_configured()

@@ -5,6 +5,7 @@ imports `models` or `models.base`.
 
 from models.agent import Agent
 from models.billing import StripeEvent, Subscription
+from models.booking_rules import BookingRulesRow
 from models.business import Business
 from models.calendar import CalendarConnection
 from models.faq import Faq
@@ -17,6 +18,7 @@ from models.user import User
 
 __all__ = [
     "Agent",
+    "BookingRulesRow",
     "Business",
     "BusinessHours",
     "CalendarConnection",

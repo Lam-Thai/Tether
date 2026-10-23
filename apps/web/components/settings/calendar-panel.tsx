@@ -15,6 +15,7 @@ import {
   type CalendarStatusResult,
 } from "@/lib/api/client";
 import { Dialog } from "@/components/agent/faq-dialog";
+import { AvailabilityPreview } from "@/components/settings/availability-preview";
 import { calendarMessage, GOOGLE_PERMISSIONS_URL, SESSION_EXPIRED } from "@/components/settings/calendar-messages";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -242,6 +243,20 @@ function CalendarWorkspace({ initial }: { initial: CalendarStatus }) {
           )}
         </CardContent>
       </Card>
+
+      {current.status === "connected" ? (
+        <AvailabilityPreview />
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle as="h2">Preview availability</CardTitle>
+            <CardDescription>
+              Connect a calendar and choose which one to use first. Then you can preview the times the
+              receptionist would offer.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
 
       <DisconnectDialog open={confirming} onClose={() => setConfirming(false)} onDone={disconnected} />
     </div>

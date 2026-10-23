@@ -10,22 +10,29 @@ holds.
 """
 
 import secrets
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import cast
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.booking_rules import default_booking_rules
 from core.config import parse_token_keys, settings
 from core.db import get_session
+from core.directory import SqlDirectoryStore
 from core.usage import get_usage_guard
 from integrations.google_calendar import GoogleCalendarApi, HttpGoogleCalendarApi
 from repositories.calendar import SqlCalendarStore
+from services.availability import AvailabilityService
+from services.booking_rules import BookingRules
 from services.calendar import (
     CalendarConfig,
     CalendarConnections,
     CalendarNotConfiguredError,
     GoogleCalendarGateway,
 )
+from services.directory import BusinessDirectory
 from services.oauth_state import OAuthStateSigner
 from services.token_vault import TokenVault
 from services.usage import UsageGuard
@@ -106,3 +113,18 @@ def get_calendar_connections(
         usage=usage,
         config=config,
     )
+
+
+def get_clock() -> Callable[[], datetime]:
+    """ "Now" for availability; a dependency so tests can pin it."""
+    return lambda: datetime.now(UTC)
+
+
+def get_availability_service(
+    session: AsyncSession = Depends(get_session),
+    connections: CalendarConnections = Depends(get_calendar_connections),
+    booking_defaults: BookingRules = Depends(default_booking_rules),
+    clock: Callable[[], datetime] = Depends(get_clock),
+) -> AvailabilityService:
+    directory = BusinessDirectory(SqlDirectoryStore(session), clock, booking_defaults)
+    return AvailabilityService(directory, connections)

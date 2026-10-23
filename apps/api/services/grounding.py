@@ -21,6 +21,20 @@ or disabled the fact since).
   stated in an FAQ answer retrieved this turn. Compared as numbers: $40 is
   40.00, 90 minutes is 1.5 hours.
 
+- Clock times, every intent. Each time of day in the reply ("2:30 PM", "14:30",
+  "2pm", "noon", "two thirty", "half past two", "at 2", "9-5") must be a start
+  time of the LAST slot offer `check_availability` made this turn (a later offer
+  replaces an earlier one, so a time is only ever valid for the date and service
+  it was offered for). With no offer this turn, a reply may repeat a start time of
+  the offer the customer heard last turn (`earlier_offer_times`, the saved
+  `offered_slots`), and an hours, FAQ or location reply (`HOURS_TIME_INTENTS`)
+  that doesn't use offer wording ("available", "book", "works", ...) may state
+  opening or closing times shown this turn or times in an FAQ answer retrieved
+  this turn. Intent is the model's word, so an hours reply that offers a time is
+  held to the slots like a booking one. A time without am/pm counts if either
+  reading is allowed. A miss is `unverified_time`, which the engine answers with
+  one regeneration and then the availability fallback.
+
 Amount detection is deliberately narrow, so clock times ("9:00", "10 AM"),
 dates, phone numbers, street numbers and ages are never amounts: money is a
 number next to a currency symbol, an ISO code or a currency word; a duration
@@ -34,6 +48,7 @@ not wording.
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import time
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
@@ -54,6 +69,16 @@ ACCEPTED_SOURCES: Mapping[str, frozenset[SourceKind]] = {
     "PRICE_INQUIRY": frozenset({"service", "faq"}),
 }
 GROUNDED_INTENTS = frozenset(ACCEPTED_SOURCES)
+# Replies that offer or move an appointment: they may name only offered slot times.
+BOOKING_INTENTS = frozenset({"BOOK_APPOINTMENT", "RESCHEDULE"})
+# Replies that may quote opening/closing and FAQ times (when they don't offer a time).
+HOURS_TIME_INTENTS = frozenset({"BUSINESS_HOURS", "FAQ", "LOCATION"})
+UNVERIFIED_TIME = "unverified_time"
+# Wording that offers, accepts or proposes a time: such a reply is held to the slots.
+_OFFER_WORDING = re.compile(
+    r"(?i:\b(?:availab\w*|book\w*|appointments?|slots?|reserv\w*|works?|"
+    r"see\s+you|i\s+have|i\s+can|how\s+about|fit\s+you|squeeze)\b)"
+)
 _NO_SERVICE_DURATIONS = frozenset({"LOCATION", "BUSINESS_HOURS"})
 
 
@@ -69,12 +94,25 @@ class Evidence:
     # Intents this result verified have no single answer, so the reply may cite
     # nothing (a service lookup that found nothing, or several candidates).
     unresolved: frozenset[str] = frozenset()
+    # Local start times of the slots offered to the customer (`check_availability`).
+    # Non-empty means "this is an offer": it replaces any earlier offer this turn.
+    slot_times: frozenset[time] = frozenset()
+    # Local opening and closing times of hours shown to the model.
+    hour_times: frozenset[time] = frozenset()
 
 
 class TurnEvidence:
     """Everything one turn's reply may rely on. Built fresh for every turn."""
 
-    def __init__(self, *, hours_listed: bool) -> None:
+    def __init__(
+        self,
+        *,
+        hours_listed: bool,
+        hour_times: Iterable[time] = (),
+        earlier_offer_times: Iterable[time] = (),
+    ) -> None:
+        """`hour_times`: opening and closing times of the hours already in the prompt.
+        `earlier_offer_times`: start times of the offer the customer heard last turn."""
         self._sources: dict[str, SourceKind] = {BUSINESS_PROFILE: "business_profile"}
         if hours_listed:
             self._sources[BUSINESS_HOURS] = "business_hours"
@@ -82,6 +120,9 @@ class TurnEvidence:
         self._prices: set[Decimal] = set()
         self._durations: set[Decimal] = set()
         self._unresolved: set[str] = set()
+        self._slot_times: set[time] = set()
+        self._hour_times: set[time] = set(hour_times)
+        self._earlier_offer_times: set[time] = set(earlier_offer_times)
 
     def add_faq(self, snippet: FaqSnippet) -> None:
         self._sources[str(snippet.id).lower()] = "faq"
@@ -93,6 +134,9 @@ class TurnEvidence:
         self._prices.update(evidence.prices)
         self._durations.update(Decimal(minutes) for minutes in evidence.durations)
         self._unresolved.update(evidence.unresolved)
+        if evidence.slot_times:
+            self._slot_times = set(evidence.slot_times)  # the latest offer wins
+        self._hour_times.update(evidence.hour_times)
 
     def kind_of(self, source: str) -> SourceKind | None:
         return self._sources.get(source.strip().lower())
@@ -108,7 +152,27 @@ class TurnEvidence:
         exempt = turn.intent in self._unresolved and not (self._prices or self._durations)
         if accepted is not None and not kinds & accepted and not exempt:
             return "unsupported_source" if cited else "missing_sources"
-        return self._amount_problem(turn.response_text, turn.intent)
+        return self._amount_problem(turn.response_text, turn.intent) or self._time_problem(turn)
+
+    def _time_problem(self, turn: AgentTurn) -> str | None:
+        mentioned = clock_times(turn.response_text)
+        if not mentioned:
+            return None
+        if self._slot_times:
+            allowed = set(self._slot_times)
+        else:
+            allowed = set(self._earlier_offer_times)
+            if turn.intent in HOURS_TIME_INTENTS and not _OFFER_WORDING.search(turn.response_text):
+                allowed |= self._hour_times
+                allowed |= {
+                    reading
+                    for answer in self._faq_answers
+                    for readings in clock_times(answer)
+                    for reading in readings
+                }
+        if any(not readings & allowed for readings in mentioned):
+            return UNVERIFIED_TIME
+        return None
 
     def _amount_problem(self, text: str, intent: str) -> str | None:
         money = money_amounts(text)
@@ -288,3 +352,203 @@ def _word_value(text: str) -> int:
         elif word in _WORD_VALUES:
             total += _WORD_VALUES[word]
     return total
+
+
+# --- Clock-time detection ------------------------------------------------------
+#
+# Strict on purpose: a time this misses is a time the guard can't check, so new
+# phrasings are added here, not left to the prompt. A false positive only costs a
+# regeneration (or the availability fallback).
+
+_HOUR_WORDS = {word: n for n, word in enumerate(_UNITS[:12], start=1)}
+_HOUR_WORD = rf"(?:{_alternation(_HOUR_WORDS)})"
+_HOUR_DIGITS = r"(?:1[0-2]|0?[1-9])"
+_HOUR = rf"(?:{_HOUR_DIGITS}|{_HOUR_WORD})"
+_MERIDIEM = r"(?P<ap>[ap])\.?\s?m\b\.?"
+_OCLOCK = r"o['’]?\s?clock\b"
+_MINUTE_WORD = rf"(?:oh[\s-](?:{_ONE_TO_NINE})|{_SMALL})"
+_NOT_A_TIME_AFTER = (
+    r"(?:%|percent|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?"
+    r"|people|persons?|guests?|dollars?|bucks|euros?|pounds?|spots?|slots?|openings?)"
+)
+_RANGE_JOIN = r"\s*(?:-|–|—|to|until|till|and|or)\s*"
+# Words that make a bare "9" in "9 to 5" a time.
+_RANGE_LEAD = r"(?:from|between|open|opens|opening|hours?|available|free|at)"
+
+
+def _end(name: str) -> str:
+    """One end of a range: an hour, optional :mm, optional am/pm (own group names)."""
+    return (
+        rf"(?P<{name}>{_HOUR})(?::(?P<{name}m>[0-5]\d))?"
+        rf"(?:\s?(?P<{name}ap>[ap])\.?\s?m\b\.?)?"
+    )
+
+
+# Order matters, like the amounts: specific forms first, each match masked before the next.
+_TIME_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # "from 9 to 5", "open 9-5", "between 2 and 4:30", "2-4 pm" (both ends are times)
+    (
+        re.compile(
+            rf"(?i:\b{_RANGE_LEAD}\s+{_end('h')}{_RANGE_JOIN}{_end('k')}\b"
+            rf"(?![:.,]?\d)(?!\s?{_NOT_A_TIME_AFTER}\b))"
+        ),
+        "range",
+    ),
+    (
+        re.compile(
+            rf"(?i:(?<![\d:.,])\b(?P<h>{_HOUR_DIGITS})(?::(?P<hm>[0-5]\d))?{_RANGE_JOIN}"
+            rf"(?P<k>{_HOUR_DIGITS})(?::(?P<km>[0-5]\d))?\s?(?P<kap>[ap])\.?\s?m\b\.?)"
+        ),
+        "range",
+    ),
+    # "14:30", "2:30", "2:30 pm"
+    (
+        re.compile(
+            rf"(?i:(?<![\d:])(?P<h>[01]?\d|2[0-3]):(?P<m>[0-5]\d)(?![\d:])(?:\s?{_MERIDIEM})?)"
+        ),
+        "digits",
+    ),
+    # "2.30pm", "2.30 p.m." (a dot only with am/pm, so prices and decimals never match)
+    (
+        re.compile(rf"(?i:(?<![\d.,$€£¥])\b(?P<h>{_HOUR_DIGITS})\.(?P<m>[0-5]\d)\s?{_MERIDIEM})"),
+        "digits",
+    ),
+    # "14h30", "2h30"
+    (re.compile(r"(?i:(?<![\d.,])\b(?P<h>[01]?\d|2[0-3])h(?P<m>[0-5]\d)\b)"), "digits"),
+    # "half past 2", "quarter to three pm", "twenty past two", "10 minutes to 4",
+    # "quarter of three"
+    (
+        re.compile(
+            rf"(?i:\b(?P<q>half|(?:a\s+)?quarter|{_MINUTE_WORD}(?:\s+minutes?)?"
+            rf"|[1-5]?\d\s+minutes?)\s+(?P<dir>past|after|to|till|before|of)\s+"
+            rf"(?P<h>{_HOUR})\b(?:\s?{_MERIDIEM})?(?![\s-]?{_NOT_A_TIME_AFTER}\b))"
+        ),
+        "relative",
+    ),
+    # "half two" (British: 2:30)
+    (re.compile(rf"(?i:\bhalf\s+(?P<h>{_HOUR})\b(?![\s-]?{_NOT_A_TIME_AFTER}\b))"), "half"),
+    # "2pm", "2 p.m.", "2 o'clock"
+    (re.compile(rf"(?i:(?<![\d:.,])\b(?P<h>{_HOUR_DIGITS})\s?(?:{_MERIDIEM}|{_OCLOCK}))"), "hour"),
+    # "two thirty pm", "three o'clock", "four pm"
+    (
+        re.compile(
+            rf"(?i:\b(?P<h>{_HOUR_WORD})(?:[\s-](?P<mw>{_MINUTE_WORD}))?\s?(?:{_MERIDIEM}|{_OCLOCK}))"
+        ),
+        "words",
+    ),
+    # "two thirty", "four fifteen": a voice reply's usual form, without am/pm
+    (
+        re.compile(
+            rf"(?i:\b(?P<h>{_HOUR_WORD})[\s-](?P<mw>fifteen|thirty|forty[\s-]five"
+            rf"|oh[\s-](?:{_ONE_TO_NINE})|ten|twenty|forty|fifty)\b(?![\s-]{_NOT_A_TIME_AFTER}\b))"
+        ),
+        "words",
+    ),
+    # "2 in the afternoon", "eight tonight", "9 this morning", "2ish"
+    (
+        re.compile(
+            rf"(?i:\b(?P<h>{_HOUR})(?:\s?-?ish\b|\s+(?:in\s+the|this)\s+"
+            rf"(?P<part>morning|afternoon|evening)\b|\s+(?P<night>tonight)\b))"
+        ),
+        "part",
+    ),
+    (re.compile(r"(?i:\b(?:noon|midday)\b)"), "noon"),
+    (re.compile(r"(?i:\bmidnight\b)"), "midnight"),
+    # "at 14", "at 1430": a 24-hour time after "at"
+    (
+        re.compile(
+            r"(?i:\bat\s+(?P<h>1[3-9]|2[0-3])(?P<m>[0-5]\d)?\b"
+            r"|\bat\s+(?P<h2>[01]\d)(?P<m2>[0-5]\d)\b)"
+        ),
+        "military",
+    ),
+    # "at 2", "around two", "by 3": a bare hour after "at" (or a time-ish preposition),
+    # at the end of a phrase or before a word that follows a time ("at 2 on Friday"),
+    # never an address ("at 1 Main St")
+    (
+        re.compile(
+            rf"(?i:\b(?:at|around|by|before|after|until|till)\s+(?P<h>{_HOUR})\b(?![:.,]?\d)"
+            r"(?=\s*(?:$|[.,;:!?)\-–—]|(?:on|or|and|today|tomorrow|tonight|this|next|then"
+            r"|sharp|works|would|is|if|in|for|that|with|instead)\b)))"
+        ),
+        "hour",
+    ),
+)
+
+
+def clock_times(text: str) -> list[frozenset[time]]:
+    """Every time of day in `text`, each as its possible readings: one with am/pm or a
+    24-hour value, two for a 12-hour time without am/pm ("2:30" is 02:30 or 14:30).
+    A range ("9-5", "from 2 to 4 pm") is two times."""
+    found: list[frozenset[time]] = []
+    for pattern, form in _TIME_PATTERNS:
+        for match in pattern.finditer(text):
+            found.extend(readings for readings in _readings(match, form) if readings)
+        text = pattern.sub(lambda m: " " * len(m.group(0)), text)
+    return found
+
+
+def _readings(match: re.Match[str], form: str) -> list[frozenset[time]]:
+    if form == "noon":
+        return [frozenset({time(12, 0)})]
+    if form == "midnight":
+        return [frozenset({time(0, 0)})]
+    groups = match.groupdict()
+    if form == "military":
+        hour, minute = groups.get("h") or groups["h2"], groups.get("m") or groups.get("m2") or "0"
+        return [frozenset({time(int(hour), int(minute))})] if int(hour) < 24 else []
+    if form == "half":
+        return [_reading(groups["h"], 30, "")]
+    if form == "part":
+        part = (groups.get("part") or ("evening" if groups.get("night") else "")).lower()
+        return [_reading(groups["h"], 0, "" if not part else ("a" if part == "morning" else "p"))]
+    if form == "range":
+        # An end without its own am/pm takes the other end's ("2-4 pm"), else both readings.
+        shared = groups.get("kap") or groups.get("hap") or ""
+        return [
+            _reading(groups["h"], int(groups.get("hm") or 0), groups.get("hap") or shared),
+            _reading(groups["k"], int(groups.get("km") or 0), groups.get("kap") or shared),
+        ]
+    hour_text, meridiem = groups["h"], groups.get("ap") or ""
+    if form == "digits":
+        return [_reading(hour_text, int(groups["m"]), meridiem, twenty_four=True)]
+    if form == "words" and groups.get("mw"):
+        return [_reading(hour_text, _minute_value(groups["mw"]), meridiem)]
+    if form == "relative":
+        lead = re.sub(r"\s+minutes?$", "", groups["q"].lower()).removeprefix("a ").strip()
+        offset = {"half": 30, "quarter": 15}.get(lead)
+        if offset is None:
+            offset = int(lead) if lead.isdigit() else _minute_value(lead)
+        if not 0 < offset < 60:
+            return []
+        if groups["dir"].lower() in ("to", "till", "before", "of"):
+            hour = _hour_value(hour_text)
+            return [_reading(str((hour - 1) or 12), 60 - offset, meridiem)]
+        return [_reading(hour_text, offset, meridiem)]
+    return [_reading(hour_text, 0, meridiem)]
+
+
+def _hour_value(text: str) -> int:
+    return int(text) if text.isdigit() else _HOUR_WORDS[text.lower()]
+
+
+def _reading(
+    hour_text: str, minute: int, meridiem: str, *, twenty_four: bool = False
+) -> frozenset[time]:
+    hour, meridiem = _hour_value(hour_text), meridiem.lower()
+    if minute > 59:
+        return frozenset()
+    if twenty_four and not meridiem and (hour == 0 or 12 < hour < 24):
+        return frozenset({time(hour, minute)})  # unambiguous 24-hour time
+    if hour == 0 or hour > 12:
+        return frozenset()  # "13 pm" is not a time
+    if meridiem:
+        return frozenset({time(hour % 12 + (12 if meridiem == "p" else 0), minute)})
+    return frozenset({time(hour % 12, minute), time(hour % 12 + 12, minute)})
+
+
+def _minute_value(text: str) -> int:
+    words = re.split(r"[-\s]+", text.lower())
+    if words[0] == "oh":
+        return _WORD_VALUES.get(words[-1], 60)
+    return _word_value(text)

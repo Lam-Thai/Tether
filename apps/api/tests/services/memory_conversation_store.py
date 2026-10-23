@@ -92,6 +92,9 @@ class MemoryStore:
     async def checkpoint(self):
         self.calls.append("checkpoint")
 
+    async def rollback(self):
+        self.calls.append("rollback")
+
     @asynccontextmanager
     async def savepoint(self):
         self.calls.append("savepoint")

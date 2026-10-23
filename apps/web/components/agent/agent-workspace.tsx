@@ -2,12 +2,14 @@ import Link from "next/link";
 
 import type {
   AgentResult,
+  BookingRulesResult,
   BusinessHoursResult,
   BusinessResult,
   FaqListResult,
   ServiceListResult,
 } from "@/lib/api/client";
 import { AgentBuilder } from "@/components/agent/agent-builder";
+import { BookingRulesEditor } from "@/components/agent/booking-rules-editor";
 import { BusinessInfoForm } from "@/components/agent/business-info-form";
 import { FaqManager } from "@/components/agent/faq-manager";
 import { HoursEditor } from "@/components/agent/hours-editor";
@@ -29,6 +31,7 @@ export function AgentWorkspace({
   business,
   services,
   hours,
+  bookingRules,
 }: {
   agent: AgentResult;
   chat: ChatLoad;
@@ -36,6 +39,7 @@ export function AgentWorkspace({
   business: BusinessResult;
   services: ServiceListResult;
   hours: BusinessHoursResult;
+  bookingRules: BookingRulesResult;
 }) {
   switch (agent.kind) {
     case "ok":
@@ -49,6 +53,7 @@ export function AgentWorkspace({
               <FaqManager result={faqs} />
               <ServicesManager result={services} />
               <HoursEditor result={hours} />
+              <BookingRulesEditor result={bookingRules} />
             </div>
             <div className="min-w-0 lg:sticky lg:top-6">
               <TestChat agentName={agent.data.name} chat={chat} />

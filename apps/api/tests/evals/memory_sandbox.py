@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from core.retry import RetryPolicy
 from core.tenant import Tenant
+from evals.cases import CalendarMode
 from evals.playback import CaseEnv, Operation
 from evals.runner import SandboxSpec
 from evals.sandbox import EVAL_NOW, eval_usage_limits
@@ -91,7 +92,7 @@ class MemorySandbox:
             self.closed = True
 
     @asynccontextmanager
-    async def case(self, llm: LLMClient) -> AsyncIterator[CaseEnv]:
+    async def case(self, llm: LLMClient, calendar: CalendarMode = "busy") -> AsyncIterator[CaseEnv]:
         if self.fail_cases > 0:
             self.fail_cases -= 1
             raise RuntimeError("sandbox broke")

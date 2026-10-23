@@ -22,7 +22,7 @@ copied from real customers.
 
 from collections.abc import Hashable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -37,6 +37,12 @@ CaseId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
 Utterance = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 Phrase = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Tag = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9_-]{0,31}$")]
+ClockTime = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
+
+# The scripted Google Calendar a case runs against (`evals/sandbox.py`):
+# open (nothing busy), busy (a realistic partly booked week), fully_booked (every open
+# hour taken), down (Google fails every call), disconnected (no connection row).
+CalendarMode = Literal["open", "busy", "fully_booked", "down", "disconnected"]
 
 
 class SuiteError(ValueError):
@@ -54,6 +60,14 @@ class EvalCase(BaseModel):
     must_contain: tuple[Phrase, ...] = ()
     must_not_contain: tuple[Phrase, ...] = ()
     tags: tuple[Tag, ...] = ()
+    # For `tools_not_used` (added automatically): none of these may be called (any status).
+    forbidden_tools: tuple[str, ...] = ()
+    calendar: CalendarMode = "busy"
+    # For `offers_real_times`: local HH:MM starts the scripted calendar really has free
+    # (what `check_availability` could offer). None: not used.
+    expected_times: tuple[ClockTime, ...] | None = None
+    # For `offers_real_times`: the reply may state no time of day at all.
+    no_times: bool = False
     # Filled from the case file's `scorers`; a case may add its own.
     scorers: tuple[str, ...] = ()
 
@@ -145,6 +159,8 @@ def load_suite(name_or_path: str | Path, *, known_scorers: frozenset[str]) -> Su
             raise SuiteError(f"{path.name}: {exc}") from exc
         for case in parsed.cases:
             implied = ("tools_used",) if case.expected_tools is not None else ()
+            if case.forbidden_tools:
+                implied = (*implied, "tools_not_used")
             scorers = tuple(dict.fromkeys((*parsed.scorers, *case.scorers, *implied)))
             cases.append(case.model_copy(update={"scorers": scorers}))
 
@@ -168,6 +184,10 @@ def _check(suite: Suite, known_scorers: frozenset[str]) -> None:
             raise SuiteError(f"{case.id}: unknown scorer(s) {sorted(unknown)}.")
         if "intent_match" in case.scorers and case.expected_intent is None:
             raise SuiteError(f"{case.id}: intent_match needs expected_intent.")
+        if "offers_real_times" in case.scorers and bool(case.expected_times) == case.no_times:
+            raise SuiteError(
+                f"{case.id}: offers_real_times needs expected_times or no_times (not both)."
+            )
     used = {scorer for case in suite.cases for scorer in case.scorers}
     for metric in suite.metrics:
         if metric.scorer not in known_scorers:
