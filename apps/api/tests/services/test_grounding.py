@@ -1,6 +1,7 @@
 """The grounding guard at its boundary: amount detection and `TurnEvidence.problem`. Pure."""
 
 import uuid
+from datetime import time
 from decimal import Decimal
 
 import pytest
@@ -11,8 +12,10 @@ from services.grounding import (
     BUSINESS_HOURS,
     BUSINESS_PROFILE,
     GROUNDED_INTENTS,
+    UNVERIFIED_TIME,
     Evidence,
     TurnEvidence,
+    clock_times,
     duration_minutes,
     grounding_problem,
     money_amounts,
@@ -110,7 +113,9 @@ def test_grounded_intents_are_the_fact_stating_ones():
 
 
 def test_business_profile_is_always_citable_and_business_hours_only_when_listed():
-    listed, unlisted = TurnEvidence(hours_listed=True), TurnEvidence(hours_listed=False)
+    # The prompt's hours (10:00-16:00) also make their opening and closing times quotable.
+    listed = TurnEvidence(hours_listed=True, hour_times={time(10, 0), time(16, 0)})
+    unlisted = TurnEvidence(hours_listed=False)
     where = _turn("We're at 1 Main St.", intent="LOCATION", sources=[BUSINESS_PROFILE])
     hours = _turn("Open 10 to 4.", intent="BUSINESS_HOURS", sources=[" Business_Hours "])
 
@@ -227,3 +232,189 @@ def test_durations_in_location_and_hours_replies_are_not_service_durations(inten
 
 def test_an_iso_code_glued_to_the_number_is_still_money():
     assert money_amounts("It's EUR40 or USD45.50.") == _d("40", "45.50")
+
+
+# --- Clock-time detection ----------------------------------------------------
+
+
+def _t(*readings: tuple[int, int]) -> frozenset[time]:
+    return frozenset(time(h, m) for h, m in readings)
+
+
+def _either(hour: int, minute: int = 0) -> frozenset[time]:
+    """A 12-hour time without am/pm: the morning and the afternoon reading."""
+    return _t((hour % 12, minute), (hour % 12 + 12, minute))
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("2:30 PM", [_t((14, 30))], id="digits-pm"),
+        pytest.param("14:30", [_t((14, 30))], id="24-hour"),
+        pytest.param("2:30", [_either(2, 30)], id="digits-no-meridiem-both-readings"),
+        pytest.param("2pm", [_t((14, 0))], id="hour-pm"),
+        pytest.param("2 p.m.", [_t((14, 0))], id="dotted-pm"),
+        pytest.param("12 pm", [_t((12, 0))], id="12-pm-is-noon"),
+        pytest.param("12 am", [_t((0, 0))], id="12-am-is-midnight"),
+        pytest.param("noon", [_t((12, 0))], id="noon"),
+        pytest.param("midday", [_t((12, 0))], id="midday"),
+        pytest.param("midnight", [_t((0, 0))], id="midnight"),
+        pytest.param("two thirty", [_either(2, 30)], id="words-two-thirty"),
+        pytest.param("four fifteen pm", [_t((16, 15))], id="words-with-pm"),
+        pytest.param("three o'clock", [_either(3)], id="oclock"),
+        pytest.param("half past two", [_either(2, 30)], id="half-past"),
+        pytest.param("quarter past 3 pm", [_t((15, 15))], id="quarter-past-pm"),
+        pytest.param("quarter to three", [_either(2, 45)], id="quarter-to"),
+        pytest.param("quarter to one", [_either(12, 45)], id="quarter-to-one-wraps-to-12"),
+        pytest.param("at 2", [_either(2)], id="bare-at-hour"),
+        pytest.param("at two on Friday", [_either(2)], id="bare-at-word-before-day"),
+        pytest.param(
+            "We have 2:00 PM, 3:30 PM or 4 PM.",
+            [_t((14, 0)), _t((15, 30)), _t((16, 0))],
+            id="list-of-slots",
+        ),
+        pytest.param(
+            "We open at 9:00 and close at 17:00.", [_either(9), _t((17, 0))], id="hours-sentence"
+        ),
+        pytest.param("Open 9 AM to 5 PM.", [_t((9, 0)), _t((17, 0))], id="am-pm-range"),
+        pytest.param("2.30pm", [_t((14, 30))], id="dot-with-pm"),
+        pytest.param("twenty past two", [_either(2, 20)], id="words-past"),
+        pytest.param("ten to three pm", [_t((14, 50))], id="words-to-pm"),
+        pytest.param("10 minutes to 4", [_either(3, 50)], id="digit-minutes-to"),
+        pytest.param("Open from 9 until 5", [_either(9), _either(5)], id="bare-range-from"),
+        pytest.param("We're open 9-5", [_either(9), _either(5)], id="bare-range-dash"),
+        pytest.param("between 2 and 4:30", [_either(2), _either(4, 30)], id="between-range"),
+        pytest.param("2-4 pm", [_t((14, 0)), _t((16, 0))], id="range-shares-pm"),
+        pytest.param("open 9am-5pm", [_t((9, 0)), _t((17, 0))], id="range-own-meridiems"),
+    ],
+)
+def test_clock_times_reads_each_time_as_its_possible_readings(text, expected):
+    assert sorted(clock_times(text), key=sorted) == sorted(expected, key=sorted)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("$40.00", id="price"),
+        pytest.param("$12.50", id="price-12-50"),
+        pytest.param("12,50 €", id="euro-price"),
+        pytest.param("90 minutes", id="duration"),
+        pytest.param("1 hour 30 minutes", id="compound-duration"),
+        pytest.param("+1 (312) 847-1928", id="phone"),
+        pytest.param("We're at 1 Main St.", id="address-at"),
+        pytest.param("We're at 5 Oak Ave", id="address-at-5"),
+        pytest.param("12 Elm St", id="address-number"),
+        pytest.param("2026-10-09", id="iso-date"),
+        pytest.param("Friday the 10th", id="ordinal-date"),
+        pytest.param("at 2 people", id="party-size"),
+        pytest.param("two fifteen-minute slots", id="slot-count"),
+        pytest.param("We have 2 openings", id="openings"),
+        pytest.param("I am here", id="am-is-not-a-meridiem"),
+        pytest.param("25:00", id="not-a-24-hour-time"),
+        pytest.param("It takes 45 minutes, so 2 hours.", id="durations-sentence"),
+        pytest.param("1:1 session", id="ratio"),
+        pytest.param("a 2 hour slot", id="hour-slot-length"),
+        pytest.param("7 days a week", id="days-a-week"),
+        pytest.param("a 2-3 day wait", id="range-of-days"),
+        pytest.param("ages 5 to 12", id="age-range"),
+        pytest.param("$2.30 pm", id="price-then-pm"),
+        pytest.param("2.5 hours", id="decimal-duration"),
+        pytest.param("2-3 people", id="party-range"),
+    ],
+)
+def test_clock_times_ignores_what_is_not_a_time_of_day(text):
+    assert clock_times(text) == []
+
+
+def test_each_time_is_read_once():
+    assert len(clock_times("See you at 2:30 PM, or at 3 pm.")) == 2
+
+
+# --- Clock times in the guard --------------------------------------------------
+
+
+def test_only_offered_slot_times_may_be_stated():
+    evidence = TurnEvidence(hours_listed=True)
+    evidence.add(Evidence(slot_times=_t((14, 0), (15, 30))))
+
+    ok = _turn("I have 2:00 PM or 3:30 PM.", intent="BOOK_APPOINTMENT")
+    assert grounding_problem(ok, evidence) is None
+    wrong = _turn("I have 4:00 PM.", intent="BOOK_APPOINTMENT")
+    assert grounding_problem(wrong, evidence) == UNVERIFIED_TIME == "unverified_time"
+    # One good time does not excuse a bad one.
+    mixed = _turn("I have 2 PM or 5 PM.", intent="BOOK_APPOINTMENT")
+    assert grounding_problem(mixed, evidence) == "unverified_time"
+    # A reply with no time at all is fine.
+    assert grounding_problem(_turn("Which day suits you?"), evidence) is None
+
+
+def test_an_ambiguous_time_passes_when_either_reading_is_offered():
+    evidence = TurnEvidence(hours_listed=False)
+    evidence.add(Evidence(slot_times=_t((14, 30))))
+    assert grounding_problem(_turn("How about 2:30?"), evidence) is None
+    assert grounding_problem(_turn("How about two thirty?"), evidence) is None
+    assert grounding_problem(_turn("How about 3:30?"), evidence) == "unverified_time"
+
+
+def test_a_time_with_nothing_offered_and_no_hours_is_unverified():
+    evidence = TurnEvidence(hours_listed=False)
+    assert grounding_problem(_turn("See you at 2 PM."), evidence) == "unverified_time"
+
+
+def test_a_non_booking_intent_may_state_hours_when_nothing_was_offered():
+    evidence = TurnEvidence(hours_listed=True, hour_times=_t((9, 0), (17, 0)))
+    evidence.add(Evidence(hour_times=_t((10, 0))))
+    sources = [BUSINESS_HOURS]
+
+    both = _turn("We open at 9 AM and close at 5 PM.", intent="BUSINESS_HOURS", sources=sources)
+    assert grounding_problem(both, evidence) is None
+    later = _turn("Saturday we open at 10:00 AM.", intent="BUSINESS_HOURS", sources=sources)
+    assert grounding_problem(later, evidence) is None
+    wrong = _turn("We close at 6 PM.", intent="BUSINESS_HOURS", sources=sources)
+    assert grounding_problem(wrong, evidence) == "unverified_time"
+
+
+@pytest.mark.parametrize("intent", ["BOOK_APPOINTMENT", "RESCHEDULE"])
+def test_booking_intents_may_never_state_hour_or_faq_times(intent):
+    evidence = TurnEvidence(hours_listed=True, hour_times=_t((9, 0), (17, 0)))
+    evidence.add_faq(_faq("Walk-ins are welcome until 3 PM."))
+    for text in ("We open at 9 AM.", "We close at 5 PM.", "Walk-ins until 3 PM."):
+        assert grounding_problem(_turn(text, intent=intent), evidence) == "unverified_time", text
+
+
+def test_a_non_booking_intent_may_state_a_time_from_a_retrieved_faq():
+    evidence = TurnEvidence(hours_listed=False)
+    snippet = _faq("Walk-ins are welcome until 3 PM.")
+    evidence.add_faq(snippet)
+    ok = _turn("Walk-ins are welcome until 3 PM.", intent="FAQ", sources=[str(snippet.id)])
+    assert grounding_problem(ok, evidence) is None
+    other = _turn("Walk-ins are welcome until 4 PM.", intent="FAQ", sources=[str(snippet.id)])
+    assert grounding_problem(other, evidence) == "unverified_time"
+
+
+def test_a_faq_time_is_not_allowed_before_that_faq_was_retrieved():
+    evidence = TurnEvidence(hours_listed=False)
+    reply = _turn("Walk-ins are welcome until 3 PM.", intent="UNKNOWN")
+    assert grounding_problem(reply, evidence) == "unverified_time"
+
+
+@pytest.mark.parametrize("intent", ["BUSINESS_HOURS", "FAQ", "UNKNOWN", "BOOK_APPOINTMENT"])
+def test_once_slots_are_offered_hour_and_faq_times_are_no_longer_allowed(intent):
+    evidence = TurnEvidence(hours_listed=True, hour_times=_t((9, 0), (17, 0)))
+    snippet = _faq("Walk-ins are welcome until 3 PM.")
+    evidence.add_faq(snippet)
+    evidence.add(Evidence(slot_times=_t((14, 0))))
+    sources = {"BUSINESS_HOURS": [BUSINESS_HOURS], "FAQ": [str(snippet.id)]}.get(intent, [])
+
+    opening = _turn("We open at 9 AM.", intent=intent, sources=sources)
+    assert grounding_problem(opening, evidence) == "unverified_time"
+    from_faq = _turn("Until 3 PM.", intent=intent, sources=sources)
+    assert grounding_problem(from_faq, evidence) == "unverified_time"
+    # The offered slot itself still passes.
+    assert grounding_problem(_turn("2 PM works.", intent=intent, sources=sources), evidence) is None
+
+
+def test_the_amount_check_runs_before_the_time_check():
+    evidence = TurnEvidence(hours_listed=False)
+    reply = _turn("A cut is $99 at 2 PM.")
+    assert grounding_problem(reply, evidence) == "unverified_amount"

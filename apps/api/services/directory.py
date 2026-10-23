@@ -22,7 +22,10 @@ customer may be told:
   means the owner never saved hours, which is not "closed".
 - `schedule(tenant, start, days)`: `opening_window` for consecutive local
   dates (the prompt's 7-day block and `get_business_info`).
-- `today(tenant)`: the current local date in the business's timezone.
+- `today(tenant)` / `now(tenant)`: the current local date / time in the business's
+  timezone.
+- `booking_rules(tenant)`: slot interval, minimum notice, booking horizon and buffer;
+  the settings defaults until the owner saves their own.
 
 Booking (Slices 10-11) depends on this module and never reads the tables
 directly. Every read is scoped by `tenant`, never by an id from the model or
@@ -44,6 +47,7 @@ from core.tenant import Tenant
 from models.hours import BusinessHours
 from models.service import Service
 from services.agent import require_business
+from services.booking_rules import BookingRules
 
 MAX_SCHEDULE_DAYS = 31
 MAX_QUERY_CHARS = 100
@@ -162,12 +166,23 @@ class DirectoryStore(Protocol):
         """All stored weekday rows (0 or 7), Monday first."""
         ...
 
+    async def get_booking_rules(self, business_id: uuid.UUID) -> BookingRules | None:
+        """The owner's saved rules, or None when they never saved any."""
+        ...
+
 
 class BusinessDirectory:
-    def __init__(self, store: DirectoryStore, clock: Callable[[], datetime]) -> None:
-        """`clock` returns an aware "now" (UTC); injected so tests can pin dates."""
+    def __init__(
+        self,
+        store: DirectoryStore,
+        clock: Callable[[], datetime],
+        booking_defaults: BookingRules | None = None,
+    ) -> None:
+        """`clock` returns an aware "now" (UTC); injected so tests can pin dates.
+        `booking_defaults` (from settings) apply until the owner saves their own rules."""
         self._store = store
         self._clock = clock
+        self._booking_defaults = booking_defaults
 
     def profile(self, tenant: Tenant) -> BusinessProfile:
         business = require_business(tenant)
@@ -217,8 +232,20 @@ class BusinessDirectory:
         return [_window(week, zone, start + timedelta(days=n)) for n in range(count)]
 
     def today(self, tenant: Tenant) -> date:
+        return self.now(tenant).date()
+
+    def now(self, tenant: Tenant) -> datetime:
         business = require_business(tenant)
-        return self._clock().astimezone(ZoneInfo(business.timezone)).date()
+        return self._clock().astimezone(ZoneInfo(business.timezone))
+
+    async def booking_rules(self, tenant: Tenant) -> BookingRules:
+        business = require_business(tenant)
+        stored = await self._store.get_booking_rules(business.id)
+        if stored is not None:
+            return stored
+        if self._booking_defaults is None:
+            raise RuntimeError("BusinessDirectory needs booking defaults to answer booking rules.")
+        return self._booking_defaults
 
 
 def _fact(row: Service) -> ServiceFact:

@@ -11,6 +11,8 @@ row handed back always reflects the database, never a stale identity-map copy.
 """
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from sqlalchemy import delete, func, update
@@ -245,3 +247,9 @@ class SqlCalendarStore:
     async def checkpoint(self) -> None:
         """Commits, so no transaction is open across a provider call or a failing request."""
         await self._session.commit()
+
+    @asynccontextmanager
+    async def savepoint(self) -> AsyncIterator[None]:
+        """A nested unit of work: a DB error inside rolls back only what ran inside it."""
+        async with self._session.begin_nested():
+            yield

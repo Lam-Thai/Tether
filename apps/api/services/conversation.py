@@ -29,10 +29,20 @@ conversation correct:
   retrieved in this turn. Otherwise the reply is replaced by the no-info
   fallback and the interaction is flagged for a human. Earlier turns never
   ground a later one: the owner may have edited or disabled the fact since.
+- Time guard (same module). Every time of day in the reply must be a slot
+  `check_availability` offered this turn (or, outside booking replies and when
+  nothing was offered, an opening or closing time shown this turn). A miss gets
+  one regeneration with a correction note (sharing the single retry with
+  invalid output), then `availability_fallback` and a human flag. So the agent
+  never names a time the calendar and the hours don't support.
+- Tool side effects apply only to a reply that is shown: `ToolResult.state`
+  (the offered slots) is merged into `interactions.state`, and a tool's
+  `requires_human` flags the interaction. A fallback reply clears those keys
+  instead, since the customer never heard the offer.
 - The fallback lines below (invalid output, provider, `quota_fallback`,
-  `no_info_fallback`) are the only agent text that does not come from the
-  model or from the owner's greeting. The last two point the customer to the
-  business's own contact details and never promise a callback.
+  `no_info_fallback`, `availability_fallback`) are the only agent text that does
+  not come from the model or from the owner's greeting. The last three point the
+  customer to the business's own contact details and never promise a callback.
 - Every model call goes through `UsageGuard.metered`, inside `retry_bounded`
   (so each attempt is metered). A reached limit means no model call at all:
   the turn answers with the quota fallback, which points the customer to the
@@ -56,8 +66,8 @@ import logging
 import uuid
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, time
 from typing import Any, Literal, Protocol
 
 from pydantic import ValidationError
@@ -78,8 +88,9 @@ from models.business import Business
 from models.interaction import Interaction, InteractionMessage
 from schemas.agent_turn import AgentTurn
 from services.agent import AgentStore, load_agent, require_business
-from services.directory import BusinessDirectory
-from services.grounding import TurnEvidence, grounding_problem
+from services.availability_tool import earlier_offer
+from services.directory import BusinessDirectory, Open
+from services.grounding import UNVERIFIED_TIME, TurnEvidence, grounding_problem
 from services.knowledge import FaqSnippet
 from services.prompt_builder import (
     BusinessFacts,
@@ -111,12 +122,21 @@ MAX_TOOL_ROUNDS = 3
 MAX_FAQS_PER_TURN = 10
 # Local dates from today in the prompt's BUSINESS HOURS; later ones via `get_business_info`.
 PROMPT_HOURS_DAYS = 7
+# Added to the request when a reply named a time that wasn't offered (one regeneration).
+TIME_CORRECTION = (
+    "Your previous reply named a time of day that is not one of the offered_times a "
+    "check_availability result gave in this turn. Rewrite the reply. Name only offered_times "
+    "exactly, or no time at all; to refer to a time the customer asked for that is not "
+    'offered, say "that time" instead of repeating it. If you need other times, call '
+    "check_availability again."
+)
 
 FailureKind = Literal[
     "invalid_output",
     "provider_unavailable",
     "usage_limited",
     "ungrounded",
+    "unverified_time",
     "tool_rounds_exhausted",
 ]
 
@@ -148,6 +168,21 @@ def no_info_fallback(business: Business) -> str:
             f"You can reach the team at {' or '.join(contacts)}."
         )
     return f"Sorry, I don't have that information. Please contact {business.name} directly."
+
+
+def availability_fallback(business: Business) -> str:
+    """The fixed reply when the agent named a time it couldn't verify, twice. No time
+    is offered, and the customer is pointed to the business's own contacts."""
+    contacts = [c for c in (business.phone, business.contact_email) if c]
+    if contacts:
+        return (
+            "Sorry, I can't confirm available times right now. "
+            f"You can reach the team at {' or '.join(contacts)}."
+        )
+    return (
+        "Sorry, I can't confirm available times right now. "
+        f"Please contact {business.name} directly."
+    )
 
 
 class InteractionNotFoundError(AppError):
@@ -232,8 +267,11 @@ class _Outcome:
     fallback_text: str
     failures: list[dict[str, str]]
     usage_limited: bool = False
-    # The fallback told the customer to reach the team: flag the interaction for a human.
+    # The fallback told the customer to reach the team, or a tool said a person is
+    # needed: flag the interaction for a human.
     needs_human: bool = False
+    # `ToolResult.state` from this turn's tools (applied only if the reply is shown).
+    state_updates: dict[str, Any] = field(default_factory=dict)
 
 
 def _view(message: InteractionMessage, state: dict[str, Any] | None) -> MessageView:
@@ -420,11 +458,13 @@ class ConversationEngine:
             contact_email=profile.contact_email,
             currency=profile.currency,
         )
-        today = self._directory.today(tenant)
+        now = self._directory.now(tenant)
+        today = now.date()
         hours = HoursFacts(
             today=today,
             weekly=await self._directory.weekly_hours(tenant),
             upcoming=await self._directory.schedule(tenant, today, PROMPT_HOURS_DAYS),
+            now=now.time().replace(tzinfo=None),
         )
         return facts, hours
 
@@ -474,16 +514,45 @@ class ConversationEngine:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._turn_timeout
         failures: list[dict[str, str]] = []
-        executor = ToolExecutor(self._tools, self._store, isolate=self._store.savepoint)
+        executor = ToolExecutor(
+            self._tools,
+            self._store,
+            isolate=self._store.savepoint,
+            checkpoint=self._store.checkpoint,
+        )
         tool_context = ToolContext(tenant=tenant, interaction_id=interaction_id)
         # FAQs retrieved this turn, by id (FAQ RESULTS), and everything the reply may
         # cite or quote: listed hours that are in the prompt, plus what tools verified.
         retrieved: dict[str, FaqSnippet] = {}
-        evidence = TurnEvidence(hours_listed=context.hours is not None and context.hours.listed)
+        evidence = TurnEvidence(
+            hours_listed=context.hours is not None and context.hours.listed,
+            hour_times=_prompt_hour_times(context),
+            earlier_offer_times=earlier_offer(context.state)[0],
+        )
         results: list[ToolOutcome] = []
+        state_updates: dict[str, Any] = {}
+        tool_needs_human = False
         rounds = 0
         retried = False
-        request = build(context)
+        current = context
+        request = build(current)
+
+        def finish(
+            turn: AgentTurn | None,
+            text: str = "",
+            *,
+            needs_human: bool = False,
+            usage_limited: bool = False,
+        ) -> _Outcome:
+            return _Outcome(
+                turn,
+                text,
+                failures,
+                usage_limited=usage_limited,
+                needs_human=needs_human or tool_needs_human,
+                state_updates=state_updates,
+            )
+
         try:
             while True:
                 try:
@@ -491,26 +560,22 @@ class ConversationEngine:
                         reply = await self._call_model(request, business.id, interaction_id)
                 except LimitExceededError as exc:
                     failures.append(_failure("usage_limited", f"{exc.kind.value}:{exc.scope}"))
-                    return _Outcome(
-                        None,
-                        quota_fallback(business),
-                        failures,
-                        usage_limited=True,
-                        needs_human=True,
+                    return finish(
+                        None, quota_fallback(business), usage_limited=True, needs_human=True
                     )
                 except LLMUnavailableError:
                     failures.append(_failure("provider_unavailable", "llm_unavailable"))
-                    return _Outcome(None, PROVIDER_FALLBACK, failures)
+                    return finish(None, PROVIDER_FALLBACK)
                 except UsageUnavailableError:
                     # Limits can't be checked: fail closed, no model call.
                     failures.append(_failure("provider_unavailable", "usage_unavailable"))
-                    return _Outcome(None, PROVIDER_FALLBACK, failures)
+                    return finish(None, PROVIDER_FALLBACK)
 
                 turn, reason = self._validate(reply.text)
                 if turn is None:
                     failures.append(_failure("invalid_output", reason))
                     if retried:
-                        return _Outcome(None, INVALID_OUTPUT_FALLBACK, failures)
+                        return finish(None, INVALID_OUTPUT_FALLBACK)
                     retried = True
                     if loop.time() >= deadline:
                         raise TimeoutError  # out of time: don't start a retry
@@ -519,13 +584,20 @@ class ConversationEngine:
                 if not turn.tool_calls:
                     problem = grounding_problem(turn, evidence)
                     if problem is None:
-                        return _Outcome(turn, "", failures)
+                        return finish(turn)
+                    if problem == UNVERIFIED_TIME:
+                        failures.append(_failure("unverified_time", problem))
+                        if retried or loop.time() >= deadline:
+                            return finish(None, availability_fallback(business), needs_human=True)
+                        retried = True
+                        request = build(replace(current, correction=TIME_CORRECTION))
+                        continue  # one regeneration, with the correction note
                     failures.append(_failure("ungrounded", problem))
-                    return _Outcome(None, no_info_fallback(business), failures, needs_human=True)
+                    return finish(None, no_info_fallback(business), needs_human=True)
 
                 if rounds == MAX_TOOL_ROUNDS:
                     failures.append(_failure("tool_rounds_exhausted", "max_tool_rounds"))
-                    return _Outcome(None, no_info_fallback(business), failures, needs_human=True)
+                    return finish(None, no_info_fallback(business), needs_human=True)
                 if loop.time() >= deadline:
                     raise TimeoutError  # out of time: don't start another round
 
@@ -541,17 +613,22 @@ class ConversationEngine:
                             retrieved[str(snippet.id)] = snippet
                             evidence.add_faq(snippet)
                     evidence.add(outcome.evidence)
-                request = build(
-                    replace(
-                        context,
-                        faqs=tuple(retrieved.values()),
-                        tool_results=tuple(results),
-                        tool_rounds_used=rounds,
-                    )
+                    if outcome.status == "succeeded":
+                        for key, value in outcome.state.items():
+                            # A later "nothing found" doesn't erase this turn's offer.
+                            if value is not None or state_updates.get(key) is None:
+                                state_updates[key] = value
+                        tool_needs_human = tool_needs_human or outcome.requires_human
+                current = replace(
+                    context,
+                    faqs=tuple(retrieved.values()),
+                    tool_results=tuple(results),
+                    tool_rounds_used=rounds,
                 )
+                request = build(current)
         except TimeoutError:
             failures.append(_failure("provider_unavailable", "turn_timeout"))
-            return _Outcome(None, PROVIDER_FALLBACK, failures)
+            return finish(None, PROVIDER_FALLBACK)
 
     def _validate(self, raw: str) -> tuple[AgentTurn | None, str]:
         try:
@@ -571,6 +648,8 @@ class ConversationEngine:
             failures = [*state.get("failures", []), *outcome.failures]
             state["failures"] = failures[-MAX_RECORDED_FAILURES:]
         if outcome.turn is None:
+            # The customer never heard what the tools found (e.g. offered slots).
+            state.update(dict.fromkeys(outcome.state_updates))
             state["fallback_messages"] = [*state.get("fallback_messages", []), reply_sequence]
             if outcome.needs_human:
                 # The customer was told to reach the team: flag it for a human.
@@ -586,8 +665,29 @@ class ConversationEngine:
             entities = dict(state.get("entities") or {})
             entities.update(outcome.turn.entities.model_dump(exclude_none=True))
             state["entities"] = entities
-            state["requires_human"] = outcome.turn.requires_human
+            state.update(outcome.state_updates)
+            state["requires_human"] = outcome.turn.requires_human or outcome.needs_human
         interaction.state = state
+
+
+def _prompt_hour_times(context: PromptContext) -> set[time]:
+    """Opening and closing times the prompt's BUSINESS HOURS states (weekly and the next
+    days, whose real local times can differ on a DST day)."""
+    if context.hours is None or not context.hours.listed:
+        return set()
+    times = {
+        moment
+        for day in context.hours.weekly
+        for moment in (day.opens_at, day.closes_at)
+        if moment is not None and not day.is_closed
+    }
+    for window in context.hours.upcoming:
+        if isinstance(window, Open):
+            times |= {
+                window.start.time().replace(tzinfo=None),
+                window.end.time().replace(tzinfo=None),
+            }
+    return times
 
 
 def _tone(value: str) -> Tone:

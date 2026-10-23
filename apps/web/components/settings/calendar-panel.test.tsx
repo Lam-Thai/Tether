@@ -9,6 +9,7 @@ const getCalendarConnectUrlMock = vi.fn();
 const listCalendarsMock = vi.fn();
 const selectCalendarMock = vi.fn();
 const disconnectCalendarMock = vi.fn();
+const listServicesMock = vi.fn();
 
 vi.mock("@clerk/nextjs", () => ({
   useAuth: () => ({ getToken: getTokenMock }),
@@ -19,6 +20,8 @@ vi.mock("@/lib/api/client", () => ({
   listCalendars: (...args: unknown[]) => listCalendarsMock(...args),
   selectCalendar: (...args: unknown[]) => selectCalendarMock(...args),
   disconnectCalendar: (...args: unknown[]) => disconnectCalendarMock(...args),
+  listServices: (...args: unknown[]) => listServicesMock(...args),
+  getAvailability: vi.fn(),
 }));
 
 import { CalendarPanel } from "./calendar-panel";
@@ -57,6 +60,7 @@ beforeEach(() => {
   listCalendarsMock.mockReset();
   selectCalendarMock.mockReset();
   disconnectCalendarMock.mockReset();
+  listServicesMock.mockReset().mockResolvedValue({ kind: "ok", data: { services: [], currency: "USD", max_services: 20 } });
   assignMock.mockReset();
   Object.defineProperty(window, "location", {
     configurable: true,
@@ -302,5 +306,17 @@ describe("CalendarPanel: reconnect needed", () => {
     expect(screen.queryByText(/^Connected/)).not.toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Reconnect" }));
     await waitFor(() => expect(assignMock).toHaveBeenCalledWith("https://accounts.google.com/auth"));
+  });
+});
+
+describe("CalendarPanel: availability preview", () => {
+  it("offers the preview only for a connected calendar", async () => {
+    const { unmount } = render(<CalendarPanel status={{ kind: "ok", data: connected }} />);
+    expect(await screen.findByText("No active services")).toBeInTheDocument();
+
+    unmount();
+    render(<CalendarPanel status={{ kind: "ok", data: status() }} />);
+    expect(screen.queryByText("No active services")).not.toBeInTheDocument();
+    expect(screen.getByText(/Connect a calendar and choose which one to use first/)).toBeInTheDocument();
   });
 });

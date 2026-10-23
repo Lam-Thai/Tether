@@ -1,5 +1,5 @@
 """Session-bound store and dependencies for the services catalog, the weekly hours and
-`services.directory.BusinessDirectory`.
+`services.directory.BusinessDirectory` (which also reads the booking rules).
 
 `SqlDirectoryStore` binds the `repositories` functions to one session and speaks the
 services' types (`services.hours.DayWindow`), which is why it lives in `core/` and not
@@ -14,12 +14,14 @@ from decimal import Decimal
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.booking_rules import SqlBookingRulesStore
 from core.config import settings
 from core.db import get_session
 from models.hours import BusinessHours
 from models.service import Service
 from repositories import hours as hours_repo
 from repositories import services as services_repo
+from services.booking_rules import BookingRules
 from services.hours import DayWindow
 
 
@@ -68,6 +70,9 @@ class SqlDirectoryStore:
 
     async def list_hours(self, business_id: uuid.UUID) -> Sequence[BusinessHours]:
         return await hours_repo.list_hours(self._session, business_id)
+
+    async def get_booking_rules(self, business_id: uuid.UUID) -> BookingRules | None:
+        return await SqlBookingRulesStore(self._session).get_booking_rules(business_id)
 
     async def replace_week(
         self, business_id: uuid.UUID, days: Sequence[DayWindow]

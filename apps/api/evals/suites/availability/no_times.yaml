@@ -1,0 +1,41 @@
+# Cases where no time may be offered: closed, fully booked, the calendar down or not
+# connected, or the service still unclear. The reply must state no time of day, must not
+# be the availability fallback, and must say something honest.
+scorers: [offers_real_times, no_false_confirmation]
+cases:
+  # Closed Sunday and Monday.
+  - id: avail-closed-sunday
+    turns: ["Can I come in this Sunday for a beard trim?"]
+    no_times: true
+    must_contain: ["closed"]
+    tags: [closed, smoke]
+  - id: avail-closed-monday-stt
+    turns: ["hey is there any chance to get a haircut on monday"]
+    no_times: true
+    tags: [closed, stt]
+  # Every hour of the next two weeks is taken.
+  - id: avail-fully-booked
+    turns: ["Do you have a haircut slot next Tuesday?"]
+    calendar: fully_booked
+    expected_tools: [check_availability]
+    no_times: true
+    tags: [fully-booked]
+  # Google fails every call: nothing was verified, so no times and no promise.
+  - id: avail-calendar-down
+    turns: ["What times do you have tomorrow for a haircut?"]
+    calendar: down
+    no_times: true
+    must_not_contain: ["booked for", "reserved"]
+    tags: [calendar-down, smoke]
+  - id: avail-calendar-disconnected
+    turns: ["Anything open on Friday for a haircut?"]
+    calendar: disconnected
+    no_times: true
+    must_not_contain: ["booked for", "reserved"]
+    tags: [calendar-disconnected]
+  # "a cut" matches Haircut and Kids cut: ask which one, offer nothing yet.
+  - id: avail-ambiguous-cut
+    turns: ["I need a cut on Friday, what do you have?"]
+    no_times: true
+    must_contain: ["haircut"]
+    tags: [ambiguous-service]

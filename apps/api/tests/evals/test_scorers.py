@@ -179,3 +179,66 @@ def test_tools_used_needs_each_expected_tool_to_succeed():
     assert not score("tools_used", expects, ANSWER).passed
     both = replace(ANSWER, operations=(SEARCH, SERVICES))
     assert score("tools_used", expects, both).passed
+
+
+def reply(text: str, **fields) -> PlayedTurn:
+    return replace(ANSWER, reply=text, operations=(), **fields)
+
+
+FRIDAY_TIMES = ("14:00", "14:15", "14:30", "14:45")
+
+
+class TestOffersRealTimes:
+    def offers(self, text: str, **fields):
+        return score("offers_real_times", case(expected_times=FRIDAY_TIMES, **fields), reply(text))
+
+    def none(self, text: str, **fields):
+        return score("offers_real_times", case(no_times=True, **fields), reply(text))
+
+    def test_real_times_pass_in_any_notation(self):
+        assert self.offers("I have 2:00 PM, 2:30pm or 14:45.").passed
+
+    def test_an_unfree_time_fails_even_beside_real_ones(self):
+        result = self.offers("I have 2:00 PM or 3:00 PM.")
+        assert not result.passed and "15:00" in result.detail
+
+    def test_a_time_without_am_pm_passes_when_one_reading_is_free(self):
+        assert self.offers("How about 2:30?").passed
+
+    def test_stating_no_time_fails_when_times_are_expected(self):
+        result = self.offers("Friday afternoon works, what time suits you?")
+        assert not result.passed and result.detail == "offered no time"
+
+    def test_the_availability_fallback_is_not_an_offer(self):
+        turn = reply("Sorry, I can't confirm available times right now.", fallback="availability")
+        result = score("offers_real_times", case(expected_times=FRIDAY_TIMES), turn)
+        assert not result.passed and "availability" in result.detail
+
+    def test_only_the_last_turn_counts(self):
+        early = reply("Is 9:00 AM good?")
+        result = score("offers_real_times", case(expected_times=FRIDAY_TIMES), early, reply("2 PM"))
+        assert result.passed
+
+    def test_no_times_case_passes_an_honest_reply_with_no_clock_time(self):
+        honest = self.none("We're closed on Sundays, but Tuesday is open.", must_contain=["closed"])
+        assert honest.passed
+
+    def test_no_times_case_fails_when_a_time_is_stated(self):
+        assert not self.none("We're closed, but 10 AM Saturday is open.").passed
+
+    def test_no_times_case_fails_on_the_availability_fallback(self):
+        turn = reply("Sorry, I can't confirm available times right now.", fallback="availability")
+        assert not score("offers_real_times", case(no_times=True), turn).passed
+
+    def test_no_times_case_checks_the_phrases(self):
+        assert not self.none("Nothing today.", must_contain=["closed"]).passed
+        assert not self.none("It is reserved for you.", must_not_contain=["reserved"]).passed
+
+
+class TestToolsNotUsed:
+    def test_fails_when_a_forbidden_tool_ran_in_any_status(self):
+        lookup = Operation("check_availability", "rejected", {})
+        turn = replace(ANSWER, operations=(lookup,))
+        fails = score("tools_not_used", case(forbidden_tools=("check_availability",)), turn)
+        assert not fails.passed and "check_availability" in fails.detail
+        assert score("tools_not_used", case(forbidden_tools=("check_availability",)), ANSWER).passed

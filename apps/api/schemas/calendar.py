@@ -4,8 +4,9 @@ Responses carry the connection's state and the chosen calendar's display name, n
 token, an authorization code, a scope string or a key id.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,3 +51,44 @@ class DisconnectRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     revoked: bool
+
+
+class SlotRead(BaseModel):
+    start: datetime  # aware, in the business timezone
+    end: datetime
+    label: str  # local "HH:MM", what the agent offers
+
+
+class AvailabilityServiceRead(BaseModel):
+    id: UUID
+    name: str
+    duration_minutes: int
+
+
+class AvailabilityRead(BaseModel):
+    """`GET /calendar/availability`: what the agent would see for one service and date."""
+
+    status: Literal["available", "no_availability", "calendar_unavailable"]
+    date: date
+    timezone: str
+    service: AvailabilityServiceRead
+    # Every free start that day ("available" only; empty otherwise).
+    slots: list[SlotRead] = Field(default_factory=list)
+    # The <= 3 the agent would offer with no preference.
+    offered: list[SlotRead] = Field(default_factory=list)
+    reason: (
+        Literal[
+            "past_date",
+            "beyond_horizon",
+            "closed",
+            "hours_not_set",
+            "service_too_long",
+            "no_time_left",
+            "too_soon",
+            "fully_booked",
+            "not_connected",
+            "reconnect_needed",
+            "unavailable",
+        ]
+        | None
+    ) = None

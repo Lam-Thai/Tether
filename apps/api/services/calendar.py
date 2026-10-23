@@ -20,9 +20,10 @@ import hashlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from core.errors import AppError
 from core.retry import RetryPolicy, retry_bounded
@@ -246,7 +247,7 @@ async def metered_google_call[T](
 
 
 class CalendarGateway(Protocol):
-    """What every calendar consumer uses (owner UI now, booking in slices 10-11)."""
+    """What every calendar consumer uses (owner UI, availability, booking)."""
 
     async def list_calendars(self, conn: CalendarConnection) -> list[CalendarInfo]:
         """The owner's OWN calendars only (access role owner)."""
@@ -401,6 +402,11 @@ class CalendarStore(Protocol):
         survives a request that then fails."""
         ...
 
+    def savepoint(self) -> AbstractAsyncContextManager[Any]:
+        """A nested unit of work: a DB error inside rolls back only its own work, so a
+        caller sharing the session (the conversation engine) can carry on."""
+        ...
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -552,6 +558,50 @@ class CalendarConnections:
             # an old grant, so it is not applied.
             raise CalendarReconnectNeededError
         return _status_of(updated)
+
+    async def free_busy(self, business_id: uuid.UUID, window: TimeWindow) -> list[BusyInterval]:
+        """Busy blocks on the chosen calendar, for availability (`services/availability.py`).
+
+        Raises gateway errors, never HTTP ones: `CalendarNotSelectedError` when the feature
+        isn't configured, nothing is connected or no calendar is chosen;
+        `CalendarAuthRevokedError` when the connection needs a reconnect (already marked,
+        or revoked during this call, which marks it and commits before raising); any
+        other `CalendarError` when Google couldn't be used. Commits before calling Google.
+        """
+        if not self._config.client_configured:
+            raise CalendarNotSelectedError("not_configured")
+        # Each DB step in its own savepoint: this runs inside a conversation turn, whose
+        # session must stay usable even if one of these statements fails.
+        async with self._store.savepoint():
+            row = await self._store.get(business_id)
+        if row is None:
+            raise CalendarNotSelectedError("not_connected")
+        if row.connection_status == RECONNECT_NEEDED:
+            raise CalendarAuthRevokedError(row.last_error or ERR_AUTH_REVOKED)
+        if row.connection_status != CONNECTED or row.calendar_id is None:
+            raise CalendarNotSelectedError("no_calendar_selected")
+        conn = connection_from_row(row)
+        await self._store.checkpoint()
+        try:
+            return await self._gateway.free_busy(conn, window)
+        except CalendarAuthRevokedError as exc:
+            async with self._store.savepoint():
+                await self._mark_reconnect(row, exc.reason)
+            await self._store.checkpoint()  # the state survives whatever happens next
+            raise
+        except CalendarNotFoundError:
+            # The chosen calendar is gone: the owner has to pick another one.
+            async with self._store.savepoint():
+                await self._store.mark_status(
+                    business_id,
+                    status=NEEDS_SELECTION,
+                    last_error=ERR_CALENDAR_MISSING,
+                    last_synced_at=self._clock(),
+                    seen_updated_at=row.updated_at,
+                    clear_selection=True,
+                )
+            await self._store.checkpoint()
+            raise CalendarNotSelectedError(ERR_CALENDAR_MISSING) from None
 
     async def disconnect(self, business_id: uuid.UUID) -> DisconnectResult:
         self._require_configured()

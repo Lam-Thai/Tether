@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 
 import {
   getAgent,
+  getBookingRules,
   getBusiness,
   getBusinessHours,
   getTestTranscript,
@@ -32,13 +33,14 @@ export default async function AgentPage({
   const { chat } = await searchParams;
   const chatId = typeof chat === "string" && UUID.test(chat) ? chat : null;
 
-  const [agent, transcript, faqs, business, services, hours] = await Promise.all([
+  const [agent, transcript, faqs, business, services, hours, bookingRules] = await Promise.all([
     getAgent(token),
     chatId ? getTestTranscript(token, chatId) : Promise.resolve(null),
     listFaqs(token),
     getBusiness(token),
     listServices(token),
     getBusinessHours(token),
+    getBookingRules(token),
   ]);
 
   if (agent.kind === "unauthorized") redirect("/sign-in");
@@ -46,8 +48,18 @@ export default async function AgentPage({
   if (faqs.kind === "unauthorized") redirect("/sign-in");
   if (faqs.kind === "subscription_required") redirect("/billing/plan");
   if (business.kind === "unauthorized") redirect("/sign-in");
-  if (services.kind === "unauthorized" || hours.kind === "unauthorized") redirect("/sign-in");
-  if (services.kind === "subscription_required" || hours.kind === "subscription_required") {
+  if (
+    services.kind === "unauthorized" ||
+    hours.kind === "unauthorized" ||
+    bookingRules.kind === "unauthorized"
+  ) {
+    redirect("/sign-in");
+  }
+  if (
+    services.kind === "subscription_required" ||
+    hours.kind === "subscription_required" ||
+    bookingRules.kind === "subscription_required"
+  ) {
     redirect("/billing/plan");
   }
 
@@ -83,6 +95,7 @@ export default async function AgentPage({
       business={business}
       services={services}
       hours={hours}
+      bookingRules={bookingRules}
     />
   );
 }
