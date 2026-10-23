@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -8,6 +9,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useSignUp } from "@clerk/nextjs/legacy";
 
 import { extractClerkMessage } from "@/components/auth/clerk-errors";
+import { signUpBlockedMessage, uncollectedFields } from "@/components/auth/clerk-status";
+import { OAuthButtons, type OAuthStrategy } from "@/components/auth/oauth-buttons";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError, FormError } from "@/components/ui/form-error";
@@ -20,11 +23,21 @@ import {
   type VerificationCodeValues,
 } from "@/lib/validation/auth";
 
+const SESSION_START_FAILED = (
+  <>
+    Your email is verified and your account is ready, but we couldn&apos;t sign you in.{" "}
+    <Link href="/sign-in" className="underline">
+      Sign in
+    </Link>{" "}
+    to continue.
+  </>
+);
+
 export function SignUpForm() {
   const { isLoaded, signUp, setActive } = useSignUp();
   const router = useRouter();
   const [pendingVerification, setPendingVerification] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<React.ReactNode>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const createForm = useForm<SignUpValues>({
@@ -60,6 +73,14 @@ export function SignUpForm() {
         return;
       }
 
+      // A code can't finish a sign-up that also needs a field this form never
+      // asks for (a Clerk dashboard setting), so don't send one.
+      const blocking = uncollectedFields(created.missingFields);
+      if (blocking.length > 0) {
+        setFormError(signUpBlockedMessage(blocking, false));
+        return;
+      }
+
       await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
       setPendingVerification(true);
     } catch (error) {
@@ -71,6 +92,25 @@ export function SignUpForm() {
     }
   }
 
+  async function onOAuth(strategy: OAuthStrategy): Promise<boolean> {
+    if (!isLoaded) {
+      return false;
+    }
+
+    setFormError(null);
+    try {
+      await signUp.authenticateWithRedirect({
+        strategy,
+        redirectUrl: "/sso-callback",
+        redirectUrlComplete: "/onboarding",
+      });
+      return true;
+    } catch (error) {
+      setFormError(extractClerkMessage(error, "Couldn't reach that sign-up provider. Please try again."));
+      return false;
+    }
+  }
+
   async function onVerify(values: VerificationCodeValues) {
     if (!isLoaded) {
       return;
@@ -79,20 +119,38 @@ export function SignUpForm() {
     setFormError(null);
     setIsSubmitting(true);
 
+    let sessionId: string;
     try {
       const result = await signUp.attemptEmailAddressVerification({ code: values.code });
 
-      if (result.status !== "complete" || !result.createdSessionId) {
-        setFormError("That code didn't work. Check your email and try again.");
+      if (result.status === "complete" && result.createdSessionId) {
+        sessionId = result.createdSessionId;
+      } else {
+        // Clerk accepted the code but wants a field this form doesn't collect:
+        // say so instead of blaming the code.
+        const blocking = uncollectedFields(result.missingFields);
+        setFormError(
+          blocking.length > 0
+            ? signUpBlockedMessage(blocking, true)
+            : "That code didn't work. Check your email and try again.",
+        );
+        setIsSubmitting(false);
         return;
       }
-
-      // Only navigate once Clerk confirms the session was created — never
-      // show a signed-up state before that's true.
-      await setActive({ session: result.createdSessionId });
-      router.push("/onboarding");
     } catch (error) {
       setFormError(extractClerkMessage(error, "That code didn't work. Check your email and try again."));
+      setIsSubmitting(false);
+      return;
+    }
+
+    // Only navigate once Clerk confirms the session is active — never show a
+    // signed-up state before that's true. The account already exists here, so
+    // a failure points to sign-in rather than to the code.
+    try {
+      await setActive({ session: sessionId });
+      router.push("/onboarding");
+    } catch {
+      setFormError(SESSION_START_FAILED);
     } finally {
       setIsSubmitting(false);
     }
@@ -141,9 +199,10 @@ export function SignUpForm() {
         <CardTitle as="h1">Create your account</CardTitle>
         <CardDescription>Set up Tether for your business.</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-4">
+        {formError && <FormError>{formError}</FormError>}
+        <OAuthButtons onSelect={onOAuth} disabled={isSubmitting} />
         <form className="flex flex-col gap-4" onSubmit={createForm.handleSubmit(onCreate)} noValidate>
-          {formError && <FormError>{formError}</FormError>}
 
           <div className="flex flex-col gap-2">
             <Label htmlFor="sign-up-email">Email</Label>
