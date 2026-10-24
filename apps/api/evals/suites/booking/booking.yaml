@@ -1,0 +1,69 @@
+# Every case: `books_correctly` (a confirmed booking exactly when and as expected) and
+# `no_false_confirmation` (never "you're booked" without a confirmed `create_booking`).
+# Request estimates count model calls: tool call(s) + final reply (+1 if it checks
+# availability first, +1 on a rare invalid-output retry).
+#
+# Every case of a run books into the SAME sandbox tenant, and the `bookings` table's
+# double-booking guard is real: a case that books must use a slot no other case books
+# (a 45-minute haircut at Friday 14:15 also blocks 14:45), or a later case gets
+# `slot_taken` for the wrong reason. Only `book-happy-path` books Friday afternoon.
+scorers: [books_correctly, no_false_confirmation]
+cases:
+  # Happy path. Friday 06-05 is free 14:00-15:30, so 2:15 PM is a real start.
+  # Expected requests: 2 (create_booking, reply), 3 with a check_availability first.
+  - id: book-happy-path
+    turns: ["Can you book me a haircut this Friday at 2:15 PM? My name is Alex."]
+    scorers: [intent_match]
+    expected_intent: BOOK_APPOINTMENT
+    expected_tools: [create_booking]
+    expect_booking: true
+    expected_start: "14:15"
+    expected_date: "2026-06-05"
+    tags: [happy-path, smoke]
+
+  # Slot taken: Friday 11:00 is busy (09:00-14:00). The reply offers the free starts.
+  # Expected requests: 2 (create_booking -> slot_taken, reply), 3 with a check first.
+  - id: book-slot-taken
+    turns: ["pls book me a haircut this friday at 11am, the name's Sam"]
+    scorers: [offers_real_times, intent_match]
+    expected_intent: BOOK_APPOINTMENT
+    expect_booking: false
+    expected_times: ["14:00", "14:15", "14:30", "14:45"]
+    tags: [slot-taken, slang, smoke]
+
+  # Calendar failure: free/busy works but creating the event fails every time. Saturday
+  # 06-06 is free 13:00-14:00 (a slot no other case books). Nothing may be called booked.
+  # Expected requests: 3 (create_booking -> booking_failed, possibly one more tool round,
+  # reply).
+  - id: book-calendar-failure
+    turns: ["Book a haircut for me on Saturday at 1 PM please, my name is Jordan."]
+    calendar: booking_fails
+    expected_tools: [create_booking]
+    expect_booking: false
+    expected_booking_result: booking_failed
+    tags: [calendar-failure, smoke]
+
+  # Ambiguous service: "cut" matches Haircut and Kids cut; the agent asks which.
+  # Expected requests: 2 (create_booking or get_services -> ambiguous, reply).
+  - id: book-ambiguous-service
+    turns: ["book me a cut friday at 2:15, I'm Alex"]
+    scorers: [intent_match]
+    expected_intent: BOOK_APPOINTMENT
+    expect_booking: false
+    tags: [ambiguous-service, smoke]
+
+  # Missing name: the agent must ask for it, not invent one. Expected requests: 1-2.
+  - id: book-missing-name
+    turns: ["can u book me a haircut friday at 2:15"]
+    scorers: [intent_match]
+    expected_intent: BOOK_APPOINTMENT
+    expect_booking: false
+    tags: [missing-name, smoke]
+
+  # A change no tool does yet: never claim a reschedule happened. Expected requests: 1-2.
+  - id: book-reschedule-not-claimed
+    turns: ["Hi, I'm Alex, can you move my Friday 2pm haircut to Saturday at 1pm?"]
+    scorers: [intent_match]
+    expected_intent: RESCHEDULE
+    expect_booking: false
+    tags: [reschedule, smoke]

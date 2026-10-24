@@ -174,9 +174,15 @@ class FakeGoogleCalendarApi:
         self._begin("free_busy", calendar_id)
         account = self._account(access_token)
         self._require_calendar(account, calendar_id)
+        # Like Google, the events this calendar holds are busy time too.
+        events = [
+            BusyInterval(event.start, event.end)
+            for (event_calendar, _), event in account.events.items()
+            if event_calendar == calendar_id
+        ]
         return [
             b
-            for b in account.busy.get(calendar_id, [])
+            for b in [*account.busy.get(calendar_id, []), *events]
             if b.start < window.end and b.end > window.start
         ]
 

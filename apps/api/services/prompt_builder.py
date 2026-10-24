@@ -46,6 +46,7 @@ from typing import Any, Literal
 from integrations.llm.port import ModelMessage, ModelRequest, ToolDeclaration
 from schemas.agent_turn import AgentTurn
 from services.availability_tool import CHECK_AVAILABILITY, earlier_offer
+from services.booking_tool import CREATE_BOOKING
 from services.business_tools import (
     GET_BUSINESS_INFO,
     GET_SERVICES,
@@ -139,6 +140,7 @@ def _rule_facts(tool_names: Collection[str], *, hours: bool) -> str:
     info = GET_BUSINESS_INFO in tool_names
     faq = SEARCH_FAQ in tool_names
     availability = CHECK_AVAILABILITY in tool_names
+    booking = CREATE_BOOKING in tool_names
     lookups = services or info or faq or availability
     places = ["BUSINESS FACTS"]
     if hours:
@@ -196,7 +198,35 @@ def _rule_facts(tool_names: Collection[str], *, hours: bool) -> str:
             "why in plain words (closed that day, fully booked, too far ahead) and offer to "
             'check another date. On "calendar_unavailable" say you can\'t check availability '
             "right now, offer no times, and give the phone or email in BUSINESS FACTS. "
-            "Offering times is not booking: never say an appointment is booked or held."
+            "Offering times is not booking: never say an appointment is booked or held"
+            + (
+                f" unless a {CREATE_BOOKING} result in this turn says confirmed."
+                if booking
+                else "."
+            )
+        )
+    if booking:
+        look.append(
+            "Booking: to book, you need the service, the date, one of the offered_times the "
+            "customer chose, and their name. Ask for one missing detail at a time (a phone "
+            "number only if they give one). Then call "
+            f"{CREATE_BOOKING} with exactly those values (start_time as HH:MM from "
+            'offered_times). Only a "confirmed" result means it is booked: then confirm the '
+            "service, day and time from its booking. When the time the customer asked for is "
+            'not free (not in offered_times, or "slot_taken"), never repeat it: say "that time '
+            'isn\'t available" and offer the offered_times instead (e.g. "Sorry, that time '
+            'isn\'t available. I have 2:00 or 2:30 PM."). On "invalid" explain the reason '
+            'in plain words (on missing_name, ask for their name). On "booking_failed" say you '
+            "couldn't complete the booking and nothing is booked, and give the phone or email "
+            "in BUSINESS FACTS."
+        )
+        look.append(
+            "Changing or cancelling an existing appointment (intent RESCHEDULE or CANCEL): you "
+            "can't do that yourself. Ask for their name and which appointment it is, set "
+            "requires_human to true, and say the team will need to make the change, giving "
+            "the phone or email in BUSINESS FACTS. Name no time of day in that reply, neither "
+            'the old one nor the new one they asked for (say "your Friday appointment"), and '
+            "never say it was changed or cancelled."
         )
     if faq:
         look.append(
@@ -435,10 +465,12 @@ def _state_section(context: PromptContext) -> str:
     ]
     _, offered = earlier_offer(context.state)
     if offered:
+        can_book = any(tool.name == CREATE_BOOKING for tool in context.tools)
         lines += [
             f"TIMES OFFERED IN YOUR LAST REPLY (local): {offered}. You may repeat one of",
             "these to confirm which the customer picked; call check_availability again",
-            "before saying it is still free, and never say it is booked.",
+            "before saying it is still free, and never say it is booked"
+            + (f" until {CREATE_BOOKING} says confirmed." if can_book else "."),
         ]
     return "\n".join(lines)
 

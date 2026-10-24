@@ -568,40 +568,33 @@ class CalendarConnections:
         or revoked during this call, which marks it and commits before raising); any
         other `CalendarError` when Google couldn't be used. Commits before calling Google.
         """
-        if not self._config.client_configured:
-            raise CalendarNotSelectedError("not_configured")
-        # Each DB step in its own savepoint: this runs inside a conversation turn, whose
-        # session must stay usable even if one of these statements fails.
-        async with self._store.savepoint():
-            row = await self._store.get(business_id)
-        if row is None:
-            raise CalendarNotSelectedError("not_connected")
-        if row.connection_status == RECONNECT_NEEDED:
-            raise CalendarAuthRevokedError(row.last_error or ERR_AUTH_REVOKED)
-        if row.connection_status != CONNECTED or row.calendar_id is None:
-            raise CalendarNotSelectedError("no_calendar_selected")
+        row = await self._chosen_calendar(business_id)
         conn = connection_from_row(row)
-        await self._store.checkpoint()
-        try:
-            return await self._gateway.free_busy(conn, window)
-        except CalendarAuthRevokedError as exc:
-            async with self._store.savepoint():
-                await self._mark_reconnect(row, exc.reason)
-            await self._store.checkpoint()  # the state survives whatever happens next
-            raise
-        except CalendarNotFoundError:
-            # The chosen calendar is gone: the owner has to pick another one.
-            async with self._store.savepoint():
-                await self._store.mark_status(
-                    business_id,
-                    status=NEEDS_SELECTION,
-                    last_error=ERR_CALENDAR_MISSING,
-                    last_synced_at=self._clock(),
-                    seen_updated_at=row.updated_at,
-                    clear_selection=True,
-                )
-            await self._store.checkpoint()
-            raise CalendarNotSelectedError(ERR_CALENDAR_MISSING) from None
+        return await self._on_chosen_calendar(row, lambda: self._gateway.free_busy(conn, window))
+
+    async def create_event(
+        self, business_id: uuid.UUID, draft: EventDraft, idempotency_key: str
+    ) -> CreatedEvent:
+        """Creates a booking's event on the chosen calendar (`services/booking.py`). The
+        Google event id is derived from `idempotency_key`, so a repeated call with the same
+        key returns the same event. Errors and commits exactly as `free_busy`."""
+        row = await self._chosen_calendar(business_id)
+        conn = connection_from_row(row)
+        return await self._on_chosen_calendar(
+            row, lambda: self._gateway.create_event(conn, draft, idempotency_key)
+        )
+
+    async def cancel_event(self, business_id: uuid.UUID, event_id: str) -> None:
+        """Deletes an event Tether created (booking compensation). As `free_busy`, except
+        that `CalendarNotFoundError` is raised as is: the event (or its calendar) is
+        already gone, which a caller undoing a booking counts as done."""
+        row = await self._chosen_calendar(business_id)
+        conn = connection_from_row(row)
+        await self._on_chosen_calendar(
+            row,
+            lambda: self._gateway.cancel_event(conn, event_id),
+            not_found_is_missing_calendar=False,
+        )
 
     async def disconnect(self, business_id: uuid.UUID) -> DisconnectResult:
         self._require_configured()
@@ -619,6 +612,56 @@ class CalendarConnections:
     def _require_configured(self) -> None:
         if not self._config.client_configured:
             raise CalendarNotConfiguredError
+
+    async def _chosen_calendar(self, business_id: uuid.UUID) -> CalendarRow:
+        """The connection row, if it can be used for availability or booking."""
+        if not self._config.client_configured:
+            raise CalendarNotSelectedError("not_configured")
+        # Each DB step in its own savepoint: this runs inside a conversation turn, whose
+        # session must stay usable even if one of these statements fails.
+        async with self._store.savepoint():
+            row = await self._store.get(business_id)
+        if row is None:
+            raise CalendarNotSelectedError("not_connected")
+        if row.connection_status == RECONNECT_NEEDED:
+            raise CalendarAuthRevokedError(row.last_error or ERR_AUTH_REVOKED)
+        if row.connection_status != CONNECTED or row.calendar_id is None:
+            raise CalendarNotSelectedError("no_calendar_selected")
+        return row
+
+    async def _on_chosen_calendar[T](
+        self,
+        row: CalendarRow,
+        call: Callable[[], Awaitable[T]],
+        *,
+        not_found_is_missing_calendar: bool = True,
+    ) -> T:
+        """Commits, then makes the gateway call. A revoked grant is marked
+        `reconnect_needed` and committed before re-raising; a missing calendar becomes
+        `needs_selection` + `calendar_missing` (raised as `CalendarNotSelectedError`)."""
+        await self._store.checkpoint()
+        try:
+            return await call()
+        except CalendarAuthRevokedError as exc:
+            async with self._store.savepoint():
+                await self._mark_reconnect(row, exc.reason)
+            await self._store.checkpoint()  # the state survives whatever happens next
+            raise
+        except CalendarNotFoundError:
+            if not not_found_is_missing_calendar:
+                raise
+            # The chosen calendar is gone: the owner has to pick another one.
+            async with self._store.savepoint():
+                await self._store.mark_status(
+                    row.business_id,
+                    status=NEEDS_SELECTION,
+                    last_error=ERR_CALENDAR_MISSING,
+                    last_synced_at=self._clock(),
+                    seen_updated_at=row.updated_at,
+                    clear_selection=True,
+                )
+            await self._store.checkpoint()
+            raise CalendarNotSelectedError(ERR_CALENDAR_MISSING) from None
 
     def _is_stale(self, row: CalendarRow) -> bool:
         if row.last_synced_at is None:

@@ -36,21 +36,34 @@ def _parser() -> argparse.ArgumentParser:
         prog="tether-eval", description="Run an eval suite against real Gemini."
     )
     parser.add_argument("--suite", default="core", help="suite name or directory (default: core)")
-    parser.add_argument("--tier", choices=("free", "paid"), default=None,
-                        help="Gemini API tier defaults (default: EVAL_TIER, else free)")
-    parser.add_argument("--max-requests", type=int, default=None,
-                        help="Gemini request budget for the run")
+    parser.add_argument(
+        "--tier",
+        choices=("free", "paid"),
+        default=None,
+        help="Gemini API tier defaults (default: EVAL_TIER, else free)",
+    )
+    parser.add_argument(
+        "--max-requests", type=int, default=None, help="Gemini request budget for the run"
+    )
     parser.add_argument("--rpm", type=float, default=None, help="model requests per minute")
     parser.add_argument("--concurrency", type=int, default=None, help="cases played at once")
-    parser.add_argument("--tag", action="append", default=[],
-                        help="only cases with this tag (repeatable)")
+    parser.add_argument(
+        "--tag", action="append", default=[], help="only cases with this tag (repeatable)"
+    )
     parser.add_argument("--reports-dir", type=Path, default=REPORTS_DIR)
-    parser.add_argument("--check", action="store_true",
-                        help="validate the suite and exit without calling the model")
-    parser.add_argument("--purge", action="store_true",
-                        help="delete eval tenants a killed run left behind, then exit")
-    parser.add_argument("--allow-remote-db", action="store_true",
-                        help="allow a DATABASE_URL that is not on this machine")
+    parser.add_argument(
+        "--check", action="store_true", help="validate the suite and exit without calling the model"
+    )
+    parser.add_argument(
+        "--purge",
+        action="store_true",
+        help="delete eval tenants a killed run left behind, then exit",
+    )
+    parser.add_argument(
+        "--allow-remote-db",
+        action="store_true",
+        help="allow a DATABASE_URL that is not on this machine",
+    )
     return parser
 
 

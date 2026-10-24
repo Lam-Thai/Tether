@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from api.v1.agent import router as agent_router
 from api.v1.billing import router as billing_router
 from api.v1.booking_rules import router as booking_rules_router
+from api.v1.bookings import router as bookings_router
 from api.v1.business import router as business_router
 from api.v1.calendar import router as calendar_router
 from api.v1.faqs import router as faqs_router
@@ -24,3 +25,4 @@ router.include_router(faqs_router)
 router.include_router(services_router)
 router.include_router(usage_router)
 router.include_router(calendar_router)
+router.include_router(bookings_router)

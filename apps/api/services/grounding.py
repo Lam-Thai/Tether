@@ -36,6 +36,15 @@ or disabled the fact since).
   reading is allowed. A miss is `unverified_time`, which the engine answers with
   one regeneration and then the availability fallback.
 
+- Booking claims, every intent. A reply that says an appointment was booked ("you're
+  all set", "I've booked you in", "your haircut is confirmed") is allowed only when
+  `create_booking` returned `confirmed` this turn (`Evidence.booking_confirmed`). A
+  claim that something was cancelled, rescheduled or moved is never allowed: no tool
+  does that yet (slice 13 escalates those requests). A miss is `unconfirmed_booking`,
+  which the engine answers with one regeneration and then the booking fallback.
+  Questions ("shall I book it?") and conditionals ("once you're booked") are not
+  claims, and neither is "that time is already booked" (someone else's booking).
+
 Amount detection is deliberately narrow, so clock times ("9:00", "10 AM"),
 dates, phone numbers, street numbers and ages are never amounts: money is a
 number next to a currency symbol, an ISO code or a currency word; a duration
@@ -75,6 +84,7 @@ BOOKING_INTENTS = frozenset({"BOOK_APPOINTMENT", "RESCHEDULE"})
 # Replies that may quote opening/closing and FAQ times (when they don't offer a time).
 HOURS_TIME_INTENTS = frozenset({"BUSINESS_HOURS", "FAQ", "LOCATION"})
 UNVERIFIED_TIME = "unverified_time"
+UNCONFIRMED_BOOKING = "unconfirmed_booking"
 # Wording that offers, accepts or proposes a time: such a reply is held to the slots.
 _OFFER_WORDING = re.compile(
     r"(?i:\b(?:availab\w*|book\w*|appointments?|slots?|reserv\w*|works?|"
@@ -103,6 +113,8 @@ class Evidence:
     retires_earlier_offer: bool = False
     # Local opening and closing times of hours shown to the model.
     hour_times: frozenset[time] = frozenset()
+    # `create_booking` returned `confirmed`: the reply may say the appointment is booked.
+    booking_confirmed: bool = False
 
 
 class TurnEvidence:
@@ -127,6 +139,7 @@ class TurnEvidence:
         self._slot_times: set[time] = set()
         self._hour_times: set[time] = set(hour_times)
         self._earlier_offer_times: set[time] = set(earlier_offer_times)
+        self._booking_confirmed = False
 
     def add_faq(self, snippet: FaqSnippet) -> None:
         self._sources[str(snippet.id).lower()] = "faq"
@@ -143,11 +156,15 @@ class TurnEvidence:
         if evidence.retires_earlier_offer:
             self._earlier_offer_times.clear()
         self._hour_times.update(evidence.hour_times)
+        self._booking_confirmed = self._booking_confirmed or evidence.booking_confirmed
 
     def kind_of(self, source: str) -> SourceKind | None:
         return self._sources.get(source.strip().lower())
 
     def problem(self, turn: AgentTurn) -> str | None:
+        for claim in booking_claims(turn.response_text):
+            if claim == "change" or not self._booking_confirmed:
+                return UNCONFIRMED_BOOKING
         cited = {source.strip().lower() for source in turn.sources}
         kinds = {self._sources.get(source) for source in cited}
         if None in kinds:
@@ -202,6 +219,80 @@ def grounding_problem(turn: AgentTurn, evidence: TurnEvidence) -> str | None:
 
 def _all(extract, texts: Iterable[str]) -> set[Decimal]:
     return {value for text in texts for value in extract(text)}
+
+
+# --- Booking-claim detection ---------------------------------------------------
+
+ClaimKind = Literal["booking", "change"]
+
+# Adverbs between the subject and the verb ("you're now all set", "I've gone ahead and
+# booked"). Not "not": "you're not booked yet" is no claim.
+_CLAIM_ADVERBS = r"(?:\s+(?:now|just|already|all|officially|successfully|gone\s+ahead\s+and))*"
+_BOOKED = r"(?:all\s+set|booked|confirmed|scheduled|reserved|locked\s+in|pencill?ed\s+in|set\s+up)"
+_CHANGED = r"(?:cancell?ed|rescheduled|moved)"
+# Conditionals and purposes are not claims ("once you're booked", "so you're all set").
+_NOT_AFTER = "".join(
+    rf"(?<!\b{word}\s)" for word in ("once", "when", "if", "until", "after", "before", "so")
+)
+_CLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # "you're booked", "you are all set", "you've been cancelled"
+    re.compile(
+        rf"{_NOT_AFTER}\byou(?:['’]re|\s+are|['’]ve\s+been|\s+have\s+been)"
+        # Not "you're all set with that question" / "you're confirmed as the contact".
+        rf"{_CLAIM_ADVERBS}\s+(?P<verb>{_BOOKED}|{_CHANGED})\b(?!\s+(?:with|as)\b)",
+        re.IGNORECASE,
+    ),
+    # "I've booked you", "we have scheduled your haircut", "I've cancelled it", "I've booked
+    # a haircut for you". The object is the customer or an appointment, so "I've confirmed
+    # that we're open" or "I've confirmed it with the team" is no claim.
+    re.compile(
+        rf"{_NOT_AFTER}\b(?:i|we)(?:['’]ve|\s+have){_CLAIM_ADVERBS}\s+"
+        rf"(?P<verb>booked|scheduled|confirmed|reserved|{_CHANGED})\s+"
+        r"(?:you\b|your\b|it\b(?!\s+with\b)"
+        r"|(?:the|an?)\s+(?:[\w-]+\s+){0,2}?"
+        r"(?:appointment|booking|reservation|slot|spot|visit|session)s?\b"
+        r"|(?:the|an?)\s+(?:[\w-]+\s+){1,3}?for\s+you\b)",
+        re.IGNORECASE,
+    ),
+    # "your appointment is confirmed", "your Friday haircut has been booked"
+    re.compile(
+        rf"{_NOT_AFTER}\byour\s+(?:[\w'’-]+\s+){{1,4}}?(?:is|has\s+been|was|['’]s)"
+        rf"{_CLAIM_ADVERBS}\s+(?P<verb>{_BOOKED}|{_CHANGED})\b",
+        re.IGNORECASE,
+    ),
+    # "I've got you down for 3:30", "I have you in"
+    re.compile(
+        rf"{_NOT_AFTER}\bi(?:['’]ve|\s+have)\s+(?:got\s+)?you\s+(?P<verb>down|in|booked|scheduled)\b",
+        re.IGNORECASE,
+    ),
+    # "That's confirmed", "it is all set" (not "booked": "it's booked" is a taken slot)
+    re.compile(
+        rf"{_NOT_AFTER}\b(?:it|that|this)(?:['’]s|\s+is|\s+has\s+been)(?:\s+(?:now|all))?"
+        r"\s+(?P<verb>confirmed|all\s+set|locked\s+in)\b",
+        re.IGNORECASE,
+    ),
+    # A sentence that opens with the claim: "Booked!", "Confirmed for Friday at 3:30."
+    re.compile(
+        r"^\s*(?P<verb>all\s+set|booked|confirmed|cancell?ed|rescheduled)\b(?=\s*(?:[!.,]|$|for\b))",
+        re.IGNORECASE,
+    ),
+)
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def booking_claims(text: str) -> list[ClaimKind]:
+    """Every statement in `text` that an appointment was booked (`booking`) or cancelled,
+    rescheduled or moved (`change`). Questions don't count."""
+    claims: list[ClaimKind] = []
+    for sentence in _SENTENCE_END.split(text):
+        if not sentence.strip() or sentence.rstrip().endswith("?"):
+            continue
+        for pattern in _CLAIM_PATTERNS:
+            for match in pattern.finditer(sentence):
+                verb = match.group("verb").lower()
+                changed = re.fullmatch(_CHANGED, verb, re.IGNORECASE) is not None
+                claims.append("change" if changed else "booking")
+    return claims
 
 
 # --- Amount detection ----------------------------------------------------------

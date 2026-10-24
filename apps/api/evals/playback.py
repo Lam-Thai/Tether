@@ -33,13 +33,14 @@ from services.conversation import (
     PROVIDER_FALLBACK,
     ConversationEngine,
     availability_fallback,
+    booking_fallback,
     no_info_fallback,
     quota_fallback,
 )
 
 CHANNEL = "test_chat"
 
-FallbackKind = Literal["provider", "invalid_output", "no_info", "quota", "availability"]
+FallbackKind = Literal["provider", "invalid_output", "no_info", "quota", "availability", "booking"]
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,7 @@ def _fallback_kind(env: CaseEnv, reply: str, fell_back: bool) -> FallbackKind | 
         no_info_fallback(business): "no_info",
         quota_fallback(business): "quota",
         availability_fallback(business): "availability",
+        booking_fallback(business): "booking",
     }
     # Unknown text can't happen today; treat it as an outage rather than an answer.
     return kinds.get(reply, "provider")

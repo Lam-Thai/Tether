@@ -201,3 +201,53 @@ def test_availability_suite_covers_the_slice_10_behaviors():
     for c in suite.cases:
         if "offers_real_times" in c.scorers:
             assert bool(c.expected_times) != c.no_times, c.id
+
+
+def test_booking_calendar_mode_is_known(tmp_path):
+    path = write_suite(
+        tmp_path,
+        "scorers: [intent_match]\ncases:\n"
+        "  - {id: a, turns: [x], expected_intent: FAQ, calendar: booking_fails}\n",
+    )
+    (loaded,) = load_suite(path, known_scorers=KNOWN).cases
+    assert loaded.calendar == "booking_fails"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        "",  # no expect_booking
+        ", expect_booking: true",  # no target
+        ", expect_booking: true, expected_start: '14:15'",  # no date
+        ", expect_booking: false, expected_start: '14:15', expected_date: '2026-06-05'",
+        ", expect_booking: true, expected_start: '2:15', expected_date: '2026-06-05'",
+        ", expect_booking: true, expected_start: '14:15', expected_date: 'Friday'",
+    ],
+    ids=["unset", "no-target", "no-date", "false-with-target", "bad-time", "bad-date"],
+)
+def test_books_correctly_needs_a_consistent_expectation(tmp_path, fields):
+    header = SUITE_YAML.split("metrics:")[0]
+    metrics = "metrics:\n  - {scorer: books_correctly, label: books}\n"
+    path = write_suite(
+        tmp_path,
+        f"scorers: [books_correctly]\ncases:\n  - {{id: a, turns: [x]{fields}}}\n",
+        header + metrics,
+    )
+    with pytest.raises(SuiteError):
+        load_suite(path, known_scorers=KNOWN)
+
+
+def test_booking_suite_covers_the_slice_11_behaviors():
+    suite = load_suite("booking", known_scorers=KNOWN)
+    tags = {tag for c in suite.cases for tag in c.tags}
+    required = {"happy-path", "slot-taken", "calendar-failure", "ambiguous-service", "missing-name"}
+    assert required <= tags
+    assert {c.calendar for c in suite.cases} == {"busy", "booking_fails"}
+    # Everything that acts is checked for false confirmations and for what it booked.
+    for c in suite.cases:
+        assert {"no_false_confirmation", "books_correctly"} <= set(c.scorers), c.id
+    targets = {m.scorer: m.target for m in suite.metrics}
+    assert targets["no_false_confirmation"] == 1.0
+    # The whole suite fits the free tier's ~20 requests a day: one turn per case.
+    assert all(len(c.turns) == 1 for c in suite.cases)
+    assert len(suite.cases) <= 7

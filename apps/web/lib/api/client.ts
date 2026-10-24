@@ -892,6 +892,79 @@ export async function endTestChat(token: string, id: string): Promise<Transcript
   return UNEXPECTED;
 }
 
+// Bookings made by one test chat (`GET /bookings?interaction_id=`).
+
+export type BookingStatus = "pending" | "confirmed" | "failed" | "cancelled" | "needs_reconciliation";
+
+const BOOKING_STATUSES: readonly string[] = [
+  "pending",
+  "confirmed",
+  "failed",
+  "cancelled",
+  "needs_reconciliation",
+];
+
+/**
+ * `start` / `end` carry the business timezone's offset. `date` (YYYY-MM-DD) and
+ * `label` (24-hour HH:MM) are the business-local date and start time: show
+ * those, never a conversion to the viewer's timezone.
+ */
+export type BookingRead = {
+  id: string;
+  service_name: string;
+  start: string;
+  end: string;
+  date: string;
+  label: string;
+  customer_name: string;
+  status: BookingStatus;
+};
+
+export type ChatBookingsResult =
+  | { kind: "ok"; data: BookingRead[] }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isBookingRead(value: unknown): value is BookingRead {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.service_name === "string" &&
+    typeof value.start === "string" &&
+    typeof value.end === "string" &&
+    typeof value.date === "string" &&
+    typeof value.label === "string" &&
+    typeof value.customer_name === "string" &&
+    typeof value.status === "string" &&
+    BOOKING_STATUSES.includes(value.status)
+  );
+}
+
+/** Calls `GET /api/v1/bookings?interaction_id=`, oldest first. */
+export async function listChatBookings(
+  token: string,
+  interactionId: string,
+): Promise<ChatBookingsResult> {
+  const outcome = await fetchApi(
+    `/bookings?interaction_id=${encodeURIComponent(interactionId)}`,
+    { headers: authHeaders(token) },
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (
+    outcome.status === 200 &&
+    isRecord(outcome.body) &&
+    Array.isArray(outcome.body.bookings) &&
+    outcome.body.bookings.every(isBookingRead)
+  ) {
+    return { kind: "ok", data: outcome.body.bookings };
+  }
+  return UNEXPECTED;
+}
+
 // Usage limits (`GET /usage`).
 
 /** Meter kinds the UI has a label for; the API may send others. */

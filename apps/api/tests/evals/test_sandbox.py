@@ -223,3 +223,15 @@ async def test_cases_running_at_once_do_not_share_busy_time(usage):
         )
     assert booked.result["result"] == "no_availability"
     assert free.result["result"] == "available"
+
+
+async def test_booking_fails_mode_keeps_the_busy_week_but_fails_every_event_insert():
+    from evals.calendar_script import REFRESH_TOKEN, scripted_calendar
+    from evals.sandbox import EVAL_NOW
+
+    busy = await scripted_calendar("busy", EVAL_NOW)
+    failing = await scripted_calendar("booking_fails", EVAL_NOW)
+    assert failing._failures["insert_event"]  # pyright: ignore[reportPrivateUsage]
+    assert not busy._failures["insert_event"]  # pyright: ignore[reportPrivateUsage]
+    same = failing._of(REFRESH_TOKEN).busy == busy._of(REFRESH_TOKEN).busy  # pyright: ignore
+    assert same

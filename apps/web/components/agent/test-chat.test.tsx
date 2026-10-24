@@ -7,6 +7,7 @@ const getTokenMock = vi.fn();
 const sendMock = vi.fn();
 const endMock = vi.fn();
 const transcriptMock = vi.fn();
+const bookingsMock = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: replaceMock, refresh: vi.fn(), push: vi.fn() }),
@@ -20,6 +21,7 @@ vi.mock("@/lib/api/client", () => ({
   sendTestMessage: (...args: unknown[]) => sendMock(...args),
   endTestChat: (...args: unknown[]) => endMock(...args),
   getTestTranscript: (...args: unknown[]) => transcriptMock(...args),
+  listChatBookings: (...args: unknown[]) => bookingsMock(...args),
 }));
 
 import type { MessageRead, TranscriptRead, TurnRead } from "@/lib/api/client";
@@ -76,6 +78,7 @@ describe("TestChat", () => {
     sendMock.mockReset();
     endMock.mockReset();
     transcriptMock.mockReset();
+    bookingsMock.mockReset().mockResolvedValue({ kind: "ok", data: [] });
   });
 
   it("explains the test chat before the first message", () => {

@@ -12,9 +12,11 @@ from services.grounding import (
     BUSINESS_HOURS,
     BUSINESS_PROFILE,
     GROUNDED_INTENTS,
+    UNCONFIRMED_BOOKING,
     UNVERIFIED_TIME,
     Evidence,
     TurnEvidence,
+    booking_claims,
     clock_times,
     duration_minutes,
     grounding_problem,
@@ -418,3 +420,80 @@ def test_the_amount_check_runs_before_the_time_check():
     evidence = TurnEvidence(hours_listed=False)
     reply = _turn("A cut is $99 at 2 PM.")
     assert grounding_problem(reply, evidence) == "unverified_amount"
+
+
+# --- Booking claims (slice #11) ----------------------------------------------
+
+CLAIMS = [
+    ("You're booked for a haircut Friday at 3:30 PM.", ["booking"]),
+    ("You're all set!", ["booking"]),
+    ("Great news, Alex, you are now booked in.", ["booking"]),
+    ("I've booked you in for Friday.", ["booking"]),
+    ("I have gone ahead and scheduled a haircut for you.", ["booking"]),
+    ("Your haircut appointment is confirmed.", ["booking"]),
+    ("I have you down for 3:30.", ["booking"]),
+    ("Confirmed for Friday at 3:30.", ["booking"]),
+    ("That's confirmed.", ["booking"]),
+    ("Your appointment has been cancelled.", ["change"]),
+    ("I've moved your appointment to Friday.", ["change"]),
+    ("You've been rescheduled.", ["change"]),
+    ("I've booked a haircut for you on Friday.", ["booking"]),
+    ("I've booked it for Friday.", ["booking"]),
+    ("I have booked a Friday appointment for you.", ["booking"]),
+]
+NOT_CLAIMS = [
+    "Shall I book that for you?",
+    "Want me to get you booked?",
+    "Shall I have you down for 3:30?",
+    "Do you want me to confirm the 3:30?",
+    "Sorry, that time is already booked. I have 3:45 or 4:00.",
+    "It's booked up that afternoon.",
+    "Booked solid on Friday, sorry.",
+    "Our stylists are fully booked on Saturday.",
+    "Once you're booked you'll get a text.",
+    "You're not booked yet.",
+    "Your appointment isn't confirmed yet.",
+    "I couldn't complete the booking, so nothing is booked.",
+    "We have reserved parking for customers.",
+    "We've moved to 12 Main St.",
+    "Your request to cancel has been noted; the team will help.",
+    "I've confirmed that we're open until 5.",
+    "I've confirmed this with the calendar.",
+    "I've confirmed it with the team.",
+    "You're all set with that question.",
+    "You're confirmed as the contact.",
+]
+
+
+@pytest.mark.parametrize(("text", "kinds"), CLAIMS, ids=[f"claim-{i}" for i in range(len(CLAIMS))])
+def test_booking_claims_are_detected(text, kinds):
+    assert booking_claims(text) == kinds
+
+
+@pytest.mark.parametrize("text", NOT_CLAIMS, ids=[f"not-{i}" for i in range(len(NOT_CLAIMS))])
+def test_questions_offers_and_taken_slots_are_not_claims(text):
+    assert booking_claims(text) == []
+
+
+@pytest.mark.parametrize("intent", ["BOOK_APPOINTMENT", "UNKNOWN", "HUMAN_REQUEST"])
+def test_a_booking_claim_needs_a_confirmed_booking_this_turn(intent):
+    evidence = TurnEvidence(hours_listed=False)
+    reply = _turn("You're all set!", intent=intent)
+    assert grounding_problem(reply, evidence) == UNCONFIRMED_BOOKING
+
+    evidence.add(Evidence(booking_confirmed=True))
+    assert grounding_problem(reply, evidence) is None
+
+
+def test_a_cancel_claim_is_never_grounded():
+    evidence = TurnEvidence(hours_listed=False)
+    evidence.add(Evidence(booking_confirmed=True))
+    reply = _turn("Done, your appointment has been cancelled.", intent="CANCEL")
+    assert grounding_problem(reply, evidence) == UNCONFIRMED_BOOKING
+
+
+def test_the_booked_time_is_the_offer_for_the_time_check():
+    evidence = TurnEvidence(hours_listed=False, earlier_offer_times=_t((14, 0), (15, 30)))
+    evidence.add(Evidence(slot_times=_t((15, 30)), booking_confirmed=True))
+    assert grounding_problem(_turn("You're booked for 3:30 PM."), evidence) is None
+    assert grounding_problem(_turn("You're booked for 2 PM."), evidence) == UNVERIFIED_TIME

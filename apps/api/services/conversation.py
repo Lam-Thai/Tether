@@ -39,10 +39,21 @@ conversation correct:
   (the offered slots) is merged into `interactions.state`, and a tool's
   `requires_human` flags the interaction. A fallback reply clears those keys
   instead, since the customer never heard the offer.
+- Booking guard (same module). A reply may say an appointment is booked only when
+  `create_booking` returned `confirmed` this turn, and may never say one was
+  cancelled or moved (no tool does that yet). A miss gets one regeneration with
+  `BOOKING_CORRECTION` (sharing the single retry), then `booking_fallback` and a
+  human flag. So the customer is never told a booking exists that the backend
+  didn't confirm.
+- An action a tool really performed is never denied: once a tool returned a
+  `confirmation` (a confirmed booking), any fallback this turn is replaced by that
+  fixed, backend-written line, so the customer is never told "I can't confirm a
+  booking" about one that exists.
 - The fallback lines below (invalid output, provider, `quota_fallback`,
-  `no_info_fallback`, `availability_fallback`) are the only agent text that does
-  not come from the model or from the owner's greeting. The last three point the
-  customer to the business's own contact details and never promise a callback.
+  `no_info_fallback`, `availability_fallback`, `booking_fallback`) are the only agent
+  text that does not come from the model or from the owner's greeting. The last four
+  point the customer to the business's own contact details and never promise a
+  callback.
 - Every model call goes through `UsageGuard.metered`, inside `retry_bounded`
   (so each attempt is metered). A reached limit means no model call at all:
   the turn answers with the quota fallback, which points the customer to the
@@ -64,7 +75,7 @@ No FastAPI or SQLAlchemy imports: the router passes a `ConversationStore`
 import asyncio
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, time
@@ -90,7 +101,12 @@ from schemas.agent_turn import AgentTurn
 from services.agent import AgentStore, load_agent, require_business
 from services.availability_tool import earlier_offer
 from services.directory import BusinessDirectory, Open
-from services.grounding import UNVERIFIED_TIME, TurnEvidence, grounding_problem
+from services.grounding import (
+    UNCONFIRMED_BOOKING,
+    UNVERIFIED_TIME,
+    TurnEvidence,
+    grounding_problem,
+)
 from services.knowledge import FaqSnippet
 from services.prompt_builder import (
     BusinessFacts,
@@ -130,6 +146,13 @@ TIME_CORRECTION = (
     'offered, say "that time" instead of repeating it. If you need other times, call '
     "check_availability again."
 )
+# Added to the request when a reply claimed a booking (or a change) nothing confirmed.
+BOOKING_CORRECTION = (
+    "Your previous reply said an appointment is booked, confirmed, cancelled or moved, but "
+    "no create_booking result in TOOL RESULTS of this turn says confirmed. Rewrite the reply "
+    "without saying anything was booked or changed. If a create_booking result says "
+    "booking_failed, say the booking could not be completed and nothing was booked."
+)
 
 FailureKind = Literal[
     "invalid_output",
@@ -138,6 +161,7 @@ FailureKind = Literal[
     "ungrounded",
     "unverified_time",
     "tool_rounds_exhausted",
+    "unconfirmed_booking",
 ]
 
 
@@ -183,6 +207,18 @@ def availability_fallback(business: Business) -> str:
         "Sorry, I can't confirm available times right now. "
         f"Please contact {business.name} directly."
     )
+
+
+def booking_fallback(business: Business) -> str:
+    """The fixed reply when the agent claimed a booking (or a change) the backend didn't
+    confirm, twice. It confirms nothing and points to the business's own contacts."""
+    contacts = [c for c in (business.phone, business.contact_email) if c]
+    if contacts:
+        return (
+            "Sorry, I can't confirm a booking right now. "
+            f"You can reach the team at {' or '.join(contacts)}."
+        )
+    return f"Sorry, I can't confirm a booking right now. Please contact {business.name} directly."
 
 
 class InteractionNotFoundError(AppError):
@@ -532,6 +568,8 @@ class ConversationEngine:
         results: list[ToolOutcome] = []
         state_updates: dict[str, Any] = {}
         tool_needs_human = False
+        # What a tool really did this turn, stated by the backend (`ToolResult.confirmation`).
+        confirmation: str | None = None
         rounds = 0
         retried = False
         current = context
@@ -544,6 +582,8 @@ class ConversationEngine:
             needs_human: bool = False,
             usage_limited: bool = False,
         ) -> _Outcome:
+            if turn is None and confirmation is not None:
+                text = confirmation  # never deny what the backend really did
             return _Outcome(
                 turn,
                 text,
@@ -585,12 +625,13 @@ class ConversationEngine:
                     problem = grounding_problem(turn, evidence)
                     if problem is None:
                         return finish(turn)
-                    if problem == UNVERIFIED_TIME:
-                        failures.append(_failure("unverified_time", problem))
+                    if problem in _CORRECTABLE:
+                        kind, correction, fallback = _CORRECTABLE[problem]
+                        failures.append(_failure(kind, problem))
                         if retried or loop.time() >= deadline:
-                            return finish(None, availability_fallback(business), needs_human=True)
+                            return finish(None, fallback(business), needs_human=True)
                         retried = True
-                        request = build(replace(current, correction=TIME_CORRECTION))
+                        request = build(replace(current, correction=correction))
                         continue  # one regeneration, with the correction note
                     failures.append(_failure("ungrounded", problem))
                     return finish(None, no_info_fallback(business), needs_human=True)
@@ -619,6 +660,7 @@ class ConversationEngine:
                             if value is not None or state_updates.get(key) is None:
                                 state_updates[key] = value
                         tool_needs_human = tool_needs_human or outcome.requires_human
+                        confirmation = outcome.confirmation or confirmation
                 current = replace(
                     context,
                     faqs=tuple(retrieved.values()),
@@ -668,6 +710,14 @@ class ConversationEngine:
             state.update(outcome.state_updates)
             state["requires_human"] = outcome.turn.requires_human or outcome.needs_human
         interaction.state = state
+
+
+# Guard problems the model gets one chance to fix (sharing the single retry), with the
+# note added to the request and the fixed line used if it fails again.
+_CORRECTABLE: dict[str, tuple[FailureKind, str, Callable[[Business], str]]] = {
+    UNVERIFIED_TIME: ("unverified_time", TIME_CORRECTION, availability_fallback),
+    UNCONFIRMED_BOOKING: ("unconfirmed_booking", BOOKING_CORRECTION, booking_fallback),
+}
 
 
 def _prompt_hour_times(context: PromptContext) -> set[time]:

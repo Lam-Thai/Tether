@@ -116,7 +116,7 @@ def get_calendar_connections(
 
 
 def get_clock() -> Callable[[], datetime]:
-    """ "Now" for availability; a dependency so tests can pin it."""
+    """ "Now" for availability, booking and the agent; a dependency so tests can pin it."""
     return lambda: datetime.now(UTC)
 
 
