@@ -9,11 +9,13 @@ import { MessageSquare, TriangleAlert } from "lucide-react";
 import {
   endTestChat,
   getTestTranscript,
+  listChatBookings,
   sendTestMessage,
   type MessageRead,
   type TranscriptRead,
 } from "@/lib/api/client";
 import { AGENT_LIMITS, testMessageSchema } from "@/lib/validation/agent";
+import { BookingsPanel, type BookingsState } from "@/components/agent/bookings-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Callout } from "@/components/ui/callout";
@@ -68,6 +70,14 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
       : null,
   );
 
+  // Bookings this chat made. `bookingsFor` + `bookingsSeq` drop a response that
+  // arrives after the chat changed or after a newer refresh was started.
+  const [bookings, setBookings] = useState<BookingsState>(
+    restored ? { kind: "loading" } : { kind: "idle" },
+  );
+  const currentId = useRef<string | null>(restored?.interaction_id ?? null);
+  const bookingsSeq = useRef(0);
+
   const logRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const newChatRef = useRef<HTMLButtonElement>(null);
@@ -93,11 +103,52 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
     if (!pending) composerRef.current?.focus({ preventScroll: true });
   }, [pending]);
 
+  async function refreshBookings(id: string) {
+    const seq = ++bookingsSeq.current;
+    const token = await getToken();
+    if (seq !== bookingsSeq.current || currentId.current !== id) return;
+    if (!token) {
+      setBookings({ kind: "error", message: SESSION_EXPIRED });
+      return;
+    }
+    const result = await listChatBookings(token, id);
+    if (seq !== bookingsSeq.current || currentId.current !== id) return;
+    switch (result.kind) {
+      case "ok":
+        setBookings({ kind: "ok", bookings: result.data });
+        return;
+      case "unauthorized":
+        setBookings({ kind: "error", message: SESSION_EXPIRED });
+        return;
+      case "subscription_required":
+        setBookings({ kind: "error", message: "Your plan is not active, so bookings are paused." });
+        return;
+      case "unreachable":
+        setBookings({ kind: "error", message: result.reason });
+        return;
+    }
+  }
+
+  function retryBookings() {
+    if (!currentId.current) return;
+    setBookings({ kind: "loading" });
+    void refreshBookings(currentId.current);
+  }
+
+  // Restoring `?chat=` loads its bookings once on mount (state starts as loading).
+  useEffect(() => {
+    if (currentId.current) void refreshBookings(currentId.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const parsed = testMessageSchema.safeParse(draft);
   const tooLong = draft.trim().length > AGENT_LIMITS.message;
   const canSend = parsed.success && !pending && !ended;
 
   function startNewChat() {
+    currentId.current = null;
+    bookingsSeq.current += 1;
+    setBookings({ kind: "idle" });
     setInteractionId(null);
     setMessages([]);
     setEnded(false);
@@ -127,7 +178,9 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
         case "ok": {
           const turn = result.data;
           const isNewChat = interactionId === null;
+          currentId.current = turn.interaction_id;
           setInteractionId(turn.interaction_id);
+          void refreshBookings(turn.interaction_id);
           setMessages((current) => [...current, ...turn.messages]);
           setEnded(turn.ended);
           setUsageLimited(turn.usage_limited);
@@ -168,6 +221,7 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
               setMessages(check.data.messages);
               setEnded(check.data.ended);
               setDraft("");
+              void refreshBookings(interactionId);
               return;
             }
           }
@@ -218,168 +272,177 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
   const hasChat = messages.length > 0 || interactionId !== null;
 
   return (
-    <Card className="min-h-[32rem] max-h-[85dvh] gap-0 overflow-hidden">
-      <CardHeader className="border-b border-border">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex flex-col gap-2">
-            <CardTitle as="h2">Test your receptionist</CardTitle>
-            <CardDescription>
-              Chatting with {agentName}. Replies come from the live AI.
-            </CardDescription>
-          </div>
-          {interactionId && !ended && (
-            <Button variant="outline" size="sm" onClick={endChat} disabled={ending || pending}>
-              {ending ? "Ending…" : "End chat"}
-            </Button>
-          )}
-        </div>
-      </CardHeader>
-
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-4 px-0 pt-0 pb-0">
-        <div
-          ref={logRef}
-          role="log"
-          aria-live="polite"
-          aria-label="Test conversation"
-          className="min-h-0 flex-1 overflow-y-auto px-6 py-4"
-        >
-          {notice && <p className="mb-4 text-sm text-muted-foreground">{notice}</p>}
-
-          {!hasChat && (
-            <div className="flex flex-col items-start gap-3 py-6">
-              <MessageSquare aria-hidden className="size-8 text-muted-foreground" />
-              <p className="text-lg font-semibold">No messages yet</p>
-              <p className="max-w-[48ch] text-base text-muted-foreground">
-                This is a private test conversation. It uses the real AI, so replies are not
-                scripted, and it is not a phone call. Write a message below to start.
-              </p>
+    <div className="@container">
+      <div className="grid grid-cols-1 items-start gap-6 @2xl:grid-cols-[minmax(0,1fr)_16rem]">
+        <Card className="min-h-[32rem] max-h-[85dvh] min-w-0 gap-0 overflow-hidden">
+          <CardHeader className="border-b border-border">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex flex-col gap-2">
+                <CardTitle as="h2">Test your receptionist</CardTitle>
+                <CardDescription>
+                  Chatting with {agentName}. Replies come from the live AI.
+                </CardDescription>
+              </div>
+              {interactionId && !ended && (
+                <Button variant="outline" size="sm" onClick={endChat} disabled={ending || pending}>
+                  {ending ? "Ending…" : "End chat"}
+                </Button>
+              )}
             </div>
-          )}
+          </CardHeader>
 
-          <ol className="flex flex-col gap-4">
-            {messages.map((message) => (
-              <ChatMessage
-                key={message.sequence_number}
-                message={message}
-                agentName={agentName}
-              />
-            ))}
-          </ol>
-
-          {pending && (
-            <p role="status" className="mt-4 text-sm text-muted-foreground">
-              {agentName} is typing…
-            </p>
-          )}
-        </div>
-
-        <div className="flex flex-col gap-3 border-t border-border px-6 py-4">
-          {usageLimited && (
-            <Callout tone="warning" title="AI limit reached" headingLevel={3} compact>
-              {USAGE_LIMITED_NOTE}{" "}
-              <Link href="/dashboard/settings/usage" className="font-medium underline">
-                View usage
-              </Link>
-            </Callout>
-          )}
-          {error?.kind === "concurrency_limited" && (
-            <Callout
-              tone="warning"
-              title="Too many conversations"
-              headingLevel={3}
-              compact
-              action={
-                <button type="button" onClick={send} className="text-sm font-medium underline">
-                  Retry
-                </button>
-              }
+          <CardContent className="flex min-h-0 flex-1 flex-col gap-4 px-0 pt-0 pb-0">
+            <div
+              ref={logRef}
+              role="log"
+              aria-live="polite"
+              aria-label="Test conversation"
+              className="min-h-0 flex-1 overflow-y-auto px-6 py-4"
             >
-              {CONCURRENCY_NOTE}
-            </Callout>
-          )}
-          {error?.kind === "message" && <FormError>{error.text}</FormError>}
-          {error?.kind === "subscription_required" && (
-            <FormError>
-              Your plan is not active, so the test chat is paused.{" "}
-              <Link href="/billing/plan" className="font-medium underline">
-                Choose a plan
-              </Link>
-            </FormError>
-          )}
-          {error?.kind === "busy" && (
-            <FormError>
-              <span>Still working on your last message. Try again.</span>{" "}
-              <button type="button" onClick={send} className="font-medium underline">
-                Retry
-              </button>
-            </FormError>
-          )}
-          {error?.kind === "retry_end" && (
-            <FormError>
-              <span>{error.text}</span>{" "}
-              <button type="button" onClick={endChat} className="font-medium underline">
-                Retry
-              </button>
-            </FormError>
-          )}
-          {error?.kind === "retry" && (
-            <FormError>
-              <span>{error.text} Your message is still in the box.</span>{" "}
-              <button type="button" onClick={send} className="font-medium underline">
-                Retry
-              </button>
-            </FormError>
-          )}
+              {notice && <p className="mb-4 text-sm text-muted-foreground">{notice}</p>}
 
-          {ended ? (
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-base text-muted-foreground">This chat has ended.</p>
-              <Button ref={newChatRef} onClick={startNewChat}>
-                New chat
-              </Button>
+              {!hasChat && (
+                <div className="flex flex-col items-start gap-3 py-6">
+                  <MessageSquare aria-hidden className="size-8 text-muted-foreground" />
+                  <p className="text-lg font-semibold">No messages yet</p>
+                  <p className="max-w-[48ch] text-base text-muted-foreground">
+                    This is a private test conversation. It uses the real AI, so replies are not
+                    scripted, and it is not a phone call. Write a message below to start.
+                  </p>
+                </div>
+              )}
+
+              <ol className="flex flex-col gap-4">
+                {messages.map((message) => (
+                  <ChatMessage
+                    key={message.sequence_number}
+                    message={message}
+                    agentName={agentName}
+                  />
+                ))}
+              </ol>
+
+              {pending && (
+                <p role="status" className="mt-4 text-sm text-muted-foreground">
+                  {agentName} is typing…
+                </p>
+              )}
             </div>
-          ) : (
-            <form
-              className="flex flex-col gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void send();
-              }}
-            >
-              <Label htmlFor="test-chat-message">Message</Label>
-              <textarea
-                id="test-chat-message"
-                ref={composerRef}
-                rows={2}
-                value={draft}
-                disabled={pending}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+
+            <div className="flex flex-col gap-3 border-t border-border px-6 py-4">
+              {usageLimited && (
+                <Callout tone="warning" title="AI limit reached" headingLevel={3} compact>
+                  {USAGE_LIMITED_NOTE}{" "}
+                  <Link href="/dashboard/settings/usage" className="font-medium underline">
+                    View usage
+                  </Link>
+                </Callout>
+              )}
+              {error?.kind === "concurrency_limited" && (
+                <Callout
+                  tone="warning"
+                  title="Too many conversations"
+                  headingLevel={3}
+                  compact
+                  action={
+                    <button type="button" onClick={send} className="text-sm font-medium underline">
+                      Retry
+                    </button>
+                  }
+                >
+                  {CONCURRENCY_NOTE}
+                </Callout>
+              )}
+              {error?.kind === "message" && <FormError>{error.text}</FormError>}
+              {error?.kind === "subscription_required" && (
+                <FormError>
+                  Your plan is not active, so the test chat is paused.{" "}
+                  <Link href="/billing/plan" className="font-medium underline">
+                    Choose a plan
+                  </Link>
+                </FormError>
+              )}
+              {error?.kind === "busy" && (
+                <FormError>
+                  <span>Still working on your last message. Try again.</span>{" "}
+                  <button type="button" onClick={send} className="font-medium underline">
+                    Retry
+                  </button>
+                </FormError>
+              )}
+              {error?.kind === "retry_end" && (
+                <FormError>
+                  <span>{error.text}</span>{" "}
+                  <button type="button" onClick={endChat} className="font-medium underline">
+                    Retry
+                  </button>
+                </FormError>
+              )}
+              {error?.kind === "retry" && (
+                <FormError>
+                  <span>{error.text} Your message is still in the box.</span>{" "}
+                  <button type="button" onClick={send} className="font-medium underline">
+                    Retry
+                  </button>
+                </FormError>
+              )}
+
+              {ended ? (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-base text-muted-foreground">This chat has ended.</p>
+                  <Button ref={newChatRef} onClick={startNewChat}>
+                    New chat
+                  </Button>
+                </div>
+              ) : (
+                <form
+                  className="flex flex-col gap-2"
+                  onSubmit={(event) => {
                     event.preventDefault();
                     void send();
-                  }
-                }}
-                aria-invalid={tooLong ? true : undefined}
-                aria-describedby="test-chat-hint"
-                className={cn(controlClasses, "h-auto resize-none")}
-              />
-              <div className="flex items-center justify-between gap-4">
-                <p id="test-chat-hint" className="text-sm text-muted-foreground">
-                  Enter sends. Shift and Enter adds a line.
-                </p>
-                <Button type="submit" disabled={!canSend}>
-                  Send
-                </Button>
-              </div>
-              {tooLong && (
-                <FieldError>Messages can be up to {AGENT_LIMITS.message} characters.</FieldError>
+                  }}
+                >
+                  <Label htmlFor="test-chat-message">Message</Label>
+                  <textarea
+                    id="test-chat-message"
+                    ref={composerRef}
+                    rows={2}
+                    value={draft}
+                    disabled={pending}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        void send();
+                      }
+                    }}
+                    aria-invalid={tooLong ? true : undefined}
+                    aria-describedby="test-chat-hint"
+                    className={cn(controlClasses, "h-auto resize-none")}
+                  />
+                  <div className="flex items-center justify-between gap-4">
+                    <p id="test-chat-hint" className="text-sm text-muted-foreground">
+                      Enter sends. Shift and Enter adds a line.
+                    </p>
+                    <Button type="submit" disabled={!canSend}>
+                      Send
+                    </Button>
+                  </div>
+                  {tooLong && (
+                    <FieldError>Messages can be up to {AGENT_LIMITS.message} characters.</FieldError>
+                  )}
+                </form>
               )}
-            </form>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+            </div>
+          </CardContent>
+        </Card>
+        <BookingsPanel
+          state={bookings}
+          onRetry={retryBookings}
+          className="@2xl:max-h-[85dvh] @2xl:overflow-y-auto"
+        />
+      </div>
+    </div>
   );
 }
 

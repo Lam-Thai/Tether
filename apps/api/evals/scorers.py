@@ -20,7 +20,14 @@ Built in:
   fallback, or a reply inventing nothing it was told not to, passes.
 - `no_false_confirmation`: no reply, in any turn, claims a booking, change,
   cancellation or message happened unless the tool that does that thing
-  succeeded in that same turn (a cancel claim needs `cancel_booking`, and so on).
+  succeeded in that same turn (a cancel claim needs `cancel_booking`, and so on). A
+  booking claim needs a `create_booking` that returned `confirmed` (a `slot_taken`,
+  `invalid` or `booking_failed` result is a succeeded operation but books nothing).
+  Questions, offers and honest "that time is already booked" wording are not claims.
+- `books_correctly`: with `expect_booking: true` the case ends with exactly one confirmed
+  `create_booking` (a distinct `booking_id`) on `expected_date`, and the last reply states
+  `expected_start` and no other time and is not a fallback; with `false` no `create_booking`
+  ever returned `confirmed`.
 - `offers_real_times`: the last reply's clock times against the scripted calendar. With
   `expected_times`, it must state at least one time and every time it states must be
   one of them (the starts the fake calendar really has free). With `no_times` (closed,
@@ -147,13 +154,15 @@ _VERB = r"(?:all set|booked|confirmed|scheduled|rescheduled|cancell?ed|reserved|
 # A claim that something already happened: "you're all set", "I've gone ahead and booked
 # you", "your appointment is confirmed", "Booked for 3pm!", "I have you down for Friday".
 # Questions and offers ("shall I book it?", "want me to get you booked?") don't match.
+# "It's already booked" / "that is fully booked" describe a slot or a day, not an act.
+_NOT_A_CLAIM = r"(?!(?:it|that)(?:['’]s| is)\s+(?:already|fully|completely)\b)"
 _CLAIM = re.compile(
-    rf"\b{_SUBJECT}{_ADVERBS}\s+{_VERB}\b"
-    r"|(?:^|[.!]\s+)(?:all set|booked|confirmed|cancell?ed|rescheduled)\b"
+    rf"\b{_NOT_A_CLAIM}{_SUBJECT}{_ADVERBS}\s+{_VERB}\b"
+    r"|(?:^|[.!]\s+)(?:all set|booked(?!\s+(?:up|solid|out)\b)|confirmed|cancell?ed|rescheduled)\b"
     r"|\bi(?:['’]ve| have) (?:got )?you (?:down|in)\b",
     re.IGNORECASE | re.MULTILINE,
 )
-# Which tool's success makes a claim true (none exist yet; the booking slices add them).
+# Which tool's success makes a claim true (cancel, reschedule and SMS tools don't exist yet).
 # Anything not about cancelling, moving or messaging is a booking claim.
 _CONFIRMED_BY: Mapping[str, frozenset[str]] = {
     "cancel": frozenset({"cancel_booking"}),
@@ -162,6 +171,7 @@ _CONFIRMED_BY: Mapping[str, frozenset[str]] = {
     "sent": frozenset({"send_sms"}),
 }
 _BOOKING_TOOLS = frozenset({"create_booking", "reschedule_booking"})
+CONFIRMED = "confirmed"
 
 
 def _confirming_tools(claim: str) -> frozenset[str]:
@@ -172,6 +182,25 @@ def _confirming_tools(claim: str) -> frozenset[str]:
     return _BOOKING_TOOLS
 
 
+def _confirmed_booking(op: Operation) -> bool:
+    """`create_booking` succeeded AND the backend said `confirmed`: a `slot_taken`,
+    `invalid` or `booking_failed` result is also a succeeded operation, but books nothing."""
+    return (
+        op.tool_name == "create_booking"
+        and op.status == "succeeded"
+        and op.result.get("result") == CONFIRMED
+    )
+
+
+def _confirmers(turn: PlayedTurn) -> set[str]:
+    """Names of the tools whose success in this turn really did their thing."""
+    done = {op.tool_name for op in turn.operations if op.status == "succeeded"}
+    done.discard("create_booking")
+    if any(_confirmed_booking(op) for op in turn.operations):
+        done.add("create_booking")
+    return done
+
+
 class NoFalseConfirmation:
     name = "no_false_confirmation"
 
@@ -180,11 +209,50 @@ class NoFalseConfirmation:
     ) -> Score:
         problems: list[str] = []
         for number, turn in enumerate(transcript, start=1):
-            succeeded = {op.tool_name for op in turn.operations if op.status == "succeeded"}
+            succeeded = _confirmers(turn)
             for claim in _CLAIM.finditer(turn.reply):
                 text = claim.group(0).strip(" .!")
                 if not succeeded & _confirming_tools(text):
                     problems.append(f"turn {number} claims {text!r} with no confirmation")
+        return _result(self.name, problems)
+
+
+class BooksCorrectly:
+    name = "books_correctly"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        confirmed = [op for op in operations if _confirmed_booking(op)]
+        if not case.expect_booking:
+            n = len(confirmed)
+            problems = [f"booked {n} appointment(s) it should not have"] if n else []
+            if case.expected_booking_result is not None:
+                calls = [op for op in operations if op.tool_name == "create_booking"]
+                got = calls[-1].result.get("result") if calls else None
+                if got != case.expected_booking_result:
+                    problems.append(
+                        f"create_booking returned {got}, not {case.expected_booking_result}"
+                    )
+            return _result(self.name, problems)
+        problems: list[str] = []
+        ids = {op.result.get("booking_id") for op in confirmed}
+        if not confirmed:
+            problems.append("no confirmed booking")
+        elif len(ids) > 1:
+            problems.append(f"{len(ids)} different bookings made")
+        if wrong := sorted({str(op.result.get("date")) for op in confirmed} - {case.expected_date}):
+            problems.append(f"booked on {wrong}, expected {case.expected_date}")
+        last = transcript[-1]
+        if last.fallback is not None:
+            problems.append(f"fell back ({last.fallback})")
+        elif confirmed:
+            want = datetime.strptime(case.expected_start or "", "%H:%M").time()
+            stated = clock_times(last.reply)
+            if not any(want in readings for readings in stated):
+                problems.append(f"reply does not state {case.expected_start}")
+            elif any(want not in readings for readings in stated):
+                problems.append("reply states another time too")
         return _result(self.name, problems)
 
 
@@ -206,7 +274,7 @@ class OffersRealTimes:
         self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
     ) -> Score:
         last = transcript[-1]
-        if last.fallback in ("provider", "invalid_output", "quota", "availability"):
+        if last.fallback in ("provider", "invalid_output", "quota", "availability", "booking"):
             return Score(self.name, False, f"fell back ({last.fallback})")
         stated = clock_times(last.reply)
         problems: list[str] = []
@@ -245,6 +313,7 @@ SCORERS: Mapping[str, Scorer] = {
         IntentMatch(),
         GroundedInFaq(),
         NoFalseConfirmation(),
+        BooksCorrectly(),
         ToolsUsed(),
         OffersRealTimes(),
         ToolsNotUsed(),

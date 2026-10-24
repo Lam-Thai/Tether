@@ -152,26 +152,110 @@ class TestNoFalseConfirmation:
             "Is that confirmed on your side?",
             "Want me to get you booked for 3pm?",
             "Shall I book it for you?",
+            "Sorry, that time is already booked. I have 2:00 PM or 2:15 PM.",
+            "Sorry, it's already booked. Would 2 PM work?",
+            "We're fully booked on Saturday.",
+            "Friday at 11 is fully booked, but I have 2 PM.",
+            "That day is booked up, how about Tuesday?",
+            "Booked solid on Saturday, sorry.",
         ],
     )
     def test_offers_and_questions_pass(self, reply):
         assert score("no_false_confirmation", case(), replace(ANSWER, reply=reply)).passed
 
     def test_a_claim_backed_by_a_confirming_tool_that_turn_passes(self):
-        booked = Operation("create_booking", "succeeded", {"booking_id": "b1"})
+        booked = Operation(
+            "create_booking", "succeeded", {"result": "confirmed", "booking_id": "b1"}
+        )
         turn = replace(ANSWER, reply="You're all set!", operations=(booked,))
         assert score("no_false_confirmation", case(), turn).passed
         failed = replace(turn, operations=(replace(booked, status="failed"),))
         assert not score("no_false_confirmation", case(), failed).passed
 
     def test_a_claim_needs_the_tool_that_does_that_thing(self):
-        booked = Operation("create_booking", "succeeded", {"booking_id": "b1"})
+        booked = Operation(
+            "create_booking", "succeeded", {"result": "confirmed", "booking_id": "b1"}
+        )
         turn = replace(ANSWER, reply="Your appointment is cancelled.", operations=(booked,))
         result = score("no_false_confirmation", case(), turn)
         assert not result.passed and "cancelled" in result.detail
         escalated = Operation("request_escalation", "succeeded", {})
         turn = replace(ANSWER, reply="You're all set!", operations=(escalated,))
         assert not score("no_false_confirmation", case(), turn).passed
+
+    @pytest.mark.parametrize(
+        "outcome", ["slot_taken", "booking_failed", "invalid", "ambiguous_service"]
+    )
+    def test_a_succeeded_create_booking_that_did_not_confirm_backs_nothing(self, outcome):
+        op = Operation("create_booking", "succeeded", {"result": outcome})
+        turn = replace(ANSWER, reply="You're all set for 2:15 PM!", operations=(op,))
+        assert not score("no_false_confirmation", case(), turn).passed
+
+    def test_a_confirmation_from_an_earlier_turn_does_not_back_this_one(self):
+        booked = Operation("create_booking", "succeeded", {"result": "confirmed"})
+        first = replace(ANSWER, reply="You're all set!", operations=(booked,))
+        second = replace(ANSWER, reply="You're all set!", operations=())
+        assert not score("no_false_confirmation", case(), first, second).passed
+
+
+def confirmed_op(day: str = "2026-06-05", booking_id: str = "b1") -> Operation:
+    return Operation(
+        "create_booking",
+        "succeeded",
+        {"result": "confirmed", "booking_id": booking_id, "date": day, "replayed": False},
+    )
+
+
+class TestBooksCorrectly:
+    EXPECT = {"expect_booking": True, "expected_start": "14:15", "expected_date": "2026-06-05"}
+
+    def run(self, text: str, *ops: Operation, expect: bool = True, **fields):
+        fields = {**self.EXPECT, **fields} if expect else {"expect_booking": False}
+        return score("books_correctly", case(**fields), replace(ANSWER, reply=text, operations=ops))
+
+    def test_a_confirmed_booking_at_the_expected_start_passes(self):
+        assert self.run("You're booked for Friday at 2:15 PM.", confirmed_op()).passed
+
+    def test_no_confirmed_booking_fails(self):
+        slot_taken = Operation("create_booking", "succeeded", {"result": "slot_taken"})
+        result = self.run("I have 2:00 PM.", slot_taken)
+        assert not result.passed and "no confirmed booking" in result.detail
+
+    def test_wrong_date_two_bookings_wrong_time_and_fallback_fail(self):
+        assert "booked on" in self.run("2:15 PM", confirmed_op("2026-06-06")).detail
+        two = self.run("2:15 PM", confirmed_op(), confirmed_op(booking_id="b2"))
+        assert "2 different bookings" in two.detail
+        assert "does not state" in self.run("All set for 3 PM.", confirmed_op()).detail
+        assert "another time" in self.run("2:15 PM, not 2:00 PM.", confirmed_op()).detail
+        turn = replace(ANSWER, reply="Sorry.", operations=(confirmed_op(),), fallback="booking")
+        assert "fell back" in score("books_correctly", case(**self.EXPECT), turn).detail
+
+    def test_a_replayed_confirmation_of_the_same_booking_is_one_booking(self):
+        assert self.run("2:15 PM it is.", confirmed_op(), confirmed_op()).passed
+
+    def test_expect_no_booking_passes_without_a_confirmation_and_fails_with_one(self):
+        ambiguous = Operation("create_booking", "succeeded", {"result": "ambiguous_service"})
+        assert self.run("Haircut or kids cut?", ambiguous, expect=False).passed
+        assert not self.run("2:15 PM", confirmed_op(), expect=False).passed
+
+    def test_an_expected_result_must_be_what_the_last_create_booking_returned(self):
+        failed = Operation("create_booking", "succeeded", {"result": "booking_failed"})
+        taken = Operation("create_booking", "succeeded", {"result": "slot_taken"})
+        expected = {"expect_booking": False, "expected_booking_result": "booking_failed"}
+
+        def run(*ops: Operation):
+            turn = replace(ANSWER, reply="Sorry, I couldn't book that.", operations=ops)
+            return score("books_correctly", case(**expected), turn)
+
+        assert run(taken, failed).passed
+        wrong = run(failed, taken)  # passing for another reason (the slot was taken)
+        assert not wrong.passed and "returned slot_taken" in wrong.detail
+        assert "returned None" in run().detail
+
+
+def test_the_booking_fallback_is_not_an_offer():
+    turn = reply("Sorry, I can't confirm a booking right now.", fallback="booking")
+    assert not score("offers_real_times", case(no_times=True), turn).passed
 
 
 def test_tools_used_needs_each_expected_tool_to_succeed():

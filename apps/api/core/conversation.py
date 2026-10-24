@@ -6,10 +6,12 @@ from datetime import UTC, datetime
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.booking import build_booking_service
 from core.booking_rules import default_booking_rules
 from core.calendar import (
     get_calendar_api,
     get_calendar_config,
+    get_clock,
     get_oauth_state_signer,
     get_token_vault,
 )
@@ -21,6 +23,7 @@ from core.usage import get_usage_guard
 from integrations.google_calendar import GoogleCalendarApi
 from integrations.llm.port import LLMClient
 from repositories.agents import SqlAgentStore
+from repositories.bookings import SqlBookingStore
 from repositories.calendar import SqlCalendarStore
 from repositories.faqs import SqlFaqStore
 from repositories.interactions import SqlConversationStore
@@ -28,6 +31,7 @@ from repositories.operations import SqlOperationLog
 from services.availability import AvailabilityService
 from services.availability_tool import check_availability_tool
 from services.booking_rules import BookingRules
+from services.booking_tool import create_booking_tool
 from services.business_tools import get_business_info_tool, get_services_tool
 from services.calendar import CalendarConfig, CalendarConnections, GoogleCalendarGateway
 from services.conversation import ConversationEngine
@@ -53,18 +57,20 @@ def get_conversation_engine(
     signer: OAuthStateSigner = Depends(get_oauth_state_signer),
     calendar_config: CalendarConfig = Depends(get_calendar_config),
     booking_defaults: BookingRules = Depends(default_booking_rules),
+    clock: Callable[[], datetime] = Depends(get_clock),
 ) -> ConversationEngine:
     return build_conversation_engine(
         session,
         llm,
         usage,
+        clock=clock,
         calendar=CalendarDeps(calendar_api, vault, signer, calendar_config),
         booking_defaults=booking_defaults,
     )
 
 
 class CalendarDeps:
-    """What the availability lookup needs to reach Google Calendar for this business."""
+    """What availability and booking need to reach Google Calendar for this business."""
 
     def __init__(
         self,
@@ -116,9 +122,9 @@ def build_conversation_engine(
         SqlDirectoryStore(session), clock, booking_defaults or default_booking_rules()
     )
     calendar = calendar or CalendarDeps.from_process()
-    availability = AvailabilityService(
-        directory, calendar.connections(session, usage), savepoint=store.savepoint
-    )
+    connections = calendar.connections(session, usage)
+    availability = AvailabilityService(directory, connections, savepoint=store.savepoint)
+    bookings = build_booking_service(directory, connections, SqlBookingStore(session))
     return ConversationEngine(
         store=store,
         llm=llm,
@@ -130,6 +136,7 @@ def build_conversation_engine(
                 get_services_tool(directory),
                 get_business_info_tool(directory),
                 check_availability_tool(directory, availability, savepoint=store.savepoint),
+                create_booking_tool(directory, bookings, savepoint=store.savepoint),
             ]
         ),
         history_limit=settings.conversation_history_limit,

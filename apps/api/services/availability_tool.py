@@ -24,7 +24,7 @@ calls Google; its own DB reads run inside `savepoint()`.
 
 import datetime as dt
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import Annotated, Any, Literal
 
@@ -64,26 +64,32 @@ def _wall_time(value: Any) -> Any:
     raise ValueError("Expected a time as HH:MM (24-hour).")
 
 
+# Shared with `create_booking` (`services/booking_tool.py`) as the same type AND the
+# same description: Gemini's response schema merges arguments by name and drops a
+# description two tools disagree on.
+ServiceArg = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUERY_CHARS),
+    Field(description="The service the customer wants, as they named it, or its id."),
+]
+# Its own name (not `get_business_info`'s `date`), so its description reaches the schema.
+AppointmentDateArg = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_DATE_CHARS),
+    Field(
+        description=(
+            "The local date as YYYY-MM-DD, e.g. 2026-06-04. Work it out from "
+            "Today in BUSINESS HOURS."
+        )
+    ),
+]
+
+
 class CheckAvailabilityArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    service: Annotated[
-        str,
-        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUERY_CHARS),
-        Field(description="The service the customer wants, as they named it, or its id."),
-    ]
-    # Its own name (not `get_business_info`'s `date`), so its description reaches
-    # Gemini's response schema, which drops descriptions two tools disagree on.
-    appointment_date: Annotated[
-        str,
-        StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_DATE_CHARS),
-        Field(
-            description=(
-                "The local date to check as YYYY-MM-DD, e.g. 2026-06-04. Work it out from "
-                "Today in BUSINESS HOURS."
-            )
-        ),
-    ]
+    service: ServiceArg
+    appointment_date: AppointmentDateArg
     time_of_day: Annotated[
         Literal["morning", "afternoon", "evening"] | None,
         BeforeValidator(blank_is_none),
@@ -116,7 +122,7 @@ def resolve_date(text: str, today: dt.date) -> dt.date:
     )
 
 
-def _service_view(service: ServiceFact) -> dict[str, Any]:
+def service_view(service: ServiceFact) -> dict[str, Any]:
     return {
         "id": str(service.id),
         "name": service.name,
@@ -124,7 +130,7 @@ def _service_view(service: ServiceFact) -> dict[str, Any]:
     }
 
 
-def _service_evidence(service: ServiceFact, slots: tuple[Slot, ...] = ()) -> Evidence:
+def service_evidence(service: ServiceFact, slots: tuple[Slot, ...] = ()) -> Evidence:
     """With no slots, this check found nothing to offer: last turn's offer is stale."""
     return Evidence(
         sources={str(service.id): "service"},
@@ -159,7 +165,7 @@ def _slot_state(slot: Slot) -> dict[str, str]:
 
 def _result(found: AvailabilityResult, now: dt.datetime) -> ToolResult:
     day = {"date": found.date.isoformat(), "weekday": WEEKDAYS[found.date.weekday()]}
-    service = _service_view(found.service)
+    service = service_view(found.service)
     log: dict[str, Any] = {"service_ids": [service["id"]], "date": found.date.isoformat()}
 
     if isinstance(found, CalendarUnavailable):
@@ -171,7 +177,7 @@ def _result(found: AvailabilityResult, now: dt.datetime) -> ToolResult:
                 **day,
             },
             for_log={**log, "result": "calendar_unavailable", "reason": found.reason},
-            evidence=_service_evidence(found.service),
+            evidence=service_evidence(found.service),
             state={OFFERED_SLOTS: None},
             requires_human=True,
         )
@@ -188,7 +194,7 @@ def _result(found: AvailabilityResult, now: dt.datetime) -> ToolResult:
         return ToolResult(
             for_model=for_model,
             for_log={**log, "result": "no_availability", "reason": found.reason},
-            evidence=_service_evidence(found.service),
+            evidence=service_evidence(found.service),
             state={OFFERED_SLOTS: None},
         )
     return ToolResult(
@@ -207,17 +213,30 @@ def _result(found: AvailabilityResult, now: dt.datetime) -> ToolResult:
             "offered": len(found.offered),
             "free": len(found.slots),
         },
-        evidence=_service_evidence(found.service, found.offered),
+        evidence=service_evidence(found.service, found.offered),
         state={
-            OFFERED_SLOTS: {
-                "service_id": service["id"],
-                "date": found.date.isoformat(),
-                "timezone": found.timezone,
-                "slots": [_slot_state(slot) for slot in found.offered],
-                "offered_at": now.isoformat(),
-            }
+            OFFERED_SLOTS: offer_state(
+                found.service, found.date, found.timezone, found.offered, now
+            )
         },
     )
+
+
+def offer_state(
+    service: ServiceFact,
+    day: dt.date,
+    timezone: str,
+    slots: Sequence[Slot],
+    now: dt.datetime,
+) -> dict[str, Any]:
+    """`interactions.state.offered_slots` for an offer the customer is about to hear."""
+    return {
+        "service_id": str(service.id),
+        "date": day.isoformat(),
+        "timezone": timezone,
+        "slots": [_slot_state(slot) for slot in slots],
+        "offered_at": now.isoformat(),
+    }
 
 
 def check_availability_tool(

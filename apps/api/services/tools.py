@@ -112,6 +112,10 @@ class ToolResult:
     state: Mapping[str, Any] = field(default_factory=dict)
     # The customer needs a person (e.g. the calendar can't be checked): flag it.
     requires_human: bool = False
+    # A fixed, backend-written line stating what this tool really did (a booking made).
+    # If the turn's reply can't be shown, the engine shows this instead of a fallback
+    # that would deny it. Built from verified values only.
+    confirmation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +129,7 @@ class ToolOutcome:
     evidence: Evidence = field(default_factory=Evidence)
     state: Mapping[str, Any] = field(default_factory=dict)
     requires_human: bool = False
+    confirmation: str | None = None
 
 
 class ToolRejection(Exception):
@@ -281,6 +286,7 @@ class ToolExecutor:
             result.evidence,
             dict(result.state),
             result.requires_human,
+            result.confirmation,
         )
 
     async def _reject(

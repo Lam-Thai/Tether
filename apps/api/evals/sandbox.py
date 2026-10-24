@@ -215,15 +215,21 @@ async def purge_eval_tenants(min_age: timedelta = PURGE_MIN_AGE) -> int:
     cutoff = datetime.now(UTC) - min_age
     async with async_session_factory() as session:
         users = (
-            await session.execute(
-                select(User.id).where(
-                    User.external_auth_id.startswith(EVAL_AUTH_PREFIX), User.created_at < cutoff
+            (
+                await session.execute(
+                    select(User.id).where(
+                        User.external_auth_id.startswith(EVAL_AUTH_PREFIX), User.created_at < cutoff
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         businesses = (
-            await session.execute(select(Business.id).where(Business.owner_id.in_(users)))
-        ).scalars().all()
+            (await session.execute(select(Business.id).where(Business.owner_id.in_(users))))
+            .scalars()
+            .all()
+        )
     if users:
         await _delete_tenants(businesses, users)
     return len(users)

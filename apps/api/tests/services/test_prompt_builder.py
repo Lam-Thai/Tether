@@ -597,3 +597,30 @@ def test_a_correction_sits_after_tool_results_and_before_the_owner_settings():
 def test_no_correction_section_without_a_correction():
     assert "CORRECTION" not in system(tools=(CHECK_AVAILABILITY,), hours=week_hours())
     assert "CORRECTION" not in system(tools=(CHECK_AVAILABILITY,), correction=None)
+
+
+# --- Booking (slice #11) --------------------------------------------------------
+
+BOOKING_PARAGRAPH = "Booking: to book, you need the service"
+
+
+def test_with_create_booking_the_rules_carry_booking_and_change_requests():
+    rules = " ".join(platform_rules(("check_availability", "create_booking"), hours=True).split())
+
+    assert BOOKING_PARAGRAPH in rules
+    assert "Ask for one missing detail at a time" in rules
+    assert 'Only a "confirmed" result means it is booked' in rules
+    assert 'On "booking_failed"' in rules
+    assert "unless a create_booking result in this turn says confirmed" in rules
+    # Reschedule / cancel go to a person (slice 13 escalates them).
+    assert "intent RESCHEDULE or CANCEL" in rules and "requires_human to true" in rules
+    assert "never say it was changed or cancelled" in rules
+    assert "Name no time of day in that reply" in rules
+    assert "never repeat it" in rules
+
+
+def test_without_create_booking_the_rules_never_mention_it():
+    rules = " ".join(platform_rules(("check_availability",), hours=True).split())
+
+    assert "create_booking" not in rules and BOOKING_PARAGRAPH not in rules
+    assert "never say an appointment is booked or held." in rules

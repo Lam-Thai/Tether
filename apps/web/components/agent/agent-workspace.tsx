@@ -46,7 +46,7 @@ export function AgentWorkspace({
       return (
         <div className="flex w-full max-w-[1280px] flex-col gap-6">
           <h1 className="text-h1 font-bold tracking-tight uppercase">Agent</h1>
-          <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
             <div className="flex min-w-0 flex-col gap-6">
               <AgentBuilder agent={agent.data} />
               <BusinessInfoForm result={business} />

@@ -38,11 +38,15 @@ Utterance = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1
 Phrase = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Tag = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9_-]{0,31}$")]
 ClockTime = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
+IsoDate = Annotated[
+    str, StringConstraints(pattern=r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
+]
 
 # The scripted Google Calendar a case runs against (`evals/sandbox.py`):
 # open (nothing busy), busy (a realistic partly booked week), fully_booked (every open
-# hour taken), down (Google fails every call), disconnected (no connection row).
-CalendarMode = Literal["open", "busy", "fully_booked", "down", "disconnected"]
+# hour taken), down (Google fails every call), disconnected (no connection row),
+# booking_fails (the `busy` week, but creating an event fails every time).
+CalendarMode = Literal["open", "busy", "fully_booked", "down", "disconnected", "booking_fails"]
 
 
 class SuiteError(ValueError):
@@ -68,6 +72,17 @@ class EvalCase(BaseModel):
     expected_times: tuple[ClockTime, ...] | None = None
     # For `offers_real_times`: the reply may state no time of day at all.
     no_times: bool = False
+    # For `books_correctly`: whether the case must end with a confirmed booking. When true,
+    # `expected_start` (local HH:MM) and `expected_date` (YYYY-MM-DD) say which one.
+    expect_booking: bool | None = None
+    expected_start: ClockTime | None = None
+    expected_date: IsoDate | None = None
+    # For `books_correctly` with `expect_booking: false`: the result the LAST `create_booking`
+    # call must have returned (e.g. `booking_failed`), so a case can't pass for another reason.
+    expected_booking_result: (
+        Literal["slot_taken", "invalid", "booking_failed", "ambiguous_service", "service_not_found"]
+        | None
+    ) = None
     # Filled from the case file's `scorers`; a case may add its own.
     scorers: tuple[str, ...] = ()
 
@@ -188,6 +203,22 @@ def _check(suite: Suite, known_scorers: frozenset[str]) -> None:
             raise SuiteError(
                 f"{case.id}: offers_real_times needs expected_times or no_times (not both)."
             )
+        if "books_correctly" in case.scorers:
+            if case.expect_booking is None:
+                raise SuiteError(f"{case.id}: books_correctly needs expect_booking.")
+            has_target = case.expected_start is not None and case.expected_date is not None
+            if case.expect_booking != has_target or (
+                not case.expect_booking
+                and (case.expected_start is not None or case.expected_date is not None)
+            ):
+                raise SuiteError(
+                    f"{case.id}: expected_start and expected_date go with expect_booking: true "
+                    "(both), and only with it."
+                )
+            if case.expected_booking_result is not None and case.expect_booking:
+                raise SuiteError(
+                    f"{case.id}: expected_booking_result goes with expect_booking: false."
+                )
     used = {scorer for case in suite.cases for scorer in case.scorers}
     for metric in suite.metrics:
         if metric.scorer not in known_scorers:

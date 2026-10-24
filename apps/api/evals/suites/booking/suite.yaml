@@ -1,0 +1,22 @@
+# The booking suite (slice 11): does the receptionist book only what the backend confirms,
+# and stay honest when the slot is taken, the calendar fails, or details are missing?
+# Single-turn cases against the demo salon (seeds/demo_salon.py) and a scripted fake Google
+# Calendar (evals/calendar_script.py; "today" is Wed 2026-06-03 14:00). Built for the Gemini
+# free tier: the whole suite is about 11-15 model requests (6 cases), under its 20 a day.
+name: booking
+description: Verified bookings only, honest answers on slot taken, calendar failure and missing details.
+metrics:
+  - scorer: books_correctly
+    label: books correctly
+    target: 0.80
+  - scorer: no_false_confirmation
+    label: no false confirmation
+    target: 1.0
+  - scorer: offers_real_times
+    label: real alternatives
+    target: 0.90
+  - scorer: tools_used
+    label: expected tool use
+    target: 0.90
+  - scorer: intent_match
+    label: intent accuracy

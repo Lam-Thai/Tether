@@ -9,6 +9,8 @@ the demo salon's hours (Tue/Wed/Fri 09-18, Thu 09-20, Sat 10-16, closed Sun and 
 - `busy`: a partly booked week (below), so each asked-for day has a few real gaps.
 - `fully_booked`: every minute of the next 14 days is taken.
 - `down`: free/busy fails with a retryable server error every time.
+- `booking_fails`: the `busy` week, but creating an event fails with a retryable server
+  error every time (free/busy still works, so the slot looks free and the write fails).
 - `disconnected`: no connection at all (the sandbox runs the case with Google Calendar
   unconfigured, so the lookup answers `not_connected`).
 
@@ -77,9 +79,13 @@ async def scripted_calendar(mode: str, now: datetime) -> FakeGoogleCalendarApi:
                 _local(day, "00:00"),
                 _local(day + timedelta(days=1), "00:00"),
             )
-    elif mode == "busy":
+    elif mode in ("busy", "booking_fails"):
         for offset in range(1, FULL_BOOKING_DAYS + 1):
             day = today + timedelta(days=offset)
             for begin, end in _BUSY_WEEK.get(day, _LUNCH):
                 api.add_busy(REFRESH_TOKEN, CALENDAR_ID, _local(day, begin), _local(day, end))
+    if mode == "booking_fails":
+        api.fail_next(
+            "insert_event", GoogleApiError("server_error", retryable=True), times=DOWN_FAILURES
+        )
     return api
