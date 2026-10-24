@@ -30,6 +30,7 @@ def upgrade() -> None:
     sa.Column('interaction_id', sa.UUID(), nullable=True),
     sa.Column('service_id', sa.UUID(), nullable=True),
     sa.Column('service_name', sa.String(), nullable=False),
+    sa.Column('timezone', sa.String(), nullable=False),
     sa.Column('calendar_event_id', sa.String(), nullable=True),
     sa.Column('customer_name', sa.String(), nullable=False),
     sa.Column('customer_phone', sa.String(), nullable=True),

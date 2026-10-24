@@ -106,6 +106,7 @@ async def _hold(salon: Salon, hh_mm: str, key: str = "other-call") -> uuid.UUID:
             interaction_id=uuid.uuid4(),
             service_id=salon.haircut.id,
             service_name="Haircut",
+            timezone="America/New_York",
             customer_name="Sam Synthetic",
             customer_phone=None,
             start_time=start,
@@ -359,3 +360,17 @@ async def test_for_interaction_lists_this_chats_attempts_only(salon):
     assert listed[1].start == local(FRIDAY, "15:30")
     assert listed[1].start.utcoffset() == timedelta(hours=-4)
     assert other == []
+
+
+async def test_a_booking_keeps_the_local_time_it_was_made_in(salon):
+    outcome = await salon.book("15:30")
+    assert isinstance(outcome, Confirmed)
+    # The owner later moves the business to another timezone.
+    assert salon.tenant.business is not None
+    salon.tenant.business.timezone = "America/Los_Angeles"
+
+    [listed] = await salon.service.for_interaction(salon.tenant, salon.interaction_id)
+
+    assert (listed.start.hour, listed.start.minute) == (15, 30)
+    assert listed.start.utcoffset() == timedelta(hours=-4)  # still New York time
+    assert salon.store.rows[0].timezone == "America/New_York"

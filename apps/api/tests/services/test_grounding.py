@@ -440,6 +440,13 @@ CLAIMS = [
     ("I've booked a haircut for you on Friday.", ["booking"]),
     ("I've booked it for Friday.", ["booking"]),
     ("I have booked a Friday appointment for you.", ["booking"]),
+    ("You're booked with Maria for Friday.", ["booking"]),
+    ("So you're all set for Friday.", ["booking"]),
+    # A claim followed by a question is still a claim.
+    ("You're all set for Friday at 3:30 PM — is there anything else I can help with?", ["booking"]),
+    ("You're booked for Friday - anything else?", ["booking"]),
+    ("You're booked, anything else?", ["booking"]),
+    ("Great, I've booked you in; want a reminder?", ["booking"]),
 ]
 NOT_CLAIMS = [
     "Shall I book that for you?",

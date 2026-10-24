@@ -230,16 +230,19 @@ ClaimKind = Literal["booking", "change"]
 _CLAIM_ADVERBS = r"(?:\s+(?:now|just|already|all|officially|successfully|gone\s+ahead\s+and))*"
 _BOOKED = r"(?:all\s+set|booked|confirmed|scheduled|reserved|locked\s+in|pencill?ed\s+in|set\s+up)"
 _CHANGED = r"(?:cancell?ed|rescheduled|moved)"
-# Conditionals and purposes are not claims ("once you're booked", "so you're all set").
+# Conditionals are not claims ("once you're booked", "if you're all set"). Not "so": "So
+# you're booked for Friday" IS a claim.
 _NOT_AFTER = "".join(
-    rf"(?<!\b{word}\s)" for word in ("once", "when", "if", "until", "after", "before", "so")
+    rf"(?<!\b{word}\s)" for word in ("once", "when", "if", "until", "after", "before")
 )
 _CLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # "you're booked", "you are all set", "you've been cancelled"
+    # "you're booked", "you are all set", "you've been cancelled", "you're booked with Maria"
     re.compile(
         rf"{_NOT_AFTER}\byou(?:['’]re|\s+are|['’]ve\s+been|\s+have\s+been)"
-        # Not "you're all set with that question" / "you're confirmed as the contact".
-        rf"{_CLAIM_ADVERBS}\s+(?P<verb>{_BOOKED}|{_CHANGED})\b(?!\s+(?:with|as)\b)",
+        rf"{_CLAIM_ADVERBS}\s+(?P<verb>{_BOOKED}|{_CHANGED})\b"
+        # Only for "all set" / "confirmed": "you're all set with that question" and
+        # "you're confirmed as the contact" are no claims.
+        r"(?!(?<=\bset)\s+(?:with|as)\b)(?!(?<=\bconfirmed)\s+(?:with|as)\b)",
         re.IGNORECASE,
     ),
     # "I've booked you", "we have scheduled your haircut", "I've cancelled it", "I've booked
@@ -278,20 +281,32 @@ _CLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
     ),
 )
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
+# A dash or semicolon starts a new clause: "You're all set - anything else?"
+_CLAUSE_BREAK = re.compile(r"\s*[—–;]\s*|\s+-\s+")
+# A clause that asks: it ends with "?" AND opens like a question ("Shall I have you down
+# for 3:30?"). "You're booked, anything else?" ends with "?" but states a booking.
+_QUESTION = re.compile(
+    r"^\W*(?:(?:so|ok(?:ay)?|great|alright|and|then|perfect)\W+)*"
+    r"(?:shall|should|can|could|would|will|do|does|did|want|may|might|is|are|am|was|"
+    r"were|have|has|how|what|which|when|where|who|why)\b.*\?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def booking_claims(text: str) -> list[ClaimKind]:
     """Every statement in `text` that an appointment was booked (`booking`) or cancelled,
-    rescheduled or moved (`change`). Questions don't count."""
+    rescheduled or moved (`change`). A clause that asks a question doesn't count, but a
+    claim followed by a question ("You're booked, anything else?") does."""
     claims: list[ClaimKind] = []
     for sentence in _SENTENCE_END.split(text):
-        if not sentence.strip() or sentence.rstrip().endswith("?"):
-            continue
-        for pattern in _CLAIM_PATTERNS:
-            for match in pattern.finditer(sentence):
-                verb = match.group("verb").lower()
-                changed = re.fullmatch(_CHANGED, verb, re.IGNORECASE) is not None
-                claims.append("change" if changed else "booking")
+        for clause in _CLAUSE_BREAK.split(sentence):
+            if not clause.strip() or _QUESTION.match(clause):
+                continue
+            for pattern in _CLAIM_PATTERNS:
+                for match in pattern.finditer(clause):
+                    verb = match.group("verb").lower()
+                    changed = re.fullmatch(_CHANGED, verb, re.IGNORECASE) is not None
+                    claims.append("change" if changed else "booking")
     return claims
 
 

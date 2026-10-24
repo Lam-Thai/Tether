@@ -120,7 +120,7 @@ class BookedAppointment:
     id: uuid.UUID
     service_id: uuid.UUID | None
     service_name: str
-    # Aware, in the business's timezone.
+    # Aware, in the timezone the booking was made in (`bookings.timezone`).
     start: datetime
     end: datetime
     customer_name: str
@@ -267,7 +267,7 @@ class BookingService:
         if existing is not None:
             if existing.status == "confirmed":
                 _log("replayed", business_id, existing.id)
-                return Confirmed(_appointment(existing, zone), replayed=True)
+                return Confirmed(_appointment(existing), replayed=True)
             return CalendarFailed("in_progress")
 
         # The recheck: everything `check_availability` verifies, right before creating.
@@ -295,6 +295,7 @@ class BookingService:
             interaction_id=request.interaction_id,
             service_id=service.id,
             service_name=service.name,
+            timezone=profile.timezone,
             customer_name=name,
             customer_phone=phone or None,
             start_time=slot.start,
@@ -351,17 +352,17 @@ class BookingService:
             return CalendarFailed("not_saved", service)
 
         _log("confirmed", business_id, confirmed.id)
-        return Confirmed(_appointment(confirmed, zone))
+        return Confirmed(_appointment(confirmed))
 
     async def for_interaction(
         self, tenant: Tenant, interaction_id: uuid.UUID
     ) -> list[BookingSummary]:
         """Every booking attempt this conversation made, oldest first (the test chat's
-        side panel). Scoped to the tenant's business; another business's id is []."""
+        side panel), in the local time each was made in. Scoped to the tenant's business;
+        another business's id is []."""
         business_id = require_business(tenant).id
-        zone = ZoneInfo(self._directory.profile(tenant).timezone)
         rows = await self._store.list_for_interaction(business_id, interaction_id)
-        return [_summary(row, zone) for row in rows]
+        return [_summary(row) for row in rows]
 
     async def _undo(self, business_id: uuid.UUID, event_id: str) -> str:
         """Deletes an event that may exist. `failed` once Google confirms it's gone,
@@ -395,7 +396,8 @@ class BookingService:
             )
 
 
-def _summary(row: Booking, zone: ZoneInfo) -> BookingSummary:
+def _summary(row: Booking) -> BookingSummary:
+    zone = ZoneInfo(row.timezone)
     return BookingSummary(
         id=row.id,
         service_name=row.service_name,
@@ -408,7 +410,8 @@ def _summary(row: Booking, zone: ZoneInfo) -> BookingSummary:
     )
 
 
-def _appointment(row: Booking, zone: ZoneInfo) -> BookedAppointment:
+def _appointment(row: Booking) -> BookedAppointment:
+    zone = ZoneInfo(row.timezone)
     assert row.calendar_event_id is not None  # a confirmed row always has one (CHECK)
     return BookedAppointment(
         id=row.id,

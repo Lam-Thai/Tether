@@ -22,7 +22,9 @@ the service. `idempotency_key` is unique among active rows of a business, so a r
 tool call finds the booking it already made instead of making a second one; a failed
 attempt stays as history and the key can be used again.
 
-`service_name` is a snapshot (the service may be renamed or deleted later).
+`service_name` is a snapshot (the service may be renamed or deleted later), and so is
+`timezone`: the IANA zone the customer was told the time in, so a later change of the
+business's timezone never changes the local time a booking shows.
 `customer_name` / `customer_phone` are customer data: synthetic only in tests and seeds.
 """
 
@@ -108,6 +110,7 @@ class Booking(Base):
         UUID(as_uuid=True), ForeignKey("services.id", ondelete="SET NULL"), nullable=True
     )
     service_name: Mapped[str] = mapped_column(String, nullable=False)
+    timezone: Mapped[str] = mapped_column(String, nullable=False)
     calendar_event_id: Mapped[str | None] = mapped_column(String, nullable=True)
     customer_name: Mapped[str] = mapped_column(String, nullable=False)
     customer_phone: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -139,6 +142,7 @@ class NewBooking:
     interaction_id: uuid.UUID | None
     service_id: uuid.UUID
     service_name: str
+    timezone: str
     customer_name: str
     customer_phone: str | None
     start_time: datetime

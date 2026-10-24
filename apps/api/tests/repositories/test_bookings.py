@@ -46,6 +46,7 @@ def _new(
         interaction_id=interaction_id,
         service_id=service.id,
         service_name=service.name,
+        timezone="America/New_York",
         customer_name="Alex Synthetic",
         customer_phone=None,
         start_time=start,

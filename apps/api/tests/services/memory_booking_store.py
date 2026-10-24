@@ -46,6 +46,7 @@ class MemoryBookingStore:
             interaction_id=new.interaction_id,
             service_id=new.service_id,
             service_name=new.service_name,
+            timezone=new.timezone,
             customer_name=new.customer_name,
             customer_phone=new.customer_phone,
             start_time=new.start_time,
