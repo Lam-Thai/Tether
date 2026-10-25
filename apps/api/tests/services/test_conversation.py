@@ -99,7 +99,7 @@ async def test_new_chat_persists_the_owners_greeting_as_message_one(store, llm):
     )
     assert result.reply_text == "We're at 1 Main St."
     assert result.intent == "LOCATION"
-    assert result.fallback is False and result.ended is False and result.status == "active"
+    assert result.fallback is False and result.ended is False and result.status == "in_progress"
     # Gemini saw the greeting as the opening model message, then the question.
     assert _texts(llm.requests[0]) == [
         ("model", result.messages[0].text),
@@ -244,7 +244,7 @@ async def test_ended_interaction_is_409_and_end_is_idempotent(store, llm):
     ended = await engine.end(tenant, first.interaction_id, "test_chat")
     again = await engine.end(tenant, first.interaction_id, "test_chat")
 
-    assert ended.ended and ended.status == "ended" and ended.ended_at is not None
+    assert ended.ended and ended.status == "completed" and ended.ended_at is not None
     assert again.ended_at == ended.ended_at
     assert len(again.messages) == 3
     with pytest.raises(InteractionEndedError):
@@ -1285,3 +1285,80 @@ async def test_a_get_business_info_date_out_of_range_is_rejected_and_the_turn_co
     assert result.fallback is False
     assert store.operations[0]["status"] == "rejected"
     assert '"error": "date_out_of_range"' in llm.requests[1].system_instruction
+
+
+async def test_card_numbers_ssns_and_codes_never_reach_storage_or_the_model(store, llm):
+    llm.queue(agent_turn("Please don't send card 4111 1111 1111 1111 here."))
+
+    result = await _engine(store, llm).handle_turn(
+        _tenant(),
+        None,
+        "Pay with 4111 1111 1111 1111, cvv 123, my ssn is 123-45-6789. Call 555-123-4567.",
+        "test_chat",
+    )
+
+    stored = " ".join(m.message_text for m in store.messages)
+    sent = " ".join(m.text for r in llm.requests for m in r.messages)
+    for leaked in ("4111", "123-45-6789", "cvv 123"):
+        assert leaked not in stored and leaked not in sent
+        assert leaked not in result.reply_text
+        assert all(leaked not in m.text for m in result.messages)
+    assert "555-123-4567" in stored  # a phone number is not sensitive here
+
+
+async def test_old_unredacted_rows_are_redacted_before_the_model_and_on_display(store, llm):
+    tenant = _tenant()
+    engine = _engine(store, llm)
+    llm.queue(agent_turn("ok"), agent_turn("ok again"))
+    first = await engine.handle_turn(tenant, None, "hello", "test_chat")
+    interaction = store.interactions[first.interaction_id]
+    await store.append_message(interaction, "customer", "old row: card 4111111111111111")
+
+    await engine.handle_turn(tenant, first.interaction_id, "next", "test_chat")
+    transcript = await engine.transcript(tenant, first.interaction_id, "test_chat")
+
+    assert all("4111111111111111" not in m.text for r in llm.requests for m in r.messages)
+    assert all("4111111111111111" not in m.text for m in transcript.messages)
+
+
+async def test_each_valid_turn_records_its_intent_and_the_primary_one_wins(store, llm):
+    tenant = _tenant()
+    engine = _engine(store, llm)
+    llm.queue(
+        agent_turn("a", intent="HUMAN_REQUEST"),
+        agent_turn("b", intent="BOOK_APPOINTMENT"),
+        agent_turn("c", intent="UNKNOWN"),
+        agent_turn("d", intent="UNKNOWN"),
+    )
+
+    first = await engine.handle_turn(tenant, None, "x", "test_chat")
+    interaction = store.interactions[first.interaction_id]
+    intents_after_first = (interaction.intent, list(interaction.state["intents"]))
+    for _ in range(3):
+        await engine.handle_turn(tenant, first.interaction_id, "y", "test_chat")
+
+    assert intents_after_first == ("HUMAN_REQUEST", ["HUMAN_REQUEST"])
+    assert interaction.intent == "BOOK_APPOINTMENT"  # not overwritten by later UNKNOWN turns
+    assert interaction.state["intents"] == ["HUMAN_REQUEST", "BOOK_APPOINTMENT", "UNKNOWN"]
+
+
+async def test_a_fallback_turn_records_no_intent(store, llm):
+    llm.queue(LLMUnavailableError("timeout"))
+
+    result = await _engine(store, llm).handle_turn(_tenant(), None, "hi", "test_chat")
+
+    interaction = store.interactions[result.interaction_id]
+    assert interaction.intent is None and "intents" not in interaction.state
+
+
+async def test_end_after_a_fallback_reply_is_a_failed_interaction(store, llm):
+    tenant = _tenant()
+    engine = _engine(store, llm)
+    llm.queue(LLMUnavailableError("timeout"))
+    first = await engine.handle_turn(tenant, None, "hi", "test_chat")
+
+    ended = await engine.end(tenant, first.interaction_id, "test_chat")
+
+    interaction = store.interactions[first.interaction_id]
+    assert (ended.status, ended.ended) == ("failed", True)
+    assert interaction.outcome == "failed"

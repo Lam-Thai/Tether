@@ -92,7 +92,7 @@ describe("sendTestMessage quota fields", () => {
     interaction_id: "22222222-2222-4222-8222-222222222222",
     reply_text: "Sorry.",
     intent: "UNKNOWN",
-    status: "active",
+    status: "in_progress",
     ended: false,
     fallback: true,
     messages: [],

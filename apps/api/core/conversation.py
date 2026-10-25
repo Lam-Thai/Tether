@@ -19,6 +19,7 @@ from core.config import settings
 from core.db import get_session
 from core.directory import SqlDirectoryStore
 from core.llm import get_llm_client
+from core.summaries import build_summarizer
 from core.usage import get_usage_guard
 from integrations.google_calendar import GoogleCalendarApi
 from integrations.llm.port import LLMClient
@@ -38,7 +39,9 @@ from services.conversation import ConversationEngine
 from services.directory import BusinessDirectory
 from services.faq_search import search_faq_tool
 from services.knowledge import KnowledgeBase
+from services.lifecycle import InteractionLifecycle, NoSummarizer
 from services.oauth_state import OAuthStateSigner
+from services.summarizer import SummarizerPort
 from services.token_vault import TokenVault
 from services.tools import ToolRegistry
 from services.usage import UsageGuard
@@ -66,6 +69,8 @@ def get_conversation_engine(
         clock=clock,
         calendar=CalendarDeps(calendar_api, vault, signer, calendar_config),
         booking_defaults=booking_defaults,
+        # Ending a conversation writes its summary (a metered model call, after the close).
+        summarizer=build_summarizer(session, llm, usage, clock=clock),
     )
 
 
@@ -112,10 +117,12 @@ def build_conversation_engine(
     extra_turn_seconds: float = 0.0,
     calendar: CalendarDeps | None = None,
     booking_defaults: BookingRules | None = None,
+    summarizer: SummarizerPort | None = None,
 ) -> ConversationEngine:
     """The production engine and tool registry over one session. The eval harness
     (`evals/sandbox.py`) builds the same one with a pinned business clock, a fake
-    calendar, and extra turn time for its own request pacing."""
+    calendar, and extra turn time for its own request pacing. Without a `summarizer`
+    ending a conversation closes it with no summary and makes no model call."""
     store = _ConversationStore(session)
     # One directory for the prompt's facts and the tools, so both read the same rows.
     directory = BusinessDirectory(
@@ -143,6 +150,11 @@ def build_conversation_engine(
         turn_timeout_seconds=settings.conversation_turn_timeout_seconds + extra_turn_seconds,
         usage=usage,
         directory=directory,
+        lifecycle=InteractionLifecycle(
+            store,
+            summarizer or NoSummarizer(),
+            idle_minutes=usage.interaction_idle_minutes,
+        ),
     )
 
 

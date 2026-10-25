@@ -25,11 +25,13 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from schemas.agent_turn import Intent
 
 SUITES_DIR = Path(__file__).parent / "suites"
+# Scorers that judge a stored interaction's summary (`evals/scorers.py`), not a chat.
+SUMMARY_SCORERS = frozenset({"two_sentences", "matches_outcome", "ai_summary"})
 SUITE_FILE = "suite.yaml"
 MAX_TURNS = 10
 
@@ -49,6 +51,60 @@ IsoDate = Annotated[
 CalendarMode = Literal["open", "busy", "fully_booked", "down", "disconnected", "booking_fails"]
 
 
+Speaker = Literal["agent", "customer"]
+LocalDateTime = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):[0-5]\d$"
+    ),
+]
+
+
+class StoredMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    speaker: Speaker
+    text: Utterance
+
+
+class StoredOperation(BaseModel):
+    """One operation-log row of the seeded interaction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tool: str = Field(pattern=r"^[a-z_]{1,40}$")
+    status: Literal["succeeded", "rejected", "failed"] = "succeeded"
+    # The machine result code in the log (`confirmed`, `booking_failed`, ...).
+    result: str | None = Field(default=None, pattern=r"^[a-z_]{1,40}$")
+
+
+class StoredBooking(BaseModel):
+    """A booking row of the seeded interaction. Every `confirmed` one of a run lands in
+    the same sandbox tenant, whose double-booking guard is real: use a distinct slot."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    service: str = Field(min_length=1, max_length=60)
+    # The business's local time ("2026-06-05 14:15"); the sandbox converts it to UTC.
+    start: LocalDateTime
+    status: Literal["confirmed", "failed"]
+
+
+class StoredInteraction(BaseModel):
+    """A finished conversation as the database would hold it, for the `summary` suite:
+    the case is one `Summarizer` call over this, not a played chat."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    intent: Intent | None = None
+    status: Literal["completed", "failed", "abandoned"]
+    outcome: Literal["booked", "answered", "escalated", "failed", "abandoned"]
+    requires_human: bool = False
+    messages: tuple[StoredMessage, ...] = Field(min_length=1, max_length=20)
+    operations: tuple[StoredOperation, ...] = ()
+    bookings: tuple[StoredBooking, ...] = ()
+
+
 class SuiteError(ValueError):
     """A suite or case file is missing or invalid."""
 
@@ -57,7 +113,10 @@ class EvalCase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: CaseId
-    turns: tuple[Utterance, ...] = Field(min_length=1, max_length=MAX_TURNS)
+    # Customer utterances played as a chat. Empty only for a `stored` (summary) case.
+    turns: tuple[Utterance, ...] = Field(default=(), max_length=MAX_TURNS)
+    # For the `summary` suite: a stored interaction to summarize instead of a chat to play.
+    stored: StoredInteraction | None = None
     expected_intent: Intent | None = None
     # None: not checked. A list: each tool must have run successfully during the case.
     expected_tools: tuple[str, ...] | None = None
@@ -85,6 +144,12 @@ class EvalCase(BaseModel):
     ) = None
     # Filled from the case file's `scorers`; a case may add its own.
     scorers: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _chat_or_stored(self) -> "EvalCase":
+        if bool(self.turns) == (self.stored is not None):
+            raise ValueError("a case has either turns (a chat) or stored (a summary), not both.")
+        return self
 
 
 class Metric(BaseModel):
@@ -197,6 +262,9 @@ def _check(suite: Suite, known_scorers: frozenset[str]) -> None:
         unknown = set(case.scorers) - known_scorers
         if unknown:
             raise SuiteError(f"{case.id}: unknown scorer(s) {sorted(unknown)}.")
+        summary_scorers = set(case.scorers) & SUMMARY_SCORERS
+        if bool(summary_scorers) != (case.stored is not None):
+            raise SuiteError(f"{case.id}: summary scorers go with `stored` cases, and only those.")
         if "intent_match" in case.scorers and case.expected_intent is None:
             raise SuiteError(f"{case.id}: intent_match needs expected_intent.")
         if "offers_real_times" in case.scorers and bool(case.expected_times) == case.no_times:

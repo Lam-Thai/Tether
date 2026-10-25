@@ -42,7 +42,7 @@ function turn(overrides: Partial<TurnRead> = {}): TurnRead {
     interaction_id: ID,
     reply_text: "We open at nine.",
     intent: "BUSINESS_INFO",
-    status: "active",
+    status: "in_progress",
     ended: false,
     fallback: false,
     usage_limited: false,
@@ -58,7 +58,7 @@ function turn(overrides: Partial<TurnRead> = {}): TurnRead {
 function transcript(overrides: Partial<TranscriptRead> = {}): TranscriptRead {
   return {
     interaction_id: ID,
-    status: "active",
+    status: "in_progress",
     ended: false,
     started_at: "2026-01-01T00:00:00Z",
     ended_at: null,
@@ -352,14 +352,14 @@ describe("TestChat", () => {
     render(<TestChat agentName="Riley" chat={{ kind: "restored", transcript: transcript() }} />);
 
     await user.click(screen.getByRole("button", { name: "End chat" }));
-    endMock.mockResolvedValueOnce({ kind: "ok", data: transcript({ ended: true, status: "ended" }) });
+    endMock.mockResolvedValueOnce({ kind: "ok", data: transcript({ ended: true, status: "completed" }) });
     await user.click(await screen.findByRole("button", { name: "Retry" }));
 
     expect(await screen.findByText("This chat has ended.")).toBeInTheDocument();
   });
 
   it("ends the chat and offers New chat, which clears ?chat", async () => {
-    endMock.mockResolvedValue({ kind: "ok", data: transcript({ ended: true, status: "ended" }) });
+    endMock.mockResolvedValue({ kind: "ok", data: transcript({ ended: true, status: "completed" }) });
     const user = userEvent.setup();
     render(<TestChat agentName="Riley" chat={{ kind: "restored", transcript: transcript() }} />);
 
@@ -434,7 +434,7 @@ describe("TestChat", () => {
     render(
       <TestChat
         agentName="Riley"
-        chat={{ kind: "restored", transcript: transcript({ ended: true, status: "ended" }) }}
+        chat={{ kind: "restored", transcript: transcript({ ended: true, status: "completed" }) }}
       />,
     );
 

@@ -34,6 +34,10 @@ Built in:
   fully booked, calendar down or disconnected, service still unclear) it must state no
   time at all and must not be the availability fallback; `must_contain` /
   `must_not_contain` then check that it says something honest.
+- `two_sentences` / `matches_outcome` / `ai_summary` (the `summary` suite, stored interactions):
+  the summary is exactly two sentences; it agrees with the outcome the backend computes from
+  the seeded records (a failed booking is never described as successful); the model's own
+  summary was accepted, not the template (information only).
 - `tools_not_used`: none of the case's `forbidden_tools` was called (added automatically).
 - `tools_used`: every tool in `expected_tools` ran successfully during the case
   (added automatically to a case that sets `expected_tools`).
@@ -47,7 +51,9 @@ from typing import Protocol
 
 from evals.cases import EvalCase
 from evals.playback import Operation, PlayedTurn
+from evals.summary_seed import facts_of
 from services.grounding import BUSINESS_HOURS, BUSINESS_PROFILE, clock_times
+from services.summarizer import claims_booking, outcome_problem, split_sentences, verify
 
 
 @dataclass(frozen=True)
@@ -307,6 +313,55 @@ class ToolsNotUsed:
         return _result(self.name, [f"called {used}"] if used else [])
 
 
+class TwoSentences:
+    name = "two_sentences"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        text = transcript[-1].reply if transcript else ""
+        count = len(split_sentences(text))
+        return _result(self.name, [] if count == 2 else [f"{count} sentences, not 2"])
+
+
+class MatchesOutcome:
+    """The stored summary agrees with the outcome the backend computes from the seeded
+    records: no booking claim unless a booking is confirmed, none cancelled or moved, a
+    time of day only for a confirmed booking, and a confirmed booking described as booked.
+    `must_contain` / `must_not_contain` add phrase checks."""
+
+    name = "matches_outcome"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        if case.stored is None or not transcript:
+            return _result(self.name, ["no stored interaction or summary"])
+        text = transcript[-1].reply
+        verified = verify(facts_of(case.stored))
+        problems: list[str] = []
+        if (problem := outcome_problem(text, verified)) is not None:
+            problems.append(f"{problem} (verified outcome {verified.outcome})")
+        if verified.outcome == "booked" and not claims_booking(text):
+            problems.append("a confirmed booking is not described as booked")
+        problems += [f"missing {p!r}" for p in case.must_contain if not _states(text, p)]
+        problems += [f"contains {p!r}" for p in _phrases_in(text, case.must_not_contain)]
+        return _result(self.name, problems)
+
+
+class AiSummary:
+    """Reported for information (no target): the model's own summary was accepted rather
+    than replaced by the template."""
+
+    name = "ai_summary"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        fallback = transcript[-1].fallback if transcript else None
+        return _result(self.name, [] if fallback is None else [f"template stored ({fallback})"])
+
+
 SCORERS: Mapping[str, Scorer] = {
     scorer.name: scorer
     for scorer in (
@@ -317,5 +372,8 @@ SCORERS: Mapping[str, Scorer] = {
         ToolsUsed(),
         OffersRealTimes(),
         ToolsNotUsed(),
+        TwoSentences(),
+        MatchesOutcome(),
+        AiSummary(),
     )
 }

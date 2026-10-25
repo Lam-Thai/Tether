@@ -1,0 +1,18 @@
+# The summary suite (slice 12): is the two-sentence inbox summary of a finished
+# conversation accurate to what the backend verified, above all never describing a failed
+# booking as a success? Each case is ONE Summarizer call over a stored interaction
+# (transcript + operation log + bookings, synthetic, demo salon), not a played chat. The
+# verified outcome is computed by the backend from the seeded records, never from the
+# model's text. Built for the Gemini free tier: 13 cases, one request each (two when the
+# first summary is rejected), so about 13-17 requests in total.
+name: summary
+description: Two accurate sentences per interaction; a failed booking is never described as booked.
+metrics:
+  - scorer: two_sentences
+    label: two sentences
+    target: 1.0
+  - scorer: matches_outcome
+    label: matches outcome
+    target: 0.95
+  - scorer: ai_summary
+    label: model summary accepted

@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import settings
 from core.conversation import CalendarDeps, build_conversation_engine
 from core.db import async_session_factory
+from core.summaries import build_summarizer
 from core.tenant import Tenant
 from core.usage import SqlUsageStore, cost_rates, usage_limits
 from evals.calendar_script import (
@@ -47,18 +48,23 @@ from evals.calendar_script import (
     REFRESH_TOKEN,
     scripted_calendar,
 )
-from evals.cases import CalendarMode
+from evals.cases import CalendarMode, StoredInteraction
 from evals.playback import CaseEnv, Operation
 from evals.runner import SandboxSpec
+from evals.summary_seed import BOOKING_MINUTES, booking_start
 from integrations.google_calendar.port import REQUIRED_SCOPES
 from integrations.llm.port import LLMClient
+from models.booking import Booking
 from models.business import Business
+from models.interaction import Interaction, InteractionMessage
+from models.operation import InteractionOperation
 from models.user import User
 from repositories.calendar import SqlCalendarStore
 from repositories.operations import list_operations
 from seeds.demo_salon import add_faqs, add_services, new_demo_business, set_hours_if_missing
 from services.calendar import CalendarConfig, token_context
 from services.oauth_state import OAuthStateSigner
+from services.summarizer import Summary
 from services.token_vault import TokenVault
 from services.usage import DailyLimit, UsageGuard, UsageKind, UsageLimits
 
@@ -129,6 +135,86 @@ class _PostgresSandbox:
             yield CaseEnv(
                 tenant=self.tenant, engine=engine, operations=operations, commit=session.commit
             )
+
+    async def summarize(self, llm: LLMClient, stored: StoredInteraction) -> Summary | None:
+        """Seed `stored` as a closed interaction of this tenant, then run the real
+        `Summarizer` (production wiring, the run's `UsageGuard`) over it."""
+        business = self.tenant.business
+        assert business is not None
+        async with async_session_factory() as session:
+            interaction_id = await seed_stored_interaction(session, business, stored)
+            await session.commit()
+            summarizer = build_summarizer(
+                session,
+                llm,
+                self.usage,
+                timeout_seconds=settings.summary_timeout_seconds
+                + self.spec.pacing_allowance_seconds,
+            )
+            return await summarizer.summarize(business.id, interaction_id)
+
+
+async def seed_stored_interaction(
+    session: AsyncSession, business: Business, stored: StoredInteraction
+) -> uuid.UUID:
+    """Insert a closed interaction with its messages, operation log and bookings (rows
+    only; the caller commits). Synthetic text from the suite file."""
+    interaction = Interaction(
+        id=uuid.uuid4(),
+        business_id=business.id,
+        channel="test_chat",
+        status=stored.status,
+        outcome=stored.outcome,
+        intent=stored.intent,
+        state={"requires_human": stored.requires_human},
+        ended_at=EVAL_NOW,
+    )
+    session.add(interaction)
+    await session.flush()
+    for number, message in enumerate(stored.messages, start=1):
+        session.add(
+            InteractionMessage(
+                interaction_id=interaction.id,
+                business_id=business.id,
+                speaker=message.speaker,
+                message_text=message.text,
+                sequence_number=number,
+            )
+        )
+    for operation in stored.operations:
+        session.add(
+            InteractionOperation(
+                business_id=business.id,
+                interaction_id=interaction.id,
+                tool_name=operation.tool,
+                arguments={},
+                status=operation.status,
+                result={"result": operation.result} if operation.result else {},
+                duration_ms=5,
+            )
+        )
+    for booking in stored.bookings:
+        start = booking_start(booking, business.timezone)
+        end = start + timedelta(minutes=BOOKING_MINUTES)
+        confirmed = booking.status == "confirmed"
+        session.add(
+            Booking(
+                business_id=business.id,
+                interaction_id=interaction.id,
+                service_name=booking.service,
+                timezone=business.timezone,
+                customer_name="Eval Customer",
+                start_time=start,
+                end_time=end,
+                blocked_until=end,
+                status=booking.status,
+                calendar_event_id="eval-event" if confirmed else None,
+                failure_reason=None if confirmed else "calendar_unavailable",
+                idempotency_key=uuid.uuid4().hex,
+            )
+        )
+    await session.flush()
+    return interaction.id
 
 
 async def connect_fake_calendar(

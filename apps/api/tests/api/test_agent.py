@@ -137,7 +137,7 @@ async def test_chat_round_trip_reloads_identically_from_postgres(client, entitle
     assert [m["speaker"] for m in first_body["messages"]] == ["agent", "customer", "agent"]
     assert first_body["messages"][0]["text"].startswith("Hi, thanks for contacting")
     assert first_body["reply_text"] == "Let me find out for you."
-    assert (first_body["intent"], first_body["status"]) == ("UNKNOWN", "active")
+    assert (first_body["intent"], first_body["status"]) == ("UNKNOWN", "in_progress")
     assert first_body["ended"] is False and first_body["fallback"] is False
 
     second = await _send(client, tenant_a, "And Sunday?", interaction_id)
@@ -150,7 +150,7 @@ async def test_chat_round_trip_reloads_identically_from_postgres(client, entitle
     transcript = reloaded.json()
     assert transcript["interaction_id"] == interaction_id
     assert (transcript["status"], transcript["ended"], transcript["ended_at"]) == (
-        "active",
+        "in_progress",
         False,
         None,
     )
@@ -200,12 +200,13 @@ async def test_end_is_idempotent_and_a_later_send_is_409(client, entitled_tenant
     again = await client.post(url, headers=_auth(tenant_a))
 
     assert ended.status_code == again.status_code == 200
-    assert ended.json()["ended"] is True and ended.json()["status"] == "ended"
+    assert ended.json()["ended"] is True and ended.json()["status"] == "completed"
     assert again.json() == ended.json()
     late = await _send(client, tenant_a, "more", interaction_id)
     assert late.status_code == 409
     assert late.json()["error"]["code"] == "interaction_ended"
-    assert len(llm.requests) == 1
+    # One turn, plus the summary request End makes; the rejected send reached no model.
+    assert len(llm.requests) == 2
 
 
 async def test_tenant_b_cannot_see_or_touch_tenant_a(client, entitled_tenants, llm):
@@ -225,7 +226,7 @@ async def test_tenant_b_cannot_see_or_touch_tenant_a(client, entitled_tenants, l
     assert b_agent.json()["name"] == "Riley"  # B gets its own defaults, never A's agent
     assert len(llm.requests) == 1  # B's send never reached the model
     still_active = await client.get(f"/api/v1/agent/test/{interaction_id}", headers=_auth(tenant_a))
-    assert still_active.json()["status"] == "active"
+    assert still_active.json()["status"] == "in_progress"
     assert len(still_active.json()["messages"]) == 3  # nothing from B was appended
 
 

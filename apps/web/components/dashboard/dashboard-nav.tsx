@@ -11,7 +11,7 @@ const NAV_ITEMS = [
   { label: "FAQs" },
   { label: "Services" },
   { label: "Calendar", href: "/dashboard/settings/calendar" },
-  { label: "Inbox" },
+  { label: "Inbox", href: "/dashboard/inbox" },
   { label: "Phone" },
   { label: "Settings", href: "/dashboard/settings", exclude: "/dashboard/settings/calendar" },
 ] as const;

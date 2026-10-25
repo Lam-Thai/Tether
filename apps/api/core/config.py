@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
     # Per attempt; the adapter makes at most 2 attempts.
     gemini_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    # Ceiling on all model work for one interaction summary (retry included); past
+    # it the deterministic template is stored.
+    summary_timeout_seconds: float = Field(default=20.0, gt=0, le=60)
     # How many recent messages each turn sends to the model (PRD §9.1).
     conversation_history_limit: int = Field(default=20, ge=2, le=100)
     # Hard ceiling on all model work in one turn (invalid-output retry included).

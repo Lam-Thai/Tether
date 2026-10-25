@@ -261,6 +261,17 @@ async def test_long_strings_are_truncated_in_the_log():
     assert len(log.rows[0]["arguments"]["code"]) == MAX_LOGGED_STRING_CHARS
 
 
+async def test_card_numbers_in_tool_arguments_are_redacted_in_the_log_only():
+    spy, log, ctx, executor = _setup()
+
+    await executor.execute(
+        ctx, ToolCall(name="lookup", arguments={"code": "card 4111 1111 1111 1111 cvv 123"})
+    )
+
+    assert "4111" not in str(log.rows[0]["arguments"]) and "cvv 123" not in str(log.rows[0])
+    assert "4111" in spy.seen[0][1].code  # redaction happens at the log, not in validation
+
+
 async def test_a_round_executes_at_most_the_cap_and_rejects_the_rest():
     spy, log, ctx, executor = _setup()
     calls = [ToolCall(name="lookup", arguments={"code": f"c{i}"}) for i in range(5)]

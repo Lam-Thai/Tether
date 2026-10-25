@@ -7,7 +7,7 @@ vi.mock("next/navigation", () => ({ usePathname: () => pathname }));
 import { DashboardNav } from "./dashboard-nav";
 
 describe("DashboardNav", () => {
-  it("links Agent, Calendar and Settings and leaves the other sections disabled", () => {
+  it("links Agent, Calendar, Inbox and Settings and leaves the other sections disabled", () => {
     pathname = "/dashboard";
     render(<DashboardNav />);
 
@@ -22,9 +22,10 @@ describe("DashboardNav", () => {
       "href",
       "/dashboard/settings/calendar",
     );
-    expect(screen.getAllByRole("link")).toHaveLength(3);
+    expect(screen.getByRole("link", { name: "Inbox" })).toHaveAttribute("href", "/dashboard/inbox");
+    expect(screen.getAllByRole("link")).toHaveLength(4);
 
-    for (const label of ["FAQs", "Services", "Inbox", "Phone"]) {
+    for (const label of ["FAQs", "Services", "Phone"]) {
       expect(screen.getByText(label)).toHaveAttribute("aria-disabled", "true");
     }
   });
@@ -47,5 +48,15 @@ describe("DashboardNav", () => {
     render(<DashboardNav />);
     expect(screen.getByRole("link", { name: "Calendar" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("marks Inbox as current on the list and on a conversation", () => {
+    pathname = "/dashboard/inbox";
+    const { unmount } = render(<DashboardNav />);
+    expect(screen.getByRole("link", { name: "Inbox" })).toHaveAttribute("aria-current", "page");
+    unmount();
+    pathname = "/dashboard/inbox/abc";
+    render(<DashboardNav />);
+    expect(screen.getByRole("link", { name: "Inbox" })).toHaveAttribute("aria-current", "page");
   });
 });

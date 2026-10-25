@@ -63,7 +63,7 @@ class TurnRead(BaseModel):
     interaction_id: UUID
     reply_text: str
     intent: str
-    status: Literal["active", "ended"]
+    status: Literal["in_progress", "completed", "failed", "abandoned"]
     ended: bool
     fallback: bool
     # The reply is the quota fallback: a daily usage limit was reached.
@@ -75,7 +75,7 @@ class TranscriptRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     interaction_id: UUID
-    status: Literal["active", "ended"]
+    status: Literal["in_progress", "completed", "failed", "abandoned"]
     ended: bool
     started_at: datetime
     ended_at: datetime | None

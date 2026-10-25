@@ -637,11 +637,16 @@ export interface MessageRead {
   fallback: boolean;
 }
 
+/** Lifecycle of one interaction, as stored by the API. */
+export type InteractionStatus = "in_progress" | "completed" | "failed" | "abandoned";
+
+const INTERACTION_STATUSES: readonly string[] = ["in_progress", "completed", "failed", "abandoned"];
+
 export interface TurnRead {
   interaction_id: string;
   reply_text: string;
   intent: string;
-  status: string;
+  status: InteractionStatus;
   ended: boolean;
   /** True when the model failed and `reply_text` is one of the fixed fallback messages. */
   fallback: boolean;
@@ -653,7 +658,7 @@ export interface TurnRead {
 
 export interface TranscriptRead {
   interaction_id: string;
-  status: string;
+  status: InteractionStatus;
   ended: boolean;
   started_at: string;
   ended_at: string | null;
@@ -747,6 +752,7 @@ function isTurnRead(value: unknown): value is TurnRead {
     typeof value.reply_text === "string" &&
     typeof value.intent === "string" &&
     typeof value.status === "string" &&
+    INTERACTION_STATUSES.includes(value.status) &&
     typeof value.ended === "boolean" &&
     typeof value.fallback === "boolean" &&
     (value.usage_limited === undefined || typeof value.usage_limited === "boolean") &&
@@ -759,6 +765,7 @@ function isTranscriptRead(value: unknown): value is TranscriptRead {
   return (
     typeof value.interaction_id === "string" &&
     typeof value.status === "string" &&
+    INTERACTION_STATUSES.includes(value.status) &&
     typeof value.ended === "boolean" &&
     typeof value.started_at === "string" &&
     isNullableString(value.ended_at) &&
@@ -1864,4 +1871,230 @@ export async function getAvailability(
 
 function invalidMessageFor(body: unknown, fallback: string): string {
   return isApiErrorBody(body) ? body.error.message : fallback;
+}
+
+// Inbox (`/interactions`): the owner's list of conversations, one detail view and its transcript.
+
+export type InteractionChannel = "test_chat" | "voice" | "sms" | (string & {});
+export type InteractionOutcome = "booked" | "answered" | "escalated" | "failed" | "abandoned";
+export type SummarySource = "ai" | "template";
+export type OperationStatus = "succeeded" | "rejected" | "failed";
+export type InboxType = "all" | "bookings" | "faqs" | "escalations" | "failed";
+
+const INBOX_TYPES: readonly string[] = ["all", "bookings", "faqs", "escalations", "failed"];
+const INTERACTION_OUTCOMES: readonly string[] = ["booked", "answered", "escalated", "failed", "abandoned"];
+const OPERATION_STATUSES: readonly string[] = ["succeeded", "rejected", "failed"];
+
+export interface InteractionRow {
+  id: string;
+  channel: InteractionChannel;
+  /** ISO UTC instant. Show it in the response's business `timezone`. */
+  started_at: string;
+  ended_at: string | null;
+  caller: string | null;
+  /** Primary intent, e.g. "BOOK_APPOINTMENT". Open string. */
+  intent: string | null;
+  summary: string | null;
+  summary_source: SummarySource | null;
+  status: InteractionStatus;
+  outcome: InteractionOutcome | null;
+  requires_human: boolean;
+}
+
+export interface InteractionList {
+  items: InteractionRow[];
+  next_cursor: string | null;
+  timezone: string;
+}
+
+export interface OperationItem {
+  id: string;
+  tool_name: string;
+  status: OperationStatus;
+  /** Short machine label from the backend, e.g. "booking 1a2b3c4d". */
+  label: string | null;
+  created_at: string;
+  duration_ms: number | null;
+}
+
+export interface InteractionDetail extends InteractionRow {
+  timezone: string;
+  message_count: number;
+  operations: OperationItem[];
+}
+
+export interface InteractionMessagePage {
+  items: MessageRead[];
+  next_after: number | null;
+}
+
+/** Query for `GET /interactions`. Empty or "all" values are omitted from the request. */
+export interface InboxQuery {
+  type?: InboxType;
+  status?: string;
+  intent?: string;
+  /** YYYY-MM-DD in the business timezone, inclusive. */
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+export type InteractionListResult =
+  | { kind: "ok"; data: InteractionList }
+  | { kind: "validation"; message: string }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type InteractionDetailResult =
+  | { kind: "ok"; data: InteractionDetail }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type InteractionMessagesResult =
+  | { kind: "ok"; data: InteractionMessagePage }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isInteractionRow(value: unknown): value is InteractionRow {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.channel === "string" &&
+    typeof value.started_at === "string" &&
+    isNullableString(value.ended_at) &&
+    isNullableString(value.caller) &&
+    isNullableString(value.intent) &&
+    isNullableString(value.summary) &&
+    (value.summary_source === null || value.summary_source === "ai" || value.summary_source === "template") &&
+    typeof value.status === "string" &&
+    INTERACTION_STATUSES.includes(value.status) &&
+    (value.outcome === null ||
+      (typeof value.outcome === "string" && INTERACTION_OUTCOMES.includes(value.outcome))) &&
+    typeof value.requires_human === "boolean"
+  );
+}
+
+function isInteractionList(value: unknown): value is InteractionList {
+  if (!isRecord(value)) return false;
+  return (
+    Array.isArray(value.items) &&
+    value.items.every(isInteractionRow) &&
+    isNullableString(value.next_cursor) &&
+    typeof value.timezone === "string"
+  );
+}
+
+function isOperationItem(value: unknown): value is OperationItem {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.tool_name === "string" &&
+    typeof value.status === "string" &&
+    OPERATION_STATUSES.includes(value.status) &&
+    isNullableString(value.label) &&
+    typeof value.created_at === "string" &&
+    (value.duration_ms === null || isCount(value.duration_ms))
+  );
+}
+
+function isInteractionDetail(value: unknown): value is InteractionDetail {
+  if (!isRecord(value)) return false;
+  return (
+    isInteractionRow(value) &&
+    typeof value.timezone === "string" &&
+    isCount(value.message_count) &&
+    Array.isArray(value.operations) &&
+    value.operations.every(isOperationItem)
+  );
+}
+
+function isInteractionMessagePage(value: unknown): value is InteractionMessagePage {
+  if (!isRecord(value)) return false;
+  return (
+    isMessageList(value.items) &&
+    (value.next_after === null || (typeof value.next_after === "number" && Number.isInteger(value.next_after)))
+  );
+}
+
+/** Whether `value` is one of the inbox type tabs. */
+export function isInboxType(value: unknown): value is InboxType {
+  return typeof value === "string" && INBOX_TYPES.includes(value);
+}
+
+/** Calls `GET /api/v1/interactions` (newest first, keyset-paginated by `cursor`). */
+export async function listInteractions(
+  token: string,
+  query: InboxQuery = {},
+): Promise<InteractionListResult> {
+  const params = new URLSearchParams();
+  if (query.type && query.type !== "all") params.set("type", query.type);
+  if (query.status) params.set("status", query.status);
+  if (query.intent) params.set("intent", query.intent);
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.cursor) params.set("cursor", query.cursor);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const qs = params.toString();
+
+  const outcome = await fetchApi(
+    `/interactions${qs ? `?${qs}` : ""}`,
+    { headers: authHeaders(token) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 400 || outcome.status === 422) {
+    return { kind: "validation", message: invalidMessageFor(outcome.body, "Those filters are invalid.") };
+  }
+  if (outcome.status === 200 && isInteractionList(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `GET /api/v1/interactions/{id}`. */
+export async function getInteraction(token: string, id: string): Promise<InteractionDetailResult> {
+  const outcome = await fetchApi(
+    `/interactions/${encodeURIComponent(id)}`,
+    { headers: authHeaders(token) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 200 && isInteractionDetail(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `GET /api/v1/interactions/{id}/messages`: one page of the transcript after sequence `after`. */
+export async function listInteractionMessages(
+  token: string,
+  id: string,
+  after = 0,
+): Promise<InteractionMessagesResult> {
+  const outcome = await fetchApi(
+    `/interactions/${encodeURIComponent(id)}/messages?after=${encodeURIComponent(String(after))}`,
+    { headers: authHeaders(token) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 200 && isInteractionMessagePage(outcome.body)) {
+    return {
+      kind: "ok",
+      data: { ...outcome.body, items: withFallbackFlags(outcome.body.items) },
+    };
+  }
+  return UNEXPECTED;
 }

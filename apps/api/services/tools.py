@@ -56,6 +56,7 @@ from schemas.agent_turn import ToolCall
 from services.agent import require_business
 from services.grounding import Evidence
 from services.knowledge import FaqSnippet
+from services.redaction import redact
 
 logger = logging.getLogger("tether.tools")
 
@@ -363,7 +364,8 @@ def _truncate(text: str, limit: int) -> str:
 def _sanitize(value: Any) -> Any:
     """JSON-able, bounded copy for the operation log: strings truncated, collections capped."""
     if isinstance(value, str):
-        return _truncate(value, MAX_LOGGED_STRING_CHARS)
+        # Redact first: truncating could cut a card number into something unmatchable.
+        return _truncate(redact(value), MAX_LOGGED_STRING_CHARS)
     if value is None or isinstance(value, bool | int | float):
         return value
     if isinstance(value, Mapping):

@@ -43,7 +43,7 @@ function turn(overrides: Partial<TurnRead> = {}): TurnRead {
     interaction_id: ID,
     reply_text: "Booked.",
     intent: "BOOK",
-    status: "active",
+    status: "in_progress",
     ended: false,
     fallback: false,
     usage_limited: false,
@@ -57,7 +57,7 @@ function turn(overrides: Partial<TurnRead> = {}): TurnRead {
 
 const restoredTranscript: TranscriptRead = {
   interaction_id: ID,
-  status: "active",
+  status: "in_progress",
   ended: false,
   started_at: "2026-01-01T00:00:00Z",
   ended_at: null,

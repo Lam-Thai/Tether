@@ -83,7 +83,9 @@ async def test_plays_a_case_on_a_seeded_tenant_and_deletes_it_afterwards(usage):
         # The conversation was ended after the case.
         assert (
             await _count(
-                Interaction, Interaction.business_id == business.id, Interaction.status == "active"
+                Interaction,
+                Interaction.business_id == business.id,
+                Interaction.status == "in_progress",
             )
             == 0
         )
@@ -235,3 +237,39 @@ async def test_booking_fails_mode_keeps_the_busy_week_but_fails_every_event_inse
     assert not busy._failures["insert_event"]  # pyright: ignore[reportPrivateUsage]
     same = failing._of(REFRESH_TOKEN).busy == busy._of(REFRESH_TOKEN).busy  # pyright: ignore
     assert same
+
+
+async def test_summarizes_every_summary_suite_case_on_the_seeded_tenant(usage):
+    """Each `summary` case seeds real rows (messages, operation log, bookings) and the
+    production Summarizer stores a template summary; the bookings table's double-booking
+    guard accepts every confirmed one, and cleanup removes it all."""
+    from evals.cases import load_suite
+    from evals.playback import play_summary
+    from evals.scorers import SCORERS
+    from models.booking import Booking
+
+    suite = load_suite("summary", known_scorers=frozenset(SCORERS))
+    llm = FakeLLMClient()
+    sandbox_factory = partial(postgres_sandbox, usage_clock=lambda: usage.day)
+
+    spec = SandboxSpec(max_requests=40, concurrency=1, pacing_allowance_seconds=0)
+    async with sandbox_factory(spec) as sandbox:
+        business = sandbox.tenant.business
+        assert business is not None
+        for case in suite.cases:
+            assert case.stored is not None
+            llm.queue("not json", "not json")  # invalid twice: the template is stored
+            playback = await play_summary(sandbox, Recorder(llm), case.stored)
+            (turn,) = playback.turns
+            assert turn.fallback == "template", case.id
+            scores = [
+                SCORERS[name].score(case, playback.turns, playback.operations)
+                for name in ("two_sentences", "matches_outcome")
+            ]
+            assert all(s.passed for s in scores), (case.id, scores)
+        assert await _count(Interaction, Interaction.business_id == business.id) == len(suite.cases)
+        assert await _count(Booking, Booking.business_id == business.id) >= 3
+        business_id = business.id
+
+    assert await _count(Interaction, Interaction.business_id == business_id) == 0
+    assert await _count(Booking, Booking.business_id == business_id) == 0
