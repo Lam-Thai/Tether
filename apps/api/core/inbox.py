@@ -143,7 +143,7 @@ def build_inbox(session: AsyncSession, llm: LLMClient, usage: UsageGuard) -> Inb
     lifecycle = InteractionLifecycle(
         SqlConversationStore(session), summarizer, idle_minutes=usage.interaction_idle_minutes
     )
-    return Inbox(SqlInteractionQueries(session), lifecycle, summarizer)
+    return Inbox(SqlInteractionQueries(session), lifecycle)
 
 
 def get_inbox(

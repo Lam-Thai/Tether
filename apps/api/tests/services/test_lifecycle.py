@@ -258,6 +258,8 @@ async def test_a_summarizer_failure_does_not_undo_the_close(caplog):
 
     assert (interaction.status, interaction.outcome) == ("completed", "answered")
     assert "secret transcript text" not in caplog.text
+    # The summarizer shares the session: its failure is rolled back after the close's commit.
+    assert store.calls.index("rollback") > store.calls.index("checkpoint")
 
 
 async def test_end_of_another_tenants_or_unknown_interaction_is_not_found():

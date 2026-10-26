@@ -94,11 +94,20 @@ class FakeLifecycle:
     def __init__(self, events: list[str]) -> None:
         self.events = events
         self.swept: list[uuid.UUID] = []
+        self.summarizer: FakeSummarizer | None = None
 
     async def sweep_idle(self, business_id):
         self.events.append("sweep")
         self.swept.append(business_id)
         return 0
+
+    async def summarize_safely(self, business_id, interaction_id, *, ai=True):
+        """Like the real one: the summarizer's failure is swallowed."""
+        assert self.summarizer is not None
+        try:
+            await self.summarizer.summarize(business_id, interaction_id, ai=ai)
+        except Exception:
+            self.events.append("rollback")
 
 
 class FakeSummarizer:
@@ -130,7 +139,8 @@ def _inbox(fail: bool = False):
     queries = FakeQueries()
     lifecycle = FakeLifecycle(queries.events)
     summarizer = FakeSummarizer(queries, fail)
-    return Inbox(queries, lifecycle, summarizer), queries, lifecycle, summarizer  # type: ignore[arg-type]
+    lifecycle.summarizer = summarizer
+    return Inbox(queries, lifecycle), queries, lifecycle, summarizer  # type: ignore[arg-type]
 
 
 # --- cursors ----------------------------------------------------------------------

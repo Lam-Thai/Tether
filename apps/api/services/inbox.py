@@ -20,7 +20,6 @@ No FastAPI or SQLAlchemy imports: the router passes an `InteractionQueries`
 
 import base64
 import binascii
-import logging
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -33,9 +32,6 @@ from core.tenant import Tenant
 from services.agent import require_business
 from services.lifecycle import InteractionLifecycle, InteractionNotFoundError
 from services.redaction import redact
-from services.summarizer import SummarizerPort
-
-logger = logging.getLogger("tether.inbox")
 
 TypeFilter = Literal["all", "bookings", "faqs", "escalations", "failed"]
 DEFAULT_LIMIT = 25
@@ -217,15 +213,9 @@ def _code(value: object) -> str | None:
 
 
 class Inbox:
-    def __init__(
-        self,
-        queries: InteractionQueries,
-        lifecycle: InteractionLifecycle,
-        summarizer: SummarizerPort,
-    ) -> None:
+    def __init__(self, queries: InteractionQueries, lifecycle: InteractionLifecycle) -> None:
         self._queries = queries
         self._lifecycle = lifecycle
-        self._summarizer = summarizer
 
     async def list(
         self,
@@ -255,19 +245,21 @@ class Inbox:
 
     async def detail(self, tenant: Tenant, interaction_id: uuid.UUID) -> DetailView:
         business = require_business(tenant)
-        found = await self._queries.detail(business.id, interaction_id)
+        # Plain values: a failed lazy summary rolls back, expiring the ORM objects.
+        business_id, timezone = business.id, business.timezone
+        found = await self._queries.detail(business_id, interaction_id)
         if found is None:
             raise InteractionNotFoundError("Interaction not found.")
         if found.row.status != "in_progress" and found.row.summary is None:
-            await self._summarize_lazily(business.id, interaction_id)
-            found = await self._queries.detail(business.id, interaction_id) or found
+            await self._lifecycle.summarize_safely(business_id, interaction_id)
+            found = await self._queries.detail(business_id, interaction_id) or found
         operations = tuple(
             replace(op, label=operation_label(op.tool_name, op.status, op.result))
             for op in found.operations
         )
         return DetailView(
             InteractionDetail(_redacted_row(found.row), found.message_count, operations),
-            business.timezone,
+            timezone,
         )
 
     async def messages(
@@ -286,15 +278,6 @@ class Inbox:
         return MessagePage(
             tuple(replace(item, text=redact(item.text)) for item in page.items), page.next_after
         )
-
-    async def _summarize_lazily(self, business_id: uuid.UUID, interaction_id: uuid.UUID) -> None:
-        try:
-            await self._summarizer.summarize(business_id, interaction_id)
-        except Exception as exc:
-            logger.warning(
-                "lazy summary failed",
-                extra={"interaction_id": str(interaction_id), "error_type": type(exc).__name__},
-            )
 
 
 def _redacted_row(row: InteractionRow) -> InteractionRow:

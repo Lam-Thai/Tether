@@ -679,6 +679,47 @@ async def test_a_summarizer_that_cannot_run_does_not_fail_the_end(client, entitl
     assert detail["status"] == "completed"
 
 
+def _abort_the_summary_transaction(monkeypatch) -> None:
+    """Make the summarizer's claim fail with a real database error, which leaves the
+    request session's transaction aborted until someone rolls it back."""
+    from sqlalchemy import text
+
+    from repositories.summaries import SqlSummaryStore
+
+    async def broken_claim(self, *args, **kwargs):
+        await self._session.execute(text("SELECT 1 / 0"))
+
+    monkeypatch.setattr(SqlSummaryStore, "claim", broken_claim)
+
+
+async def test_a_database_error_in_the_summary_does_not_fail_the_end(
+    client, entitled_tenants, llm, monkeypatch
+):
+    tenant_a, _ = entitled_tenants
+    llm.queue(agent_turn("Hello!"))
+    interaction_id = (await _chat(client, tenant_a, "hi")).json()["interaction_id"]
+    _abort_the_summary_transaction(monkeypatch)
+
+    ended = await client.post(f"/api/v1/agent/test/{interaction_id}/end", headers=_auth(tenant_a))
+
+    assert ended.status_code == 200 and ended.json()["status"] == "completed"
+
+
+async def test_a_database_error_in_the_lazy_summary_does_not_fail_the_detail(
+    client, entitled_tenants, monkeypatch
+):
+    tenant_a, _ = entitled_tenants
+    interaction_id = await add_interaction(tenant_a.business_id)
+    _abort_the_summary_transaction(monkeypatch)
+
+    response = await client.get(f"/api/v1/interactions/{interaction_id}", headers=_auth(tenant_a))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(interaction_id) and body["summary"] is None
+    assert body["timezone"]
+
+
 async def test_out_of_range_inputs_are_client_errors_not_500s(client, entitled_tenants):
     import base64
 

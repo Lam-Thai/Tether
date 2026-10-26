@@ -47,6 +47,10 @@ FallbackKind = Literal[
 ]
 
 
+class ProviderUnavailableError(Exception):
+    """The model never produced a summary (no reply, not rate-limited): a case error."""
+
+
 @dataclass(frozen=True)
 class Operation:
     tool_name: str
@@ -218,7 +222,10 @@ async def play_summary(sandbox: Sandbox, recorder: Recorder, stored: StoredInter
     """One `Summarizer` call over a seeded interaction, as a one-turn `Playback`: the
     "reply" is the stored summary. A template means the model did not deliver: `quota`
     when no model call was made (the budget), `provider` when it was rate-limited (the
-    runner backs off and replays), else `template` (the model's replies were invalid)."""
+    runner backs off and replays), `template` when the model replied but every reply was
+    invalid. A template with model calls but no reply and no rate limit (an outage, a
+    timeout, a blocked reply) raises `ProviderUnavailableError`: the model never wrote a
+    summary, so the case is an error, never a template the scorers would pass."""
     summary = await sandbox.summarize(recorder, stored)
     if summary is None:
         raise RuntimeError("the seeded interaction was not summarized")
@@ -226,8 +233,12 @@ async def play_summary(sandbox: Sandbox, recorder: Recorder, stored: StoredInter
     if summary.source == "template":
         if recorder.calls == 0:
             fallback = "quota"
+        elif recorder.rate_limited:
+            fallback = "provider"
+        elif not recorder.replies:
+            raise ProviderUnavailableError("the model produced no summary")
         else:
-            fallback = "provider" if recorder.rate_limited else "template"
+            fallback = "template"
     turn = PlayedTurn(
         customer=f"[stored interaction: {len(stored.messages)} messages]",
         reply=summary.text,

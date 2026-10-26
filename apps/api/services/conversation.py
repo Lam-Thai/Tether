@@ -453,12 +453,13 @@ class ConversationEngine:
         )
 
     async def end(self, tenant: Tenant, interaction_id: uuid.UUID, channel: Channel) -> Transcript:
-        business = require_business(tenant)
+        # A plain id: a failed summary rolls the session back, expiring the ORM objects.
+        business_id = require_business(tenant).id
         await self._lifecycle.end(tenant, interaction_id, channel)
-        interaction = await self._store.get_interaction(business.id, interaction_id, channel)
+        interaction = await self._store.get_interaction(business_id, interaction_id, channel)
         if interaction is None:
             raise InteractionNotFoundError("Conversation not found.")
-        return await self._transcript(business.id, interaction)
+        return await self._transcript(business_id, interaction)
 
     async def transcript(
         self, tenant: Tenant, interaction_id: uuid.UUID, channel: Channel

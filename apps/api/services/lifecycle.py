@@ -163,7 +163,7 @@ class InteractionLifecycle:
             await self._store.save_interaction(locked)
         # Durable before any model call; also releases the row lock.
         await self._store.checkpoint()
-        await self._summarize(business_id, interaction_id, ai=True)
+        await self.summarize_safely(business_id, interaction_id, ai=True)
 
     async def abandon_idle(self, business_id: uuid.UUID) -> int:
         idle = await self._store.lock_idle(business_id, self._idle_minutes, MAX_ABANDONED_PER_SWEEP)
@@ -174,7 +174,7 @@ class InteractionLifecycle:
             closed.append(interaction.id)
         await self._store.checkpoint()
         for interaction_id in closed:
-            await self._summarize(business_id, interaction_id, ai=False)
+            await self.summarize_safely(business_id, interaction_id, ai=False)
         return len(closed)
 
     async def sweep_idle(self, business_id: uuid.UUID) -> int:
@@ -212,9 +212,13 @@ class InteractionLifecycle:
         interaction.status, interaction.outcome = close_outcome(facts, reason)
         interaction.ended_at = ended_at
 
-    async def _summarize(
-        self, business_id: uuid.UUID, interaction_id: uuid.UUID, *, ai: bool
+    async def summarize_safely(
+        self, business_id: uuid.UUID, interaction_id: uuid.UUID, *, ai: bool = True
     ) -> None:
+        """Ask for the summary on a path that must keep going (End, the inbox's lazy
+        summary): a failure is logged (type only) and the session rolled back, since the
+        summarizer shares it and a database error leaves its transaction aborted. The
+        rollback expires ORM objects, so callers copy what they still need first."""
         try:
             await self._summarizer.summarize(business_id, interaction_id, ai=ai)
         except Exception as exc:
@@ -224,3 +228,7 @@ class InteractionLifecycle:
                 "summary failed",
                 extra={"interaction_id": str(interaction_id), "error_type": type(exc).__name__},
             )
+            try:
+                await self._store.rollback()
+            except Exception:
+                logger.warning("summary rollback failed")

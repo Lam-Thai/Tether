@@ -24,6 +24,7 @@ engine and tool registry (`core.conversation.build_conversation_engine`), with:
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import secrets
@@ -71,6 +72,8 @@ from services.usage import DailyLimit, UsageGuard, UsageKind, UsageLimits
 # A Wednesday, 14:00 in the salon's timezone (America/New_York): open today.
 EVAL_NOW = datetime(2026, 6, 3, 18, 0, tzinfo=UTC)
 EVAL_AUTH_PREFIX = "eval|"
+# `interactions.external_call_id` of a seeded `summary` case: prefix + a digest of the case.
+SUMMARY_SEED_PREFIX = "eval|summary|"
 
 logger = logging.getLogger("tether.evals")
 
@@ -158,11 +161,31 @@ async def seed_stored_interaction(
     session: AsyncSession, business: Business, stored: StoredInteraction
 ) -> uuid.UUID:
     """Insert a closed interaction with its messages, operation log and bookings (rows
-    only; the caller commits). Synthetic text from the suite file."""
+    only; the caller commits). Synthetic text from the suite file.
+
+    Idempotent per stored case: the runner replays a rate-limited case, so an earlier
+    seed of the same case (same `external_call_id`) is removed first, its bookings
+    explicitly (`bookings.interaction_id` is ON DELETE SET NULL, and a leftover confirmed
+    booking would trip the double-booking guard on the replay)."""
+    seed_key = SUMMARY_SEED_PREFIX + hashlib.sha256(stored.model_dump_json().encode()).hexdigest()
+    earlier = select(Interaction.id).where(
+        Interaction.business_id == business.id, Interaction.external_call_id == seed_key
+    )
+    await session.execute(
+        delete(Booking).where(
+            Booking.business_id == business.id, Booking.interaction_id.in_(earlier)
+        )
+    )
+    await session.execute(
+        delete(Interaction).where(
+            Interaction.business_id == business.id, Interaction.external_call_id == seed_key
+        )
+    )
     interaction = Interaction(
         id=uuid.uuid4(),
         business_id=business.id,
         channel="test_chat",
+        external_call_id=seed_key,
         status=stored.status,
         outcome=stored.outcome,
         intent=stored.intent,

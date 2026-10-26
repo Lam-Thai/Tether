@@ -239,6 +239,52 @@ async def test_booking_fails_mode_keeps_the_busy_week_but_fails_every_event_inse
     assert same
 
 
+async def test_a_replayed_summary_case_reseeds_its_confirmed_booking(usage):
+    """A rate-limited summary is replayed by the runner: seeding the same stored case again
+    replaces the first seed's booking instead of tripping the double-booking guard, and the
+    replay's valid summary is the one stored."""
+    from evals.cases import load_suite
+    from evals.playback import play_summary
+    from evals.scorers import SCORERS
+    from integrations.llm.fake import summary_reply
+    from integrations.llm.port import LLMUnavailableError
+    from models.booking import Booking
+
+    suite = load_suite("summary", known_scorers=frozenset(SCORERS))
+    booked = next(c for c in suite.cases if c.stored and c.stored.outcome == "booked")
+    assert booked.stored is not None
+    llm = FakeLLMClient()
+    limited = LLMUnavailableError("429", retryable=False, rate_limited=True)
+    sandbox_factory = partial(postgres_sandbox, usage_clock=lambda: usage.day)
+
+    spec = SandboxSpec(max_requests=10, concurrency=1, pacing_allowance_seconds=0)
+    async with sandbox_factory(spec) as sandbox:
+        business = sandbox.tenant.business
+        assert business is not None
+        llm.queue(limited)
+        first = await play_summary(sandbox, Recorder(llm), booked.stored)
+        assert first.turns[0].fallback == "provider" and first.rate_limited_out
+
+        reply = await _booked_summary(booked.stored)
+        llm.queue(summary_reply(reply))
+        replay = await play_summary(sandbox, Recorder(llm), booked.stored)
+
+        assert replay.turns[0].fallback is None and replay.turns[0].reply == reply
+        confirmed = Booking.business_id == business.id, Booking.status == "confirmed"
+        assert await _count(Booking, *confirmed) == len(booked.stored.bookings)
+        assert await _count(Interaction, Interaction.business_id == business.id) == 1
+
+
+async def _booked_summary(stored) -> str:
+    """A valid two-sentence summary of a stored `booked` case, in the booking's own time."""
+    from evals.summary_seed import booking_start
+
+    booking = stored.bookings[0]
+    start = booking_start(booking, "America/New_York")
+    when = start.strftime("%a %d %b at %I:%M %p").replace(" 0", " ")
+    return f"The customer asked to book a {booking.service}. It was booked for {when}."
+
+
 async def test_summarizes_every_summary_suite_case_on_the_seeded_tenant(usage):
     """Each `summary` case seeds real rows (messages, operation log, bookings) and the
     production Summarizer stores a template summary; the bookings table's double-booking

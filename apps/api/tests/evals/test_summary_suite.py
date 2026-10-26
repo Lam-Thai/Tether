@@ -217,6 +217,21 @@ async def test_the_budget_stops_the_run_with_the_template_and_no_scoring():
     assert len(llm.requests) == 1
 
 
+async def test_a_provider_failure_with_no_reply_is_a_case_error_not_a_passing_template():
+    sandbox, llm = MemorySandbox(), FakeLLMClient()
+    down = LLMUnavailableError("503", retryable=True)
+    llm.queue(down, down)
+    runner, _ = _runner(sandbox, llm)
+    suite = _two_case_suite()
+    suite = suite.model_copy(update={"cases": suite.cases[:1]})
+
+    report = await runner.run(suite)
+
+    (result,) = report.cases
+    assert result.status == "error" and result.error == "ProviderUnavailableError"
+    assert not result.scores
+
+
 async def test_a_rate_limited_summary_is_backed_off_and_replayed():
     sandbox, llm = MemorySandbox(), FakeLLMClient()
     limited = LLMUnavailableError("429", retryable=False, rate_limited=True)
