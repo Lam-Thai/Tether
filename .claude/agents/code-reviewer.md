@@ -26,6 +26,9 @@ Flag every violation found, each as **Blocker** or **Suggestion**, with the file
 10. **Aggregate leaks.** Does any tenant-facing response expose cross-tenant numbers (global usage, other businesses' counts)? Only flags such as `global_limit_reached` are allowed.
 11. **Eval coverage.** Does a new or changed Gemini tool, intent or prompt rule come without new cases in `apps/api/evals/suites/` (Suggestion; Blocker for a tool that acts, which needs `no_false_confirmation` cases)? Are eval utterances synthetic (no real customer text)?
 12. **Test safety and parallelism.** Can a test reach a real database or provider (it must run under `scripts/test.sh` / the `tests/conftest.py` guard), or depend on another test's rows, global counters outside the `usage` fixture's day, or non-deterministic parametrize ids (xdist runs files in parallel)?
+13. **Derived state and stored model text.** Are an interaction's `status` / `outcome` set only by `services/lifecycle.close_outcome` from backend records (confirmed `bookings` rows, op-log result codes), never from the model's claims? Is model-written text that is stored and shown (summaries) validated (shape, outcome consistency, no contact details) with a deterministic fallback, and does the verified outcome come from stored rows only?
+14. **Redaction.** Is customer and model text passed through `services/redaction.redact` before it is stored, sent to Gemini, or logged, and again on read? Does a new or widened pattern have table tests against identifiers (UUIDs, short ids, event ids), phones, prices, times and dates — a digit-run pattern once mangled about 1 in 400 UUIDs, which surfaced only as a flaky op-log test.
+15. **Writes on GET.** A read route that also writes (the inbox's idle sweep, the lazy summary) must isolate that write: a failure is logged as a code, rolled back, and the read still answers; the write is bounded and idempotent under concurrent requests.
 
 ## Output format
 

@@ -35,7 +35,7 @@ const TURN: TurnRead = {
   interaction_id: ID,
   reply_text: "Sure.",
   intent: "UNKNOWN",
-  status: "active",
+  status: "in_progress",
   ended: false,
   fallback: false,
   usage_limited: false,
@@ -44,7 +44,7 @@ const TURN: TurnRead = {
 
 const TRANSCRIPT: TranscriptRead = {
   interaction_id: ID,
-  status: "ended",
+  status: "completed",
   ended: true,
   started_at: "2026-01-01T00:00:00Z",
   ended_at: "2026-01-01T00:05:00Z",

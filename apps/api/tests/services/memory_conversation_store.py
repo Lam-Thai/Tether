@@ -3,7 +3,7 @@ same contract as the SQL stores and scoped by business id like them, for unit te
 
 import uuid
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from models.agent import Agent
 from models.interaction import Interaction, InteractionMessage
@@ -20,6 +20,10 @@ class MemoryStore:
         self.messages: list[InteractionMessage] = []
         self.operations: list[dict] = []
         self.calls: list[str] = []
+        # What the sweep treats as "now", and each interaction's booking facts
+        # (confirmed booking, booking_failed op) that the SQL store reads from other tables.
+        self.now = NOW
+        self.signals: dict[uuid.UUID, tuple[bool, bool]] = {}
 
     async def get_or_create(self, business_id, *, name, tone, greeting):
         if business_id not in self.agents:
@@ -42,9 +46,10 @@ class MemoryStore:
             id=uuid.uuid4(),
             business_id=business_id,
             channel=channel,
-            status="active",
+            status="in_progress",
             state={},
             started_at=NOW,
+            updated_at=NOW,
             ended_at=None,
         )
         self.interactions[interaction.id] = interaction
@@ -52,7 +57,7 @@ class MemoryStore:
 
     async def lock_admission_and_count(self, business_id, idle_minutes):
         self.calls.append("admission")
-        active = [i for i in self.interactions.values() if i.status == "active"]
+        active = [i for i in self.interactions.values() if i.status == "in_progress"]
         mine = sum(1 for i in active if i.business_id == business_id)
         return len(active), mine
 
@@ -88,6 +93,21 @@ class MemoryStore:
 
     async def save_interaction(self, interaction):
         return interaction
+
+    async def closing_signals(self, business_id, interaction_id):
+        return self.signals.get(interaction_id, (False, False))
+
+    async def lock_idle(self, business_id, idle_minutes, limit):
+        cutoff = self.now - timedelta(minutes=idle_minutes)
+        idle = [
+            i
+            for i in self.interactions.values()
+            if i.business_id == business_id and i.status == "in_progress" and i.updated_at < cutoff
+        ]
+        return sorted(idle, key=lambda i: i.updated_at)[:limit]
+
+    async def rollback(self):
+        self.calls.append("rollback")
 
     async def checkpoint(self):
         self.calls.append("checkpoint")

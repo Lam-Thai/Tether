@@ -24,7 +24,7 @@ from typing import Any, Literal, Protocol
 from pydantic import ValidationError
 
 from core.tenant import Tenant
-from evals.cases import CalendarMode
+from evals.cases import CalendarMode, StoredInteraction
 from integrations.llm.port import LLMClient, LLMUnavailableError, ModelReply, ModelRequest
 from schemas.agent_turn import AgentTurn
 from services.agent import require_business
@@ -37,10 +37,18 @@ from services.conversation import (
     no_info_fallback,
     quota_fallback,
 )
+from services.summarizer import Summary
 
 CHANNEL = "test_chat"
 
-FallbackKind = Literal["provider", "invalid_output", "no_info", "quota", "availability", "booking"]
+# `template`: a summary the model could not produce validly (the `summary` suite).
+FallbackKind = Literal[
+    "provider", "invalid_output", "no_info", "quota", "availability", "booking", "template"
+]
+
+
+class ProviderUnavailableError(Exception):
+    """The model never produced a summary (no reply, not rate-limited): a case error."""
 
 
 @dataclass(frozen=True)
@@ -141,6 +149,11 @@ class Sandbox(Protocol):
         scripted calendar."""
         ...
 
+    async def summarize(self, llm: LLMClient, stored: StoredInteraction) -> Summary | None:
+        """Seed `stored` as a finished interaction of the sandbox tenant and run the real
+        `Summarizer` over it with `llm` (the `summary` suite)."""
+        ...
+
 
 def _parse(raw: str) -> AgentTurn | None:
     try:
@@ -203,3 +216,39 @@ async def play(env: CaseEnv, recorder: Recorder, utterances: Sequence[str]) -> P
         await env.engine.end(env.tenant, interaction_id, CHANNEL)
         await env.commit()
     return Playback(turns=tuple(turns))
+
+
+async def play_summary(sandbox: Sandbox, recorder: Recorder, stored: StoredInteraction) -> Playback:
+    """One `Summarizer` call over a seeded interaction, as a one-turn `Playback`: the
+    "reply" is the stored summary. A template means the model did not deliver: `quota`
+    when no model call was made (the budget), `provider` when it was rate-limited (the
+    runner backs off and replays), `template` when the model replied but every reply was
+    invalid. A template with model calls but no reply and no rate limit (an outage, a
+    timeout, a blocked reply) raises `ProviderUnavailableError`: the model never wrote a
+    summary, so the case is an error, never a template the scorers would pass."""
+    summary = await sandbox.summarize(recorder, stored)
+    if summary is None:
+        raise RuntimeError("the seeded interaction was not summarized")
+    fallback: FallbackKind | None = None
+    if summary.source == "template":
+        if recorder.calls == 0:
+            fallback = "quota"
+        elif recorder.rate_limited:
+            fallback = "provider"
+        elif not recorder.replies:
+            raise ProviderUnavailableError("the model produced no summary")
+        else:
+            fallback = "template"
+    turn = PlayedTurn(
+        customer=f"[stored interaction: {len(stored.messages)} messages]",
+        reply=summary.text,
+        intent=stored.intent or "UNKNOWN",
+        model_intent=None,
+        sources=(),
+        fallback=fallback,
+        operations=(),
+        model_calls=recorder.calls,
+        rate_limited=recorder.rate_limited,
+        retry_after_seconds=recorder.retry_after_seconds,
+    )
+    return Playback(turns=(turn,))

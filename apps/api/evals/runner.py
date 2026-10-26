@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from evals.cases import EvalCase, Suite
-from evals.playback import Playback, Recorder, Sandbox, play
+from evals.playback import Playback, Recorder, Sandbox, play, play_summary
 from evals.report import CaseResult, EvalReport, StopReason, build_metrics
 from evals.scorers import SCORERS, Score, Scorer
 from integrations.llm.port import LLMClient, ModelReply, ModelRequest
@@ -235,8 +235,11 @@ class EvalRunner:
         for attempt in range(self._limits.max_rate_limit_retries + 1):
             recorder = Recorder(pacer)
             try:
-                async with sandbox.case(recorder, case.calendar) as env:
-                    playback = await play(env, recorder, case.turns)
+                if case.stored is not None:
+                    playback = await play_summary(sandbox, recorder, case.stored)
+                else:
+                    async with sandbox.case(recorder, case.calendar) as env:
+                        playback = await play(env, recorder, case.turns)
             except Exception as exc:  # recorded by type only, see `CaseResult.error`
                 state.errors_in_a_row += 1
                 if state.errors_in_a_row >= MAX_CONSECUTIVE_ERRORS:

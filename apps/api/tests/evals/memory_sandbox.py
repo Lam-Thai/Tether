@@ -12,10 +12,11 @@ from dataclasses import dataclass, field
 
 from core.retry import RetryPolicy
 from core.tenant import Tenant
-from evals.cases import CalendarMode
+from evals.cases import CalendarMode, StoredInteraction
 from evals.playback import CaseEnv, Operation
 from evals.runner import SandboxSpec
 from evals.sandbox import EVAL_NOW, eval_usage_limits
+from evals.summary_seed import facts_of
 from integrations.llm.port import LLM_RETRY, LLMClient
 from models.user import User
 from seeds.demo_salon import (
@@ -29,10 +30,13 @@ from services.conversation import ConversationEngine
 from services.directory import BusinessDirectory
 from services.faq_search import search_faq_tool
 from services.knowledge import KnowledgeBase
+from services.redaction import redact
+from services.summarizer import Summarizer, Summary
 from services.tools import ToolRegistry
 from tests.services.memory_conversation_store import MemoryStore
 from tests.services.memory_directory_store import MemoryDirectoryStore
 from tests.services.memory_faq_store import MemoryFaqStore
+from tests.services.memory_summary_store import MemorySummaryStore
 from tests.services.memory_usage_store import MemoryUsageStore, guard, limits
 
 
@@ -90,6 +94,23 @@ class MemorySandbox:
             yield self
         finally:
             self.closed = True
+
+    async def summarize(self, llm: LLMClient, stored: StoredInteraction) -> Summary | None:
+        if self.fail_cases > 0:
+            self.fail_cases -= 1
+            raise RuntimeError("sandbox broke")
+        business_id = self.tenant.business.id  # type: ignore[union-attr]
+        store = MemorySummaryStore()
+        interaction_id = store.add(business_id, facts_of(stored))
+        summarizer = Summarizer(
+            store=store,
+            llm=llm,
+            usage=self.usage,
+            redact=redact,
+            timeout_seconds=30 + self.specs[-1].pacing_allowance_seconds,
+            retry=RetryPolicy(attempts=LLM_RETRY.attempts),
+        )
+        return await summarizer.summarize(business_id, interaction_id)
 
     @asynccontextmanager
     async def case(self, llm: LLMClient, calendar: CalendarMode = "busy") -> AsyncIterator[CaseEnv]:

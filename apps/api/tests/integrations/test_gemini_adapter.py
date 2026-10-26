@@ -7,14 +7,19 @@ are flagged retryable (the adapter itself makes exactly one attempt).
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import pytest
 from google.genai import errors as genai_errors
 from google.genai import types
+from pydantic import BaseModel, Field
 
-from integrations.llm.gemini import GeminiClient, response_schema_for_gemini
+from integrations.llm.gemini import (
+    GeminiClient,
+    flat_schema_for_gemini,
+    response_schema_for_gemini,
+)
 from integrations.llm.port import LLMUnavailableError, ModelMessage, ModelRequest, ToolDeclaration
 from schemas.agent_turn import AgentTurn
 from services.business_tools import get_business_info_tool, get_services_tool
@@ -305,3 +310,44 @@ def test_a_shared_param_described_the_same_way_keeps_its_description():
     assert calls.items is not None
     arguments = (calls.items.properties or {})["arguments"].properties or {}
     assert arguments["query"].description == "The question."
+
+
+class _SummaryShape(BaseModel):
+    summary: str = Field(description="Two sentences.")
+    mood: Literal["calm", "upset"]
+
+
+async def test_a_non_agent_turn_schema_gets_its_own_flat_gemini_schema():
+    sdk, models = stub_sdk(reply(text='{"summary":"A. B."}'))
+    request = replace(REQUEST, response_schema=_SummaryShape)
+    assert (await client(sdk).generate(request)).text == '{"summary":"A. B."}'
+
+    raw = models.calls[0]["config"].response_schema
+    schema = types.Schema.model_validate(raw)
+    props = schema.properties or {}
+    assert list(props) == ["summary", "mood"]
+    assert props["summary"].type == types.Type.STRING
+    assert props["summary"].description == "Two sentences."
+    assert props["mood"].enum == ["calm", "upset"]
+    assert schema.required == ["summary", "mood"]
+    assert "intent" not in str(raw)
+
+
+async def test_the_agent_turn_schema_is_unchanged():
+    sdk, models = stub_sdk(reply(), reply())
+    await client(sdk).generate(REQUEST)
+    await client(sdk).generate(replace(REQUEST, tools=(SEARCH,)))
+    assert models.calls[0]["config"].response_schema == response_schema_for_gemini(())
+    assert models.calls[1]["config"].response_schema == response_schema_for_gemini((SEARCH,))
+
+
+def test_the_flat_schema_refuses_a_nested_or_nullable_model():
+    class Nested(BaseModel):
+        inner: _SummaryShape
+
+    class Nullable(BaseModel):
+        value: str | None = None
+
+    for model in (Nested, Nullable):
+        with pytest.raises(ValueError):
+            flat_schema_for_gemini(model)

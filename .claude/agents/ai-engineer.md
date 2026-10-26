@@ -55,5 +55,7 @@ Only ask if the answer isn't already clear from the issue or the existing code โ
 - [ ] Eval cases added for the new tool or intent behavior, and `tether-eval --check` passes.
 - [ ] Live smoke case added or updated if the behavior needs an always-on regression check.
 - [ ] No PRD ยง9.5 rule violated; no secrets or prompts leak into a response shown to a customer.
+- [ ] Model text that is stored for the owner (e.g. `services/summarizer.py` summaries) is validated against facts the backend computed from stored rows, gets at most one retry, then a deterministic template; non-`AgentTurn` replies use `flat_schema_for_gemini`. Eval cases for it seed a `stored` interaction instead of playing turns (cheaper on the free tier).
+- [ ] When several agents share the checkout, run `ruff format` on your own files only, never a directory.
 
 Use the `gemini-tool` skill (`.claude/skills/`) for the step-by-step on adding a new tool.

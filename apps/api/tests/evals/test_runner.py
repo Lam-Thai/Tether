@@ -139,7 +139,7 @@ async def test_each_case_is_a_new_conversation_with_the_turns_in_order():
     assert report.cases[0].passed
     # The second case started fresh: one customer message in its first request.
     assert [m.role for m in llm.requests[2].messages] == ["model", "user"]
-    assert all(i.status == "ended" for i in sandbox.store.interactions.values())
+    assert all(i.status == "completed" for i in sandbox.store.interactions.values())
     # Committed like the chat API: after every turn and after ending (3 + 2).
     assert sandbox.store.calls.count("commit") == 5
 

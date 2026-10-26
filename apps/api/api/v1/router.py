@@ -10,6 +10,7 @@ from api.v1.business import router as business_router
 from api.v1.calendar import router as calendar_router
 from api.v1.faqs import router as faqs_router
 from api.v1.hours import router as hours_router
+from api.v1.interactions import router as interactions_router
 from api.v1.me import router as me_router
 from api.v1.services import router as services_router
 from api.v1.usage import router as usage_router
@@ -26,3 +27,4 @@ router.include_router(services_router)
 router.include_router(usage_router)
 router.include_router(calendar_router)
 router.include_router(bookings_router)
+router.include_router(interactions_router)

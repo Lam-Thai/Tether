@@ -108,6 +108,14 @@ from services.grounding import (
     grounding_problem,
 )
 from services.knowledge import FaqSnippet
+from services.lifecycle import (
+    InteractionLifecycle,
+    InteractionNotFoundError,
+    LifecycleStore,
+    NoSummarizer,
+    primary_intent,
+    record_intent,
+)
 from services.prompt_builder import (
     BusinessFacts,
     Channel,
@@ -117,6 +125,7 @@ from services.prompt_builder import (
     Tone,
     build,
 )
+from services.redaction import redact
 from services.tools import OperationLog, ToolContext, ToolExecutor, ToolOutcome, ToolRegistry
 from services.usage import (
     ActiveCounts,
@@ -221,17 +230,12 @@ def booking_fallback(business: Business) -> str:
     return f"Sorry, I can't confirm a booking right now. Please contact {business.name} directly."
 
 
-class InteractionNotFoundError(AppError):
-    status_code = 404
-    code = "interaction_not_found"
-
-
 class InteractionEndedError(AppError):
     status_code = 409
     code = "interaction_ended"
 
 
-class ConversationStore(AgentStore, OperationLog, Protocol):
+class ConversationStore(AgentStore, OperationLog, LifecycleStore, Protocol):
     async def lock_admission_and_count(
         self, business_id: uuid.UUID, idle_minutes: int
     ) -> tuple[int, int]:
@@ -315,7 +319,7 @@ def _view(message: InteractionMessage, state: dict[str, Any] | None) -> MessageV
     return MessageView(
         sequence_number=message.sequence_number,
         speaker=message.speaker,
-        text=message.message_text,
+        text=redact(message.message_text),  # also rows stored before redaction existed
         created_at=message.created_at,
         fallback=message.speaker == "agent" and message.sequence_number in fallback_numbers,
     )
@@ -338,9 +342,11 @@ class ConversationEngine:
         usage: UsageGuard,
         llm_retry: RetryPolicy = LLM_RETRY,
         directory: BusinessDirectory | None = None,
+        lifecycle: InteractionLifecycle | None = None,
     ) -> None:
         """Without a `directory` the prompt has no BUSINESS HOURS, and BUSINESS FACTS
-        comes from the tenant's business row (no currency)."""
+        comes from the tenant's business row (no currency). Without a `lifecycle` a
+        conversation closes with no summary (`NoSummarizer`)."""
         self._store = store
         self._llm = llm
         self._tools = tools
@@ -349,12 +355,17 @@ class ConversationEngine:
         self._usage = usage
         self._llm_retry = llm_retry
         self._directory = directory
+        self._lifecycle = lifecycle or InteractionLifecycle(
+            store, NoSummarizer(), idle_minutes=usage.interaction_idle_minutes
+        )
 
     async def handle_turn(
         self, tenant: Tenant, interaction_id: uuid.UUID | None, utterance: str, channel: Channel
     ) -> TurnResult:
         business = require_business(tenant)
         created: list[InteractionMessage] = []
+        # Card numbers, SSNs and security codes are never stored or sent to the model.
+        utterance = redact(utterance)
 
         if interaction_id is None:
             everyone, mine = await self._store.lock_admission_and_count(
@@ -374,7 +385,10 @@ class ConversationEngine:
             business.id, interaction.id, self._history_limit
         )
         history = [
-            ModelMessage(role="model" if row.speaker == "agent" else "user", text=row.message_text)
+            ModelMessage(
+                role="model" if row.speaker == "agent" else "user",
+                text=redact(row.message_text),  # rows stored before redaction existed
+            )
             for row in history_rows
         ]
         history.append(ModelMessage(role="user", text=utterance))
@@ -402,7 +416,7 @@ class ConversationEngine:
         await self._store.checkpoint()
         outcome = await self._generate(context, tenant, business, interaction_id)
 
-        reply_text = outcome.turn.response_text if outcome.turn else outcome.fallback_text
+        reply_text = redact(outcome.turn.response_text if outcome.turn else outcome.fallback_text)
         intent = outcome.turn.intent if outcome.turn else FALLBACK_INTENT
 
         # No lock has been held so far. Take it now, only to number the
@@ -410,7 +424,7 @@ class ConversationEngine:
         locked = await self._store.lock_interaction(business_id, interaction_id, channel)
         if locked is None:
             raise InteractionNotFoundError("Conversation not found.")
-        if locked.status != "active":
+        if locked.status != "in_progress":
             raise InteractionEndedError("This conversation has ended.")
 
         created.append(await self._store.append_message(locked, "customer", utterance))
@@ -418,7 +432,7 @@ class ConversationEngine:
         created.append(agent_message)
         self._merge_state(locked, outcome, agent_message.sequence_number)
         if outcome.turn:
-            locked.intent = outcome.turn.intent
+            locked.intent = primary_intent((locked.state or {}).get("intents", []))
         await self._store.save_interaction(locked)
 
         for failure in outcome.failures:
@@ -439,15 +453,13 @@ class ConversationEngine:
         )
 
     async def end(self, tenant: Tenant, interaction_id: uuid.UUID, channel: Channel) -> Transcript:
-        business = require_business(tenant)
-        locked = await self._store.lock_interaction(business.id, interaction_id, channel)
-        if locked is None:
+        # A plain id: a failed summary rolls the session back, expiring the ORM objects.
+        business_id = require_business(tenant).id
+        await self._lifecycle.end(tenant, interaction_id, channel)
+        interaction = await self._store.get_interaction(business_id, interaction_id, channel)
+        if interaction is None:
             raise InteractionNotFoundError("Conversation not found.")
-        if locked.status == "active":
-            locked.status = "ended"
-            locked.ended_at = datetime.now(UTC)
-            await self._store.save_interaction(locked)
-        return await self._transcript(business.id, locked)
+        return await self._transcript(business_id, interaction)
 
     async def transcript(
         self, tenant: Tenant, interaction_id: uuid.UUID, channel: Channel
@@ -463,7 +475,7 @@ class ConversationEngine:
         return Transcript(
             interaction_id=interaction.id,
             status=interaction.status,
-            ended=interaction.status == "ended",
+            ended=interaction.status != "in_progress",
             started_at=interaction.started_at,
             ended_at=interaction.ended_at,
             messages=tuple(_view(row, interaction.state) for row in rows),
@@ -510,7 +522,7 @@ class ConversationEngine:
         interaction = await self._store.get_interaction(business_id, interaction_id, channel)
         if interaction is None:
             raise InteractionNotFoundError("Conversation not found.")
-        if interaction.status != "active":
+        if interaction.status != "in_progress":
             raise InteractionEndedError("This conversation has ended.")
         return interaction
 
@@ -707,6 +719,7 @@ class ConversationEngine:
             entities = dict(state.get("entities") or {})
             entities.update(outcome.turn.entities.model_dump(exclude_none=True))
             state["entities"] = entities
+            state["intents"] = record_intent(state.get("intents", []), outcome.turn.intent)
             state.update(outcome.state_updates)
             state["requires_human"] = outcome.turn.requires_human or outcome.needs_human
         interaction.state = state

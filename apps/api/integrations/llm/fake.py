@@ -58,3 +58,8 @@ def agent_turn(
         "tool_calls": tool_calls or [],
         "sources": sources or [],
     }
+
+
+def summary_reply(summary: str) -> dict[str, Any]:
+    """A valid `SummaryReply` payload for scripting `FakeLLMClient`."""
+    return {"summary": summary}

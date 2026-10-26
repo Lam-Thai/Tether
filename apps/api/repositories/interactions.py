@@ -13,12 +13,14 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 
-from sqlalchemy import func, select, text
+from sqlalchemy import exists, func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import AppError
+from models.booking import Booking
 from models.interaction import Interaction, InteractionMessage
+from models.operation import InteractionOperation
 from repositories.base import business_scoped_select
 
 # Shorter than the connection's 5s statement_timeout so a waiter gets a clean
@@ -40,7 +42,7 @@ async def create_interaction(
     session: AsyncSession, business_id: uuid.UUID, channel: str
 ) -> Interaction:
     interaction = Interaction(
-        id=uuid.uuid4(), business_id=business_id, channel=channel, status="active", state={}
+        id=uuid.uuid4(), business_id=business_id, channel=channel, status="in_progress", state={}
     )
     session.add(interaction)
     await session.flush()
@@ -57,7 +59,7 @@ async def count_recent_active(
         select(
             func.count(),
             func.count().filter(Interaction.business_id == business_id),
-        ).where(Interaction.status == "active", Interaction.updated_at > cutoff)
+        ).where(Interaction.status == "in_progress", Interaction.updated_at > cutoff)
     )
     everyone, mine = result.one()
     return int(everyone), int(mine)
@@ -163,6 +165,50 @@ async def save_interaction(session: AsyncSession, interaction: Interaction) -> I
     return interaction
 
 
+async def closing_signals(
+    session: AsyncSession, business_id: uuid.UUID, interaction_id: uuid.UUID
+) -> tuple[bool, bool]:
+    """(has a confirmed booking, a `create_booking` call was logged `booking_failed`):
+    the two facts about a conversation only the backend's own records can state."""
+    booked = await session.scalar(
+        select(
+            exists().where(
+                Booking.business_id == business_id,
+                Booking.interaction_id == interaction_id,
+                Booking.status == "confirmed",
+            )
+        )
+    )
+    failed = await session.scalar(
+        select(
+            exists().where(
+                InteractionOperation.business_id == business_id,
+                InteractionOperation.interaction_id == interaction_id,
+                InteractionOperation.tool_name == "create_booking",
+                InteractionOperation.result["result"].astext == "booking_failed",
+            )
+        )
+    )
+    return bool(booked), bool(failed)
+
+
+async def lock_idle(
+    session: AsyncSession, business_id: uuid.UUID, idle_minutes: int, limit: int
+) -> Sequence[Interaction]:
+    """In-progress interactions of this business not touched for `idle_minutes`, locked
+    `FOR UPDATE SKIP LOCKED` (a row a live request holds is skipped), oldest first."""
+    cutoff = func.now() - func.make_interval(0, 0, 0, 0, 0, idle_minutes)
+    result = await session.execute(
+        business_scoped_select(Interaction, business_id)
+        .where(Interaction.status == "in_progress", Interaction.updated_at < cutoff)
+        .order_by(Interaction.updated_at, Interaction.id)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+        .execution_options(populate_existing=True)
+    )
+    return result.scalars().all()
+
+
 class SqlConversationStore:
     """Binds the functions above to one session (`services.conversation.ConversationStore`)."""
 
@@ -200,8 +246,21 @@ class SqlConversationStore:
     async def save_interaction(self, interaction: Interaction) -> Interaction:
         return await save_interaction(self._session, interaction)
 
+    async def closing_signals(
+        self, business_id: uuid.UUID, interaction_id: uuid.UUID
+    ) -> tuple[bool, bool]:
+        return await closing_signals(self._session, business_id, interaction_id)
+
+    async def lock_idle(
+        self, business_id: uuid.UUID, idle_minutes: int, limit: int
+    ) -> Sequence[Interaction]:
+        return await lock_idle(self._session, business_id, idle_minutes, limit)
+
     async def checkpoint(self) -> None:
         await self._session.commit()
+
+    async def rollback(self) -> None:
+        await self._session.rollback()
 
     @asynccontextmanager
     async def savepoint(self) -> AsyncIterator[None]:

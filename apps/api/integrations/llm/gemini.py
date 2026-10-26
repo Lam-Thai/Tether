@@ -23,6 +23,7 @@ import httpx
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
+from pydantic import BaseModel
 
 from integrations.llm.port import (
     LLMUnavailableError,
@@ -31,7 +32,7 @@ from integrations.llm.port import (
     ModelRequest,
     ToolDeclaration,
 )
-from schemas.agent_turn import Entities, Intent
+from schemas.agent_turn import AgentTurn, Entities, Intent
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,27 @@ def response_schema_for_gemini(tools: Sequence[ToolDeclaration] = ()) -> dict[st
     # Decide on tools and sources before writing the reply.
     order = ["intent", "tool_calls", "sources", "response_text", "entities", "requires_human"]
     order = [name for name in order if name in properties]
+    return {
+        "type": "OBJECT",
+        "properties": properties,
+        "required": order,
+        "propertyOrdering": order,
+    }
+
+
+def flat_schema_for_gemini(model: type[BaseModel]) -> dict[str, Any]:
+    """Gemini's schema for a flat Pydantic model whose fields are scalars, enums or
+    lists of them (e.g. the summary reply). Every field is required and kept in
+    declaration order. Anything nested or nullable fails loudly: such a model needs a
+    hand-built schema like `AgentTurn`'s."""
+    json_schema = model.model_json_schema()
+    properties = {
+        name: _gemini_property(name, spec)
+        for name, spec in dict(json_schema.get("properties") or {}).items()
+    }
+    if not properties:
+        raise ValueError("The response model has no fields.")
+    order = list(properties)
     return {
         "type": "OBJECT",
         "properties": properties,
@@ -231,7 +253,11 @@ class GeminiClient:
         config = types.GenerateContentConfig(
             system_instruction=request.system_instruction,
             response_mime_type="application/json",
-            response_schema=response_schema_for_gemini(request.tools),
+            response_schema=(
+                response_schema_for_gemini(request.tools)
+                if request.response_schema is AgentTurn
+                else flat_schema_for_gemini(request.response_schema)
+            ),
             temperature=_TEMPERATURE,
             max_output_tokens=_MAX_OUTPUT_TOKENS,
             thinking_config=types.ThinkingConfig(thinking_budget=_THINKING_BUDGET_TOKENS),
