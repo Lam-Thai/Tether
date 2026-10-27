@@ -143,7 +143,11 @@ _SAFETY_PHRASES = (
     r"bleeding\s+(?:heavily|badly|profusely|a\s+lot|out)",
     r"won't\s+stop\s+bleeding",
     r"unconscious",
-    r"unresponsive",
+    # A person, not a page or a card reader: "your booking page is unresponsive" is not urgent.
+    r"(?:he|she|they|he's|she's|they're|someone|somebody|"
+    r"(?:my|our|his|her|their|the|a)\s+(?:client|customer|friend|husband|wife|partner|son|"
+    r"daughter|child|kid|baby|mom|mum|dad|mother|father|grandma|grandpa|stylist))\s+"
+    r"(?:is\s+|are\s+|was\s+|went\s+|seems\s+|now\s+|completely\s+)*unresponsive",
     r"passed\s+out",
     r"allergic\s+reaction",
     r"anaphyla\w+",
@@ -154,7 +158,9 @@ _SAFETY_PHRASES = (
     r"end\s+(?:my\s+life|it\s+all)",
     r"want\s+to\s+die",
     r"(?:there's|there\s+is)\s+a\s+fire",
-    r"on\s+fire",
+    # A place or thing burning, not "that colour is on fire".
+    r"(?:building|house|home|car|kitchen|salon|shop|store|room|apartment|flat|dryer|stove|"
+    r"oven)\s+(?:is\s+|was\s+|just\s+)?on\s+fire",
     r"caught\s+fire",
     r"(?:smell|smelling)\s+(?:gas|smoke)",
     r"gas\s+leak",

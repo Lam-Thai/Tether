@@ -63,7 +63,14 @@ export function EscalationPanel({ timezone }: { timezone: string }) {
 
   async function resolve(id: string) {
     setResolving({ id, kind: "pending" });
-    const token = await getToken();
+    let token: string | null;
+    try {
+      token = await getToken();
+    } catch {
+      // Clerk couldn't refresh the session (often offline): leave it open so the owner can retry.
+      setResolving({ id, kind: "error", message: "Couldn't confirm your sign-in. Check your connection and try again." });
+      return;
+    }
     if (!token) {
       setResolving({ id, kind: "error", message: SESSION_EXPIRED });
       return;

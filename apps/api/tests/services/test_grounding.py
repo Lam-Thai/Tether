@@ -526,6 +526,9 @@ CALLBACK_PROMISES = [
     "Thanks for your patience - the owner will also call you about this.",
     "We’ll call you back.",
     "If you need anything else, we'll call you back.",
+    "Don't worry, we'll call you back.",
+    "I can't help with that, but someone will call you back.",
+    "We never close early, and we'll call you back today.",
 ]
 NOT_CALLBACK_PROMISES = [
     "Would you like the team's number?",
@@ -540,6 +543,8 @@ NOT_CALLBACK_PROMISES = [
     "Feel free to reach out to us anytime.",
     "You can bring your kids in, we ring the bell when ready.",
     "I'll note your request.",
+    "We won't call you.",
+    "Don't worry, we won't call you back.",
 ]
 
 
@@ -581,6 +586,8 @@ def test_the_callback_correction_names_what_to_say_instead():
         "I'll let the team know right away.",
         "Sorry about that - I've passed this on to the manager.",
         "I just told the team about it.",
+        "Don't worry, I've let the team know.",
+        "I can't fix that myself, but I've let the owner know.",
     ],
 )
 def test_team_notified_claims(text):

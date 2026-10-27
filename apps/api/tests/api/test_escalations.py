@@ -10,6 +10,7 @@ from core.twilio import get_sms_api
 from integrations.llm.fake import agent_turn
 from integrations.twilio.fake import FakeSmsApi
 from models.escalation import Escalation
+from repositories import escalations as escalation_repo
 from tests.api.inbox_factory import add_interaction
 
 URL = "/api/v1/escalations"
@@ -237,3 +238,31 @@ async def test_a_chat_escalation_reaches_the_inbox_and_texts_the_owner_once(
         "/api/v1/interactions", params={"type": "attention"}, headers=_auth(tenant_a)
     )
     assert gone.json()["items"] == []
+
+
+async def test_an_alert_step_failure_after_the_turn_commit_still_answers_the_turn(
+    client, entitled_tenants, llm, app, monkeypatch
+):
+    # The alert step rolls the session back, which expires every ORM object; the turn's
+    # response must already be built by then (a read afterwards would 500).
+    tenant_a, _ = entitled_tenants
+    app.dependency_overrides[get_sms_api] = lambda: FakeSmsApi()
+    await client.put(SETTINGS, json=BODY, headers=_auth(tenant_a))
+
+    async def broken_claim(*args, **kwargs):
+        raise RuntimeError("claim failed")
+
+    monkeypatch.setattr(escalation_repo, "claim_pending", broken_claim)
+    llm.queue(agent_turn("I will pass that on.", intent="HUMAN_REQUEST"))
+
+    response = await client.post(
+        "/api/v1/agent/test",
+        json={"message": "I want to talk to a person"},
+        headers=_auth(tenant_a),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["escalated"] is True and body["reply_text"] == "I will pass that on."
+    listed = (await client.get(URL, headers=_auth(tenant_a))).json()["items"]
+    assert [(e["reason"], e["sms_status"]) for e in listed] == [("human_requested", "pending")]

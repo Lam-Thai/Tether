@@ -100,6 +100,17 @@ describe("EscalationPanel", () => {
     expect(screen.getByText(/Needs attention/)).toBeInTheDocument();
   });
 
+  it("recovers when the session token can't be fetched", async () => {
+    getTokenMock.mockRejectedValue(new Error("offline"));
+    const user = userEvent.setup();
+    show([esc()]);
+
+    await user.click(screen.getByRole("button", { name: /Resolve/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't confirm your sign-in");
+    expect(screen.getByRole("button", { name: /Resolve/ })).toBeEnabled();
+    expect(resolveMock).not.toHaveBeenCalled();
+  });
+
   it("reports a session that has expired without calling the API", async () => {
     getTokenMock.mockResolvedValue(null);
     const user = userEvent.setup();

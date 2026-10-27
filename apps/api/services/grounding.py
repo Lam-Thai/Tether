@@ -351,10 +351,22 @@ _CALLBACK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 _CALLBACK_CONDITIONAL = re.compile(
     r"\b(?:if|whether)\s+you(?:['’]d|\s+would|\s+do)?\s+(?:like|want|prefer|wish)\b|"
     r"\bwould\s+you\s+like\b|\bdo\s+you\s+want\b|\b(?:want|like)\s+(?:us|me)\s+to\b|"
-    r"\b(?:can|could|may)\s+(?:i|we)\b|\bcan['’]t|\bcannot\b|\bunable\s+to\b|"
-    r"\b(?:won['’]t|will\s+not|don['’]t|do\s+not|not\s+able\s+to)",
+    r"\b(?:can|could|may)\s+(?:i|we)\b",
     re.IGNORECASE,
 )
+# A negation cancels a promise or a claim only inside its own comma-separated phrase, so
+# "Don't worry, we'll call you back" and "I can't help, but someone will call you back"
+# are still promises, while "We won't call you" is not.
+_NEGATION = re.compile(
+    r"\bcan['’]t|\bcannot\b|\bunable\s+to\b|\bwon['’]t|\bwill\s+not\b|\bdon['’]t|"
+    r"\bdo\s+not\b|\bnot\s+able\s+to\b|\bhaven['’]t|\bhave\s+not\b|\bnever\b",
+    re.IGNORECASE,
+)
+
+
+def _negated(clause: str, match: re.Match[str]) -> bool:
+    """A negation between the last comma before the match and the match's end."""
+    return bool(_NEGATION.search(clause[: match.end()].rsplit(",", 1)[-1]))
 
 
 def promises_callback(text: str) -> bool:
@@ -366,8 +378,9 @@ def promises_callback(text: str) -> bool:
                 continue
             if _CALLBACK_CONDITIONAL.search(clause):
                 continue
-            if any(pattern.search(clause) for pattern in _CALLBACK_PATTERNS):
-                return True
+            for pattern in _CALLBACK_PATTERNS:
+                if any(not _negated(clause, match) for match in pattern.finditer(clause)):
+                    return True
     return False
 
 
@@ -398,13 +411,12 @@ _NOTIFIED_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"(?:passed\s+on|passed\s+along|flagged|escalated|forwarded|sent\s+(?:on|to))\b",
     )
 )
-# Before a match: an offer, a condition or a negation makes it not a claim.
+# Anywhere before a match in its clause, an offer or a condition makes it not a claim.
+# A negation counts only in the match's own comma-separated phrase (`_negated`).
 _NOTIFIED_BLOCK = re.compile(
     r"\b(?:if|whether)\s+you\b|\bwould\s+you\s+like\b|\bdo\s+you\s+want\b|"
     r"\b(?:want|like)\s+(?:us|me)\s+to\b|\b(?:can|could|may|should)\s+(?:i|we|you)\b|"
-    r"\byou\s+(?:can|could|may|might|should|need\s+to)\b|\bcan['’]t|\bcannot\b|"
-    r"\bunable\s+to\b|\bwon['’]t|\bwill\s+not\b|\bdon['’]t|\bdo\s+not\b|"
-    r"\bnot\s+able\s+to\b|\bhaven['’]t|\bhave\s+not\b|\bnever\b|\bonce\b|\bwhen\b",
+    r"\byou\s+(?:can|could|may|might|should|need\s+to)\b|\bonce\b|\bwhen\b",
     re.IGNORECASE,
 )
 
@@ -421,7 +433,9 @@ def claims_team_notified(text: str) -> bool:
                 continue
             for pattern in _NOTIFIED_PATTERNS:
                 for match in pattern.finditer(clause):
-                    if not _NOTIFIED_BLOCK.search(clause[: match.start()]):
+                    if not _NOTIFIED_BLOCK.search(clause[: match.start()]) and not _negated(
+                        clause, match
+                    ):
                         return True
     return False
 

@@ -160,6 +160,8 @@ function EscalationRulesPanel({ initial }: { initial: EscalationSettingsRead }) 
           onChange={clearSaved}
           noValidate
         >
+          {/* Locked while saving: the response resets the form, so a later edit would be lost. */}
+          <fieldset disabled={isSubmitting} className="flex min-w-0 flex-col gap-5">
           {!initial.sms_configured && (
             <Callout tone="warning" compact headingLevel={3} title="Demo mode">
               Alerts are recorded in your inbox; SMS sending isn&apos;t set up, so nothing is texted.
@@ -187,8 +189,9 @@ function EscalationRulesPanel({ initial }: { initial: EscalationSettingsRead }) 
               }}
             />
             <p className="text-sm text-muted-foreground">
-              One text per conversation, however many reasons it raises. If you are on a Twilio trial
-              account, it can only text numbers you have verified with Twilio.
+              Usually one text per conversation, however many reasons it raises. An urgent one still
+              texts you if you have not had an urgent text for that conversation. If you are on a
+              Twilio trial account, it can only text numbers you have verified with Twilio.
             </p>
           </div>
 
@@ -293,6 +296,7 @@ function EscalationRulesPanel({ initial }: { initial: EscalationSettingsRead }) 
               </ul>
             )}
           </div>
+          </fieldset>
 
           <div className="flex items-center gap-4">
             <Button type="submit" disabled={(customized && !isDirty) || isSubmitting}>

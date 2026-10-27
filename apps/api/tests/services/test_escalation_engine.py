@@ -24,6 +24,7 @@ class Harness:
         self.service = EscalationService(
             self.escalation_store, self.notifier, inbox_url=lambda i: f"https://app.test/{i}"
         )
+        self.store.escalation_rows = lambda: self.escalation_store.rows.values()
 
     def engine(self, llm: FakeLLMClient) -> ConversationEngine:
         return ConversationEngine(
@@ -167,6 +168,20 @@ async def test_ordinary_turns_do_not_escalate(h, llm, text):
 
     assert result.escalated is False and h.rows == [] and h.notifier.alerts == []
     assert "requires_human" not in h.state or h.state["requires_human"] is False
+
+
+async def test_a_true_team_notified_reply_is_kept_once_an_earlier_turn_escalated(h, llm):
+    llm.queue(
+        agent_turn("I'll pass that on.", intent="HUMAN_REQUEST"),
+        agent_turn("Yes, I've let the team know.", intent="UNKNOWN"),
+    )
+
+    first = await h.turn(llm, "a person please")
+    second = await h.turn(llm, "did you tell them?", first.interaction_id)
+
+    assert second.reply_text == "Yes, I've let the team know." and second.fallback is False
+    assert [r.reason for r in h.rows] == ["human_requested"]
+    assert not any(f["kind"] == "unconfirmed_handoff" for f in h.state.get("failures", []))
 
 
 async def test_repeated_unanswerable_turns_exhaust_clarification(h, llm):

@@ -2,8 +2,10 @@
 same contract as the SQL stores and scoped by business id like them, for unit tests."""
 
 import uuid
+from collections.abc import Callable, Iterable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from models.agent import Agent
 from models.interaction import Interaction, InteractionMessage
@@ -27,6 +29,8 @@ class MemoryStore:
         self.signals: dict[uuid.UUID, tuple[bool, bool]] = {}
         # Interactions with a recorded escalation (the SQL store reads `escalations`).
         self.escalated: set[uuid.UUID] = set()
+        # When set (engine tests), the escalation store's rows count too, like the SQL join.
+        self.escalation_rows: Callable[[], Iterable[Any]] | None = None
 
     async def get_or_create(self, business_id, *, name, tone, greeting):
         if business_id not in self.agents:
@@ -101,7 +105,12 @@ class MemoryStore:
         return self.signals.get(interaction_id, (False, False))
 
     async def has_escalation(self, business_id, interaction_id):
-        return interaction_id in self.escalated
+        if interaction_id in self.escalated:
+            return True
+        rows = self.escalation_rows() if self.escalation_rows else ()
+        return any(
+            r.business_id == business_id and r.interaction_id == interaction_id for r in rows
+        )
 
     async def operation_facts(self, business_id, interaction_id):
         return [

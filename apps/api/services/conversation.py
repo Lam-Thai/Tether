@@ -481,10 +481,8 @@ class ConversationEngine:
                 extra={"interaction_id": str(locked.id), "failure_kind": failure["kind"]},
             )
 
-        if recorded is not None and self._escalations is not None:
-            await self._alert(tenant, recorded)
-
-        return TurnResult(
+        # Built before the alert: a rollback there expires the ORM objects read here.
+        result = TurnResult(
             interaction_id=locked.id,
             reply_text=agent_message.message_text,
             intent=intent,
@@ -495,6 +493,9 @@ class ConversationEngine:
             messages=tuple(_view(m, locked.state) for m in created),
             escalated=recorded is not None and recorded.record.status == "open",
         )
+        if recorded is not None and self._escalations is not None:
+            await self._alert(tenant, recorded)
+        return result
 
     async def _escalate(
         self,
@@ -522,7 +523,12 @@ class ConversationEngine:
             await self._escalations.rules(tenant),
         )
         if decision is None:
-            if turn is not None and claims_team_notified(agent_message.message_text):
+            # True when an earlier turn already recorded an escalation ("did you tell them?").
+            if (
+                turn is not None
+                and claims_team_notified(agent_message.message_text)
+                and not await self._store.has_escalation(interaction.business_id, interaction.id)
+            ):
                 self._withdraw_handoff_claim(require_business(tenant), interaction, agent_message)
             return None
         if needs_emergency_pointer(decision, agent_message.message_text):

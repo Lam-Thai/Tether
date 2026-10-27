@@ -53,6 +53,10 @@ URGENT_TEXTS = [
     "I want to kill myself",
     "i might hurt myself",
     "I’m having trouble breathing",
+    "she is unresponsive",
+    "my client went unresponsive in the chair",
+    "help, the kitchen is on fire",
+    "the dryer is on fire",
 ]
 
 
@@ -86,6 +90,10 @@ def test_every_rule_that_fired_is_a_signal_and_the_model_flag_is_added():
         "I passed by your shop yesterday",
         "My hair is on point",
         "Do you take emergency walk-ins?",
+        "Your booking page is unresponsive",
+        "the card reader was unresponsive yesterday",
+        "that red colour is on fire",
+        "my look is on fire, thanks",
     ],
 )
 def test_ordinary_wording_near_a_safety_word_is_not_urgent(text):

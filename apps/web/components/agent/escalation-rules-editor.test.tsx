@@ -118,6 +118,10 @@ describe("EscalationRulesEditor", () => {
       urgent_keywords: ["flood"],
     });
     expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+    // Locked while the save is in flight, so no edit is silently replaced by the response.
+    expect(screen.getByLabelText("Contact phone")).toBeDisabled();
+    expect(screen.getByLabelText("Urgent keywords")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add keyword" })).toBeDisabled();
 
     resolve({
       kind: "ok",
@@ -132,6 +136,7 @@ describe("EscalationRulesEditor", () => {
     });
     expect(await screen.findByText("Saved")).toBeInTheDocument();
     expect(screen.queryByText("Using defaults")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Contact phone")).toBeEnabled();
   });
 
   it("sends a blank phone as null", async () => {

@@ -1,6 +1,7 @@
 """One alert per interaction and reopening, against real Postgres."""
 
 import pytest
+from sqlalchemy.exc import NoResultFound
 
 from core.db import async_session_factory
 from repositories import escalations as repo
@@ -136,8 +137,13 @@ async def test_reopen_never_touches_another_business(two_tenants):
         await repo.resolve_escalation(session, a, esc_id)
         await session.commit()
     async with async_session_factory() as session:
-        # B naming A's interaction id changes nothing of A's.
-        await session.execute(repo.text("SELECT 1"))
+        # B naming A's interaction id (the engine never does) reopens nothing of A's: the
+        # conflicting insert is a no-op, the reopen UPDATE is scoped to B, and B owns no row.
+        with pytest.raises(NoResultFound):
+            await repo.insert_or_get(
+                session, b, interaction, "complaint", "normal", "pending", reopen=True
+            )
+        await session.rollback()
         assert await repo.get_escalation(session, b, esc_id) is None
     async with async_session_factory() as session:
         row = await repo.get_escalation(session, a, esc_id)
