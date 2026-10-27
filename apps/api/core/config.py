@@ -132,6 +132,14 @@ class Settings(BaseSettings):
     # webhook signatures are checked against that URL. Unset: no status callback is
     # requested, and the status stays whatever the send returned.
     api_public_base_url: str | None = None
+    # Voice calls (services/call_session.py). Phone numbers work only with the Twilio
+    # settings above AND `api_public_base_url` (the webhooks Twilio is pointed at). A
+    # voice turn gets this long before the caller hears a holding phrase...
+    voice_hold_after_seconds: float = Field(default=4.0, ge=1, le=10)
+    # ...then each wait request polls this long (under Twilio's ~15 s webhook timeout)...
+    voice_wait_seconds: float = Field(default=12.0, ge=2, le=14)
+    # ...at most this many times before an apology and a clean hang-up.
+    voice_max_holds: int = Field(default=3, ge=1, le=5)
 
     # Eval harness (`uv run tether-eval`, evals/runner.py). The tier picks the defaults
     # in `evals.runner.TIER_LIMITS`; each value below overrides one of them when set.

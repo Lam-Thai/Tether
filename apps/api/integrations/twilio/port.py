@@ -47,3 +47,48 @@ class SmsApi(Protocol):
     async def send_sms(self, *, to: str, body: str, status_callback: str | None) -> SentSms:
         """Send one message from the configured number. Raises `TwilioApiError`."""
         ...
+
+
+# Numbers (slice 14). Reads and webhook updates are idempotent (setting a URL twice is
+# the same as once), so unlike a message create they are `retryable` on timeouts and
+# 5xx too. There is deliberately NO purchase or release call: Tether never buys numbers.
+REASON_NOT_FOUND = "not_found"  # 404 / 20404: the number isn't on this account
+
+
+@dataclass(frozen=True)
+class IncomingNumber:
+    """One IncomingPhoneNumber on the account, with its current webhook configuration."""
+
+    sid: str  # PN + 32 hex
+    phone_number: str  # E.164
+    friendly_name: str | None
+    voice_url: str | None
+    voice_method: str | None
+    status_callback: str | None
+    status_callback_method: str | None
+
+
+@dataclass(frozen=True)
+class AccountInfo:
+    trial: bool  # Twilio account `type` is "Trial"
+
+
+class NumbersApi(Protocol):
+    async def account(self) -> AccountInfo:
+        """The account's type. Raises `TwilioApiError`."""
+        ...
+
+    async def list_numbers(self) -> list[IncomingNumber]:
+        """Every number on the account (first page of up to 100). Raises `TwilioApiError`."""
+        ...
+
+    async def get_number(self, sid: str) -> IncomingNumber:
+        """One number; `TwilioApiError(REASON_NOT_FOUND)` when it isn't on the account."""
+        ...
+
+    async def set_webhooks(
+        self, sid: str, *, voice_url: str, status_callback: str
+    ) -> IncomingNumber:
+        """Point the number's Voice URL and status callback (both POST) at these URLs; empty
+        strings clear them. Returns the number as Twilio now reports it."""
+        ...

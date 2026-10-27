@@ -640,3 +640,13 @@ def test_handoff_rules_notify_the_team_and_never_promise_a_callback():
     # Numbering stays coherent: 1..9 in order.
     numbers = [int(n) for n in re.findall(r"(?m)^(\d+)\. ", PLATFORM_RULES)]
     assert numbers == sorted(numbers) and numbers[:9] == list(range(1, 10))
+
+
+def test_a_voice_call_skips_asking_for_a_phone_only_when_caller_id_is_known():
+    """Caller ID becomes the booking phone; without one (blocked or anonymous) the model
+    may still ask, or the owner would have no way to reach the caller."""
+    known = system(channel="voice", caller_id_known=True)
+    unknown = system(channel="voice")
+    assert "never ask for a phone number" in known
+    assert "never ask for a phone number" not in unknown
+    assert "never ask for a phone number" not in system(channel="test_chat")

@@ -79,6 +79,13 @@ Vitest config is scoped to this package (`apps/web/vitest.config.ts`, `happy-dom
 - Booking behavior (`components/agent/booking-rules-editor.tsx`, builder section after Business hours): `GET`/`PUT /business/booking-rules`, `customized: false` shows "Using defaults" and is only cleared by the PUT response. Notice is typed in minutes or hours, sent as minutes (`lib/validation/booking-rules.ts`).
 - Preview availability (`components/settings/availability-preview.tsx`, shown on the Calendar page only when status is `connected`): `GET /calendar/availability`. Every time shown is a `label` from the response (`formatSlotLabel` only reformats to 12-hour); each `reason` has plain copy in `availability-messages.ts`; a result is cleared when the service or date changes.
 
+## Phone
+
+- `/dashboard/phone` (nav "Phone", between Calendar and Inbox) follows the server page -> presentational pattern (`components/settings/phone-panel.tsx`, copy in `phone-messages.ts`, client functions `getPhoneNumbers` / `associatePhoneNumber` / `testPhoneNumber` / `disconnectPhoneNumber`). The page shows only what `GET /phone-numbers` returned: the business's numbers (`Connected · webhooks verified` only for `status: "connected"` with a `verified_at`; `misconfigured` explains its `last_error`) and the account's UNASSIGNED numbers (the API never returns another business's). A number joins or leaves the list only after the API confirms (201 / 200).
+- There is no purchase button or purchase wording anywhere (the API can't buy numbers; a test asserts no /buy|purchase/ text). `configured: false` is a calm demo-mode callout pointing to the Test chat, not an error. The trial notice shows whenever `trial` is true or unknown: verified caller IDs only, Twilio's trial message first, turn-based calls.
+- Disconnect always goes through the confirm dialog; `webhooks_cleared: false` means the row is gone but the Voice URL may still be set on Twilio, so show the warning linking the Twilio console. `phone_number_in_use` copy never says which business holds the number.
+- Inbox lists show a voice caller ID masked to its last four digits (the API masks it); the detail view shows the full number.
+
 ## Auth (Clerk custom flows)
 
 - `components/auth/sign-in-form.tsx` / `sign-up-form.tsx` are custom forms over the `@clerk/nextjs/legacy` hooks (no Clerk prebuilt UI). They collect **email + password only**, so the Clerk dashboard must not require anything else (username, names, legal acceptance). If it does, the forms say which field is missing (`components/auth/clerk-status.ts`) and never blame the code or password.

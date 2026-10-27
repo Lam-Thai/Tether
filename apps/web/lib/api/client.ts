@@ -2319,3 +2319,201 @@ export async function listInteractionMessages(
   }
   return UNEXPECTED;
 }
+
+// Phone numbers (`/phone-numbers`): the Twilio numbers that reach this business's agent.
+
+export type PhoneNumberStatus = "connected" | "misconfigured";
+
+/** Fixed reason codes from the last webhook check, never provider text. */
+export type PhoneNumberError =
+  | "voice_url_mismatch"
+  | "status_callback_mismatch"
+  | "number_missing"
+  | "unavailable";
+
+export interface PhoneNumber {
+  id: string;
+  /** E.164. */
+  phone_number: string;
+  provider_number_sid: string;
+  status: PhoneNumberStatus;
+  last_error: PhoneNumberError | null;
+  verified_at: string | null;
+  created_at: string;
+}
+
+export interface AvailableNumber {
+  provider_number_sid: string;
+  phone_number: string;
+  friendly_name: string | null;
+}
+
+export interface PhoneNumbers {
+  /** Twilio credentials and the public API URL are set on this deployment. */
+  configured: boolean;
+  /** Twilio account type is Trial; null when unknown. */
+  trial: boolean | null;
+  numbers: PhoneNumber[];
+  available: AvailableNumber[];
+  available_error: "unavailable" | "not_configured" | null;
+}
+
+/** Failures every phone-number call can end in, besides its own. */
+export type PhoneCommonFailure =
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  /** 503 `telephony_not_configured`: this deployment has no Twilio setup. */
+  | { kind: "not_configured" }
+  /** 503 `telephony_unavailable`: Twilio did not respond. */
+  | { kind: "unavailable" }
+  | { kind: "unreachable"; reason: string };
+
+export type PhoneNumbersResult = { kind: "ok"; data: PhoneNumbers } | PhoneCommonFailure;
+
+export type AssociatePhoneNumberResult =
+  | { kind: "ok"; data: PhoneNumber }
+  /** 409 `phone_number_in_use`: never says which business has it. */
+  | { kind: "in_use" }
+  /** 404 `phone_number_not_found`: the number is not on the Twilio account. */
+  | { kind: "not_found" }
+  | PhoneCommonFailure;
+
+export type TestPhoneNumberResult =
+  | { kind: "ok"; data: PhoneNumber }
+  | { kind: "not_found" }
+  | PhoneCommonFailure;
+
+export type DisconnectPhoneNumberResult =
+  | { kind: "ok"; webhooksCleared: boolean }
+  | { kind: "not_found" }
+  | PhoneCommonFailure;
+
+const PHONE_STATUSES: readonly string[] = ["connected", "misconfigured"];
+const PHONE_ERRORS: readonly string[] = [
+  "voice_url_mismatch",
+  "status_callback_mismatch",
+  "number_missing",
+  "unavailable",
+];
+
+function isPhoneNumber(value: unknown): value is PhoneNumber {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.phone_number === "string" &&
+    typeof value.provider_number_sid === "string" &&
+    typeof value.status === "string" &&
+    PHONE_STATUSES.includes(value.status) &&
+    (value.last_error === null || (typeof value.last_error === "string" && PHONE_ERRORS.includes(value.last_error))) &&
+    isNullableString(value.verified_at) &&
+    typeof value.created_at === "string"
+  );
+}
+
+function isAvailableNumber(value: unknown): value is AvailableNumber {
+  return (
+    isRecord(value) &&
+    typeof value.provider_number_sid === "string" &&
+    typeof value.phone_number === "string" &&
+    isNullableString(value.friendly_name)
+  );
+}
+
+function isPhoneNumbers(value: unknown): value is PhoneNumbers {
+  return (
+    isRecord(value) &&
+    typeof value.configured === "boolean" &&
+    (value.trial === null || typeof value.trial === "boolean") &&
+    Array.isArray(value.numbers) &&
+    value.numbers.every(isPhoneNumber) &&
+    Array.isArray(value.available) &&
+    value.available.every(isAvailableNumber) &&
+    (value.available_error === null ||
+      value.available_error === "unavailable" ||
+      value.available_error === "not_configured")
+  );
+}
+
+/** The failures that look the same on every phone-number endpoint; null when the response is something else. */
+function phoneCommonFailure(outcome: {
+  status: number;
+  body: unknown;
+}): Exclude<PhoneCommonFailure, { kind: "unreachable" }> | null {
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 503) {
+    const code = errorCode(outcome.body);
+    if (code === "telephony_not_configured") return { kind: "not_configured" };
+    if (code === "telephony_unavailable") return { kind: "unavailable" };
+  }
+  return null;
+}
+
+/** Calls `GET /api/v1/phone-numbers`. */
+export async function getPhoneNumbers(token: string): Promise<PhoneNumbersResult> {
+  const outcome = await fetchApi("/phone-numbers", { headers: authHeaders(token) }, BILLING_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = phoneCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 200 && isPhoneNumbers(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/phone-numbers`: associate an unassigned Twilio number with this business. */
+export async function associatePhoneNumber(
+  token: string,
+  providerNumberSid: string,
+): Promise<AssociatePhoneNumberResult> {
+  const outcome = await fetchApi(
+    "/phone-numbers",
+    {
+      method: "POST",
+      headers: jsonAuthHeaders(token),
+      body: JSON.stringify({ provider_number_sid: providerNumberSid }),
+    },
+    BILLING_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = phoneCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 409 && errorCode(outcome.body) === "phone_number_in_use") return { kind: "in_use" };
+  if (outcome.status === 404 && errorCode(outcome.body) === "phone_number_not_found") return { kind: "not_found" };
+  if (outcome.status === 201 && isPhoneNumber(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/phone-numbers/{id}/test`: re-verifies the number's webhook configuration. */
+export async function testPhoneNumber(token: string, id: string): Promise<TestPhoneNumberResult> {
+  const outcome = await fetchApi(
+    `/phone-numbers/${encodeURIComponent(id)}/test`,
+    { method: "POST", headers: authHeaders(token) },
+    BILLING_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = phoneCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 404 && errorCode(outcome.body) === "phone_number_not_found") return { kind: "not_found" };
+  if (outcome.status === 200 && isPhoneNumber(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `DELETE /api/v1/phone-numbers/{id}`; `webhooksCleared: false` means Twilio's Voice URL is still set. */
+export async function disconnectPhoneNumber(token: string, id: string): Promise<DisconnectPhoneNumberResult> {
+  const outcome = await fetchApi(
+    `/phone-numbers/${encodeURIComponent(id)}`,
+    { method: "DELETE", headers: authHeaders(token) },
+    BILLING_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  const common = phoneCommonFailure(outcome);
+  if (common) return common;
+  if (outcome.status === 404 && errorCode(outcome.body) === "phone_number_not_found") return { kind: "not_found" };
+  if (outcome.status === 200 && isRecord(outcome.body) && typeof outcome.body.webhooks_cleared === "boolean") {
+    return { kind: "ok", webhooksCleared: outcome.body.webhooks_cleared };
+  }
+  return UNEXPECTED;
+}

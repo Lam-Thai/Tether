@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 
 from sqlalchemy import exists, func, select, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -82,6 +83,63 @@ async def lock_admission_and_count(
             ) from exc
         raise
     return await count_recent_active(session, business_id, idle_minutes)
+
+
+async def find_voice_call(session: AsyncSession, call_sid: str) -> Interaction | None:
+    """The voice interaction for a Twilio CallSid. Not tenant-scoped on purpose: the call
+    webhooks have no tenant, and the stored row (whose business came from the number
+    called) decides it. Re-read from the database even if this session holds the row."""
+    result = await session.execute(
+        select(Interaction)
+        .where(Interaction.channel == "voice", Interaction.external_call_id == call_sid)
+        .execution_options(populate_existing=True)
+    )
+    return result.scalar_one_or_none()
+
+
+async def reload_interaction(
+    session: AsyncSession, business_id: uuid.UUID, interaction_id: uuid.UUID
+) -> None:
+    """Re-reads the row into this session's object in place (`populate_existing`), so a
+    later read sees what another worker committed. Never expires anything else."""
+    await session.execute(
+        business_scoped_select(Interaction, business_id)
+        .where(Interaction.id == interaction_id)
+        .execution_options(populate_existing=True)
+    )
+
+
+async def create_voice_call(
+    session: AsyncSession,
+    *,
+    business_id: uuid.UUID,
+    phone_number_id: uuid.UUID,
+    call_sid: str,
+    caller: str | None,
+) -> tuple[Interaction, bool]:
+    """(the call's interaction, whether this inserted it). A CallSid that already has one
+    (a racing duplicate webhook) returns that one: the voice-only unique index decides."""
+    result = await session.execute(
+        insert(Interaction)
+        .values(
+            id=uuid.uuid4(),
+            business_id=business_id,
+            channel="voice",
+            phone_number_id=phone_number_id,
+            external_call_id=call_sid,
+            caller_identifier=caller,
+            status="in_progress",
+            state={},
+        )
+        .on_conflict_do_nothing(
+            index_elements=["external_call_id"], index_where=text("channel = 'voice'")
+        )
+        .returning(Interaction.id)
+    )
+    created = result.scalar_one_or_none() is not None
+    interaction = await find_voice_call(session, call_sid)
+    assert interaction is not None
+    return interaction, created
 
 
 async def get_interaction(

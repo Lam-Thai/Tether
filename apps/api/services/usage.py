@@ -61,6 +61,8 @@ class UsageKind(StrEnum):
     SMS = "sms"
     CALENDAR_CALL = "calendar_call"
     BILLING_CALL = "billing_call"
+    # Twilio REST calls that manage numbers (list, configure, verify): metered, never capped.
+    TELEPHONY_API = "telephony_api"
     FAILED_REQUEST = "failed_request"
 
 
@@ -73,6 +75,7 @@ PROVIDER: Mapping[UsageKind, str] = {
     UsageKind.SMS: "twilio",
     UsageKind.CALENDAR_CALL: "google_calendar",
     UsageKind.BILLING_CALL: "stripe",
+    UsageKind.TELEPHONY_API: "twilio",
 }
 
 # Bounds the best-effort bookkeeping after a call, so it can't stretch a deadline.
@@ -322,6 +325,26 @@ class UsageGuard:
                 self._clock(),
             )
         ]
+
+    async def record(
+        self,
+        kind: UsageKind,
+        units: int,
+        *,
+        business_id: uuid.UUID | None,
+        interaction_id: uuid.UUID | None = None,
+    ) -> None:
+        """Record consumption that happened outside a metered call (voice: a call's
+        seconds, reported by Twilio when it ends). Never blocks and never raises; only for
+        kinds with no daily limit, since nothing was reserved to enforce one."""
+        if kind in self._limits.daily:
+            raise ValueError(f"{kind.value} is capped: reserve it with metered()")
+        if units <= 0:
+            return
+        event = UsageEvent(
+            kind, PROVIDER[kind], units, Decimal(0), business_id, interaction_id, self._clock()
+        )
+        await self._record_quietly([event], self.window().day)
 
     def check_admission(self, active: ActiveCounts) -> None:
         """Refuse a new interaction when too many are active. Raises `ConcurrencyLimitedError`."""

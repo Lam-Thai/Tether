@@ -20,6 +20,7 @@ from services.business_tools import get_business_info_tool, get_services_tool
 from services.conversation import (
     INVALID_OUTPUT_FALLBACK,
     MAX_TOOL_ROUNDS,
+    MAX_TURN_KEYS,
     PROVIDER_FALLBACK,
     ConversationEngine,
     InteractionEndedError,
@@ -1362,3 +1363,51 @@ async def test_end_after_a_fallback_reply_is_a_failed_interaction(store, llm):
     interaction = store.interactions[first.interaction_id]
     assert (ended.status, ended.ended) == ("failed", True)
     assert interaction.outcome == "failed"
+
+
+async def test_a_turn_key_is_answered_once_and_replayed_after(store, llm):
+    """Voice: a retried webhook (or a second worker on the same turn) stores nothing new."""
+    tenant = _tenant()
+    llm.queue(agent_turn("Hello!"))
+    first = await _engine(store, llm).handle_turn(tenant, None, "hi", "test_chat")
+    engine = _engine(store, llm)
+    assert await engine.replay(tenant, first.interaction_id, "voice:1", "test_chat") is None
+
+    llm.queue(agent_turn("We're at 1 Main St.", intent="LOCATION", sources=["business_profile"]))
+    answered = await engine.handle_turn(
+        tenant, first.interaction_id, "Where are you?", "test_chat", turn_key="voice:1"
+    )
+    stored = len(store.messages)
+
+    # A second worker ran the model too, but the key is already answered under the lock.
+    llm.queue(agent_turn("A different answer."))
+    racing = await engine.handle_turn(
+        tenant, first.interaction_id, "Where are you?", "test_chat", turn_key="voice:1"
+    )
+    replayed = await engine.replay(tenant, first.interaction_id, "voice:1", "test_chat")
+
+    assert len(store.messages) == stored
+    for result in (racing, replayed):
+        assert result is not None and result.replayed
+        assert result.reply_text == answered.reply_text == "We're at 1 Main St."
+        assert [m.text for m in result.messages] == ["Where are you?", "We're at 1 Main St."]
+        assert result.usage_limited is False
+    interaction = store.interactions[first.interaction_id]
+    assert interaction.state["turn_keys"] == {
+        "voice:1": {"reply": answered.messages[-1].sequence_number, "usage_limited": False}
+    }
+
+
+async def test_turn_keys_keep_only_the_most_recent(store, llm):
+    tenant = _tenant()
+    llm.queue(agent_turn("Hello!"))
+    first = await _engine(store, llm).handle_turn(tenant, None, "hi", "test_chat")
+    engine = _engine(store, llm)
+    for turn in range(MAX_TURN_KEYS + 2):
+        llm.queue(agent_turn("Sure."))
+        await engine.handle_turn(
+            tenant, first.interaction_id, "ok", "test_chat", turn_key=f"voice:{turn}"
+        )
+    keys = store.interactions[first.interaction_id].state["turn_keys"]
+    assert len(keys) == MAX_TURN_KEYS
+    assert "voice:0" not in keys and f"voice:{MAX_TURN_KEYS + 1}" in keys

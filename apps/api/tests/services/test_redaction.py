@@ -2,7 +2,7 @@
 
 import pytest
 
-from services.redaction import redact
+from services.redaction import mask_phone, redact
 
 CARD = "[card number removed]"
 SSN = "[SSN removed]"
@@ -154,3 +154,19 @@ def test_random_uuids_are_never_redacted():
 def test_redaction_is_idempotent():
     once = redact("card 4111 1111 1111 1111, ssn 123-45-6789, cvv 123")
     assert redact(once) == once
+
+
+@pytest.mark.parametrize(
+    ("value", "masked"),
+    [
+        ("+15557654321", "•••4321"),
+        ("(555) 765-4321", "•••4321"),
+        ("+44 20 7946 0958", "•••0958"),
+        ("Alex", "Alex"),
+        ("12", "12"),
+        ("Room 4321", "Room 4321"),
+    ],
+    ids=["e164", "us_format", "uk_spaced", "a_name", "too_short", "text_with_digits"],
+)
+def test_mask_phone_keeps_only_the_last_four_digits_of_a_number(value, masked):
+    assert mask_phone(value) == masked

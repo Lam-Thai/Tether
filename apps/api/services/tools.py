@@ -91,6 +91,8 @@ class ToolContext:
 
     tenant: Tenant
     interaction_id: uuid.UUID
+    # Voice: the caller ID Twilio reported (E.164), used when the caller gives no phone.
+    caller_phone: str | None = None
 
 
 @dataclass(frozen=True)

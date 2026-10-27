@@ -152,6 +152,8 @@ INVALID_OUTPUT_FALLBACK = "Sorry, I didn't quite catch that. Could you say it an
 PROVIDER_FALLBACK = "Sorry, I'm having trouble responding right now. Please try again in a moment."
 FALLBACK_INTENT = "UNKNOWN"
 MAX_RECORDED_FAILURES = 50
+# Idempotency keys of answered turns kept in `state["turn_keys"]` (most recent).
+MAX_TURN_KEYS = 50
 # Tool rounds per turn; each round runs at most `tools.MAX_CALLS_PER_ROUND` calls.
 MAX_TOOL_ROUNDS = 3
 # Distinct FAQs kept per turn (FAQ RESULTS and the ids the guard accepts), bounding the prompt.
@@ -322,6 +324,8 @@ class TurnResult:
     messages: tuple[MessageView, ...]
     # This turn needed a person: the escalation is recorded (once per reason).
     escalated: bool = False
+    # The turn key was already answered: this is the stored turn, no new work was kept.
+    replayed: bool = False
 
 
 @dataclass(frozen=True)
@@ -395,8 +399,18 @@ class ConversationEngine:
         )
 
     async def handle_turn(
-        self, tenant: Tenant, interaction_id: uuid.UUID | None, utterance: str, channel: Channel
+        self,
+        tenant: Tenant,
+        interaction_id: uuid.UUID | None,
+        utterance: str,
+        channel: Channel,
+        *,
+        turn_key: str | None = None,
     ) -> TurnResult:
+        """One turn. With a `turn_key` (voice: the call's turn number) the turn is
+        idempotent: a key already answered on this interaction returns the stored turn
+        (`replayed`) and appends nothing, checked under the interaction lock, so two
+        workers racing on the same turn store it once."""
         business = require_business(tenant)
         created: list[InteractionMessage] = []
         # Card numbers, SSNs and security codes are never stored or sent to the model.
@@ -428,6 +442,8 @@ class ConversationEngine:
         ]
         history.append(ModelMessage(role="user", text=utterance))
         facts, hours = await self._business_facts(tenant, business)
+        # Voice: the caller ID is the booking phone unless the caller gives another one.
+        caller_phone = interaction.caller_identifier if channel == "voice" else None
 
         context = PromptContext(
             persona=Persona(
@@ -443,13 +459,14 @@ class ConversationEngine:
             state=dict(interaction.state or {}),
             tools=self._tools.declarations(),
             max_tool_rounds=MAX_TOOL_ROUNDS,
+            caller_id_known=caller_phone is not None,
         )
         # Own the ids before committing, and end the transaction so no connection
         # sits idle inside one during the (slow) model call. A new chat's
         # interaction and greeting are durable from here on, whatever happens next.
         business_id, interaction_id = business.id, interaction.id
         await self._store.checkpoint()
-        outcome = await self._generate(context, tenant, business, interaction_id)
+        outcome = await self._generate(context, tenant, business, interaction_id, caller_phone)
 
         reply_text = redact(outcome.turn.response_text if outcome.turn else outcome.fallback_text)
         intent = outcome.turn.intent if outcome.turn else FALLBACK_INTENT
@@ -461,6 +478,10 @@ class ConversationEngine:
             raise InteractionNotFoundError("Conversation not found.")
         if locked.status != "in_progress":
             raise InteractionEndedError("This conversation has ended.")
+        if turn_key is not None:
+            answered = (locked.state or {}).get("turn_keys", {}).get(turn_key)
+            if answered is not None:
+                return await self._replayed(locked, answered)
 
         created.append(await self._store.append_message(locked, "customer", utterance))
         agent_message = await self._store.append_message(locked, "agent", reply_text)
@@ -473,6 +494,8 @@ class ConversationEngine:
         recorded: Recorded | None = None
         if self._escalations is not None:
             recorded = await self._escalate(tenant, locked, utterance, outcome, agent_message)
+        if turn_key is not None:
+            _record_turn_key(locked, turn_key, agent_message.sequence_number, outcome)
         await self._store.save_interaction(locked)
 
         for failure in outcome.failures:
@@ -580,6 +603,41 @@ class ConversationEngine:
             except Exception:
                 logger.warning("escalation alert rollback failed")
 
+    async def replay(
+        self, tenant: Tenant, interaction_id: uuid.UUID, turn_key: str, channel: Channel
+    ) -> TurnResult | None:
+        """The stored turn for `turn_key`, or None when it hasn't been answered. A plain
+        read with no model call: lets a retried webhook skip work already done."""
+        business = require_business(tenant)
+        interaction = await self._store.get_interaction(business.id, interaction_id, channel)
+        if interaction is None:
+            raise InteractionNotFoundError("Conversation not found.")
+        answered = (interaction.state or {}).get("turn_keys", {}).get(turn_key)
+        if answered is None:
+            return None
+        return await self._replayed(interaction, answered)
+
+    async def _replayed(self, interaction: Interaction, answered: dict[str, Any]) -> TurnResult:
+        reply_sequence = int(answered["reply"])
+        rows = await self._store.list_messages(interaction.business_id, interaction.id)
+        kept = tuple(
+            _view(row, interaction.state)
+            for row in rows
+            if row.sequence_number in (reply_sequence - 1, reply_sequence)
+        )
+        reply = next(view for view in kept if view.sequence_number == reply_sequence)
+        return TurnResult(
+            interaction_id=interaction.id,
+            reply_text=reply.text,
+            intent=interaction.intent or FALLBACK_INTENT,
+            status=interaction.status,
+            ended=interaction.status != "in_progress",
+            fallback=reply.fallback,
+            usage_limited=bool(answered.get("usage_limited")),
+            messages=kept,
+            replayed=True,
+        )
+
     async def end(self, tenant: Tenant, interaction_id: uuid.UUID, channel: Channel) -> Transcript:
         # A plain id: a failed summary rolls the session back, expiring the ORM objects.
         business_id = require_business(tenant).id
@@ -680,6 +738,7 @@ class ConversationEngine:
         tenant: Tenant,
         business: Business,
         interaction_id: uuid.UUID,
+        caller_phone: str | None = None,
     ) -> _Outcome:
         """All model work for one turn, tool rounds included, under a single deadline.
 
@@ -696,7 +755,9 @@ class ConversationEngine:
             isolate=self._store.savepoint,
             checkpoint=self._store.checkpoint,
         )
-        tool_context = ToolContext(tenant=tenant, interaction_id=interaction_id)
+        tool_context = ToolContext(
+            tenant=tenant, interaction_id=interaction_id, caller_phone=caller_phone
+        )
         # FAQs retrieved this turn, by id (FAQ RESULTS), and everything the reply may
         # cite or quote: listed hours that are in the prompt, plus what tools verified.
         retrieved: dict[str, FaqSnippet] = {}
@@ -855,6 +916,18 @@ class ConversationEngine:
             # Consecutive failed turns: a reply the customer actually got ends the streak.
             state.pop("clarification_attempts", None)
         interaction.state = state
+
+
+def _record_turn_key(
+    interaction: Interaction, turn_key: str, reply_sequence: int, outcome: _Outcome
+) -> None:
+    """Remembers that `turn_key` was answered by `reply_sequence`, in the same transaction
+    as the messages, so "answered" and "stored" can never disagree."""
+    state: dict[str, Any] = dict(interaction.state or {})
+    keys = dict(state.get("turn_keys") or {})
+    keys[turn_key] = {"reply": reply_sequence, "usage_limited": outcome.usage_limited}
+    state["turn_keys"] = dict(list(keys.items())[-MAX_TURN_KEYS:])
+    interaction.state = state
 
 
 # Guard problems the model gets one chance to fix (sharing the single retry), with the

@@ -157,17 +157,21 @@ class InteractionLifecycle:
         self._summarizer = summarizer
         self._idle_minutes = idle_minutes
 
-    async def end(self, tenant: Tenant, interaction_id: uuid.UUID, channel: Channel) -> None:
+    async def end(self, tenant: Tenant, interaction_id: uuid.UUID, channel: Channel) -> bool:
+        """True when THIS call closed it (False: it was already closed), so a caller can
+        do once-per-interaction work (voice records the call's seconds) exactly once."""
         business_id = require_business(tenant).id
         locked = await self._store.lock_interaction(business_id, interaction_id, channel)
         if locked is None:
             raise InteractionNotFoundError("Conversation not found.")
-        if locked.status == "in_progress":
+        closed = locked.status == "in_progress"
+        if closed:
             await self._close(locked, "ended", ended_at=datetime.now(UTC))
             await self._store.save_interaction(locked)
         # Durable before any model call; also releases the row lock.
         await self._store.checkpoint()
         await self.summarize_safely(business_id, interaction_id, ai=True)
+        return closed
 
     async def abandon_idle(self, business_id: uuid.UUID) -> int:
         idle = await self._store.lock_idle(business_id, self._idle_minutes, MAX_ABANDONED_PER_SWEEP)

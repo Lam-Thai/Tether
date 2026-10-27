@@ -86,3 +86,15 @@ def _longest_card(groups: list[tuple[str, int, int]], start: int) -> int | None:
         if len(digits) >= _MIN_CARD_DIGITS and _luhn_valid(digits):
             best = end
     return best
+
+
+_PHONE = re.compile(r"^\+?[0-9(][0-9 ().-]{5,}$")
+
+
+def mask_phone(value: str) -> str:
+    """A caller ID for a LIST view: only the last four digits ("•••4567"). Anything that
+    isn't a phone number (a name the caller gave) is returned as is."""
+    digits = re.sub(r"\D", "", value)
+    if not _PHONE.match(value.strip()) or len(digits) < 7:
+        return value
+    return f"•••{digits[-4:]}"
