@@ -30,10 +30,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core.errors import AppError
 from core.tenant import Tenant
 from services.agent import require_business
+from services.escalation import EscalationRecord
 from services.lifecycle import InteractionLifecycle, InteractionNotFoundError
 from services.redaction import redact
 
-TypeFilter = Literal["all", "bookings", "faqs", "escalations", "failed"]
+TypeFilter = Literal["all", "bookings", "faqs", "escalations", "failed", "attention"]
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
 DEFAULT_MESSAGE_LIMIT = 50
@@ -95,6 +96,18 @@ class Page[T]:
 
 
 @dataclass(frozen=True)
+class EscalationBrief:
+    """The escalation an inbox row shows: the open one with the highest priority,
+    else the latest resolved one."""
+
+    id: uuid.UUID
+    reason: str
+    urgency: str
+    status: str
+    sms_status: str
+
+
+@dataclass(frozen=True)
 class InteractionRow:
     id: uuid.UUID
     channel: str
@@ -107,6 +120,9 @@ class InteractionRow:
     status: str
     outcome: str | None
     requires_human: bool
+    # Has an OPEN escalation (slice 13).
+    needs_attention: bool = False
+    escalation: EscalationBrief | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +142,7 @@ class InteractionDetail:
     row: InteractionRow
     message_count: int
     operations: tuple[OperationItem, ...]
+    escalations: tuple[EscalationRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -258,7 +275,9 @@ class Inbox:
             for op in found.operations
         )
         return DetailView(
-            InteractionDetail(_redacted_row(found.row), found.message_count, operations),
+            InteractionDetail(
+                _redacted_row(found.row), found.message_count, operations, found.escalations
+            ),
             timezone,
         )
 

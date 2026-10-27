@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import AppError
 from models.booking import Booking
+from models.escalation import Escalation
 from models.interaction import Interaction, InteractionMessage
 from models.operation import InteractionOperation
 from repositories.base import business_scoped_select
@@ -192,6 +193,22 @@ async def closing_signals(
     return bool(booked), bool(failed)
 
 
+async def has_escalation(
+    session: AsyncSession, business_id: uuid.UUID, interaction_id: uuid.UUID
+) -> bool:
+    """Any escalation (open or resolved) was recorded for this interaction."""
+    return bool(
+        await session.scalar(
+            select(
+                exists().where(
+                    Escalation.business_id == business_id,
+                    Escalation.interaction_id == interaction_id,
+                )
+            )
+        )
+    )
+
+
 async def lock_idle(
     session: AsyncSession, business_id: uuid.UUID, idle_minutes: int, limit: int
 ) -> Sequence[Interaction]:
@@ -250,6 +267,9 @@ class SqlConversationStore:
         self, business_id: uuid.UUID, interaction_id: uuid.UUID
     ) -> tuple[bool, bool]:
         return await closing_signals(self._session, business_id, interaction_id)
+
+    async def has_escalation(self, business_id: uuid.UUID, interaction_id: uuid.UUID) -> bool:
+        return await has_escalation(self._session, business_id, interaction_id)
 
     async def lock_idle(
         self, business_id: uuid.UUID, idle_minutes: int, limit: int

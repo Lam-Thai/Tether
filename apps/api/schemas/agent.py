@@ -69,6 +69,8 @@ class TurnRead(BaseModel):
     # The reply is the quota fallback: a daily usage limit was reached.
     usage_limited: bool
     messages: list[MessageRead] = Field(default_factory=list)
+    # This turn needed a person: an escalation is recorded for the owner's inbox.
+    escalated: bool = False
 
 
 class TranscriptRead(BaseModel):

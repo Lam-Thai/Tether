@@ -9,6 +9,7 @@ from models.booking import Booking
 from models.booking_rules import BookingRulesRow
 from models.business import Business
 from models.calendar import CalendarConnection
+from models.escalation import Escalation, EscalationSettingsRow
 from models.faq import Faq
 from models.hours import BusinessHours
 from models.interaction import Interaction, InteractionMessage
@@ -24,6 +25,8 @@ __all__ = [
     "Business",
     "BusinessHours",
     "CalendarConnection",
+    "Escalation",
+    "EscalationSettingsRow",
     "Faq",
     "Interaction",
     "InteractionMessage",

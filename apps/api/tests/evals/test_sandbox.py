@@ -319,3 +319,17 @@ async def test_summarizes_every_summary_suite_case_on_the_seeded_tenant(usage):
 
     assert await _count(Interaction, Interaction.business_id == business_id) == 0
     assert await _count(Booking, Booking.business_id == business_id) == 0
+
+
+async def test_playback_reads_the_interactions_escalations_from_the_database(usage):
+    llm = FakeLLMClient()
+    llm.queue(agent_turn("I've let the team know.", intent="HUMAN_REQUEST"))
+    sandbox_factory = partial(postgres_sandbox, usage_clock=lambda: usage.day)
+
+    async with sandbox_factory(SPEC) as sandbox:
+        recorder = Recorder(llm)
+        async with sandbox.case(recorder) as env:
+            playback = await play(env, recorder, ["can I talk to a real person please"])
+
+    assert playback.turns[-1].escalations == (("human_requested", "normal"),)
+    assert len(llm.requests) == 1

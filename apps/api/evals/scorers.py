@@ -38,6 +38,14 @@ Built in:
   the summary is exactly two sentences; it agrees with the outcome the backend computes from
   the seeded records (a failed booking is never described as successful); the model's own
   summary was accepted, not the template (information only).
+- `escalation_recall` / `reason_match` / `false_escalation` / `no_callback_promise`
+  (the `escalation` suite, slice 13): a case with `expect_escalation: true`
+  must end with at least one escalation record on its interaction (recall; any reason),
+  and `reason_match` (information) checks `expected_reason` is among the recorded reasons;
+  `expect_escalation: false` must end with none (`false_escalation`, tolerance in the suite
+  file). `no_callback_promise`: no reply, in any turn, promises that someone will call or
+  get back to the customer (`grounding.promises_callback`), and none contains a
+  `must_not_contain` phrase.
 - `tools_not_used`: none of the case's `forbidden_tools` was called (added automatically).
 - `tools_used`: every tool in `expected_tools` ran successfully during the case
   (added automatically to a case that sets `expected_tools`).
@@ -52,7 +60,7 @@ from typing import Protocol
 from evals.cases import EvalCase
 from evals.playback import Operation, PlayedTurn
 from evals.summary_seed import facts_of
-from services.grounding import BUSINESS_HOURS, BUSINESS_PROFILE, clock_times
+from services.grounding import BUSINESS_HOURS, BUSINESS_PROFILE, clock_times, promises_callback
 from services.summarizer import claims_booking, outcome_problem, split_sentences, verify
 
 
@@ -362,6 +370,63 @@ class AiSummary:
         return _result(self.name, [] if fallback is None else [f"template stored ({fallback})"])
 
 
+def _recorded_reasons(transcript: Sequence[PlayedTurn]) -> list[str]:
+    return [reason for reason, _ in transcript[-1].escalations] if transcript else []
+
+
+class EscalationRecall:
+    name = "escalation_recall"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        if _recorded_reasons(transcript):
+            return Score(self.name, True)
+        return Score(self.name, False, "no escalation recorded")
+
+
+class ReasonMatch:
+    """Information beyond recall: the expected reason is among those recorded."""
+
+    name = "reason_match"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        reasons = _recorded_reasons(transcript)
+        if case.expected_reason in reasons:
+            return Score(self.name, True)
+        got = ", ".join(reasons) or "none"
+        return Score(self.name, False, f"expected {case.expected_reason}, recorded {got}")
+
+
+class FalseEscalation:
+    name = "false_escalation"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        reasons = _recorded_reasons(transcript)
+        if not reasons:
+            return Score(self.name, True)
+        return Score(self.name, False, f"escalated ({', '.join(reasons)}) when it should not")
+
+
+class NoCallbackPromise:
+    name = "no_callback_promise"
+
+    def score(
+        self, case: EvalCase, transcript: Sequence[PlayedTurn], operations: Sequence[Operation]
+    ) -> Score:
+        problems: list[str] = []
+        for number, turn in enumerate(transcript, start=1):
+            if promises_callback(turn.reply):
+                problems.append(f"turn {number} promises a callback")
+            if forbidden := _phrases_in(turn.reply, case.must_not_contain):
+                problems.append(f"turn {number} contains {forbidden}")
+        return _result(self.name, problems)
+
+
 SCORERS: Mapping[str, Scorer] = {
     scorer.name: scorer
     for scorer in (
@@ -375,5 +440,9 @@ SCORERS: Mapping[str, Scorer] = {
         TwoSentences(),
         MatchesOutcome(),
         AiSummary(),
+        EscalationRecall(),
+        ReasonMatch(),
+        FalseEscalation(),
+        NoCallbackPromise(),
     )
 }

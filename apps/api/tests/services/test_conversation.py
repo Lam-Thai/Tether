@@ -696,7 +696,7 @@ async def test_an_ungrounded_answer_is_replaced_by_the_no_info_fallback(store, l
         detail,
     )
     assert state["fallback_messages"] == [result.messages[-1].sequence_number]
-    assert "clarification_attempts" not in state
+    assert state["clarification_attempts"] == 1  # an ungrounded fallback counts as an attempt
 
 
 async def test_grounded_intents_accept_cited_faqs_and_location_cites_the_profile(store, llm):

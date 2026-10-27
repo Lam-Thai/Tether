@@ -234,6 +234,17 @@ async def test_end_of_an_escalated_chat():
     assert (interaction.status, interaction.outcome) == ("completed", "escalated")
 
 
+async def test_an_escalation_alone_makes_the_outcome_escalated():
+    # The flag may have been cleared by a later turn; the recorded escalation still counts.
+    store, summarizer, tenant = MemoryStore(), FakeSummarizer(), _tenant()
+    interaction = await _open(store, tenant)
+    store.escalated.add(interaction.id)
+
+    await _lifecycle(store, summarizer).end(tenant, interaction.id, "test_chat")
+
+    assert (interaction.status, interaction.outcome) == ("completed", "escalated")
+
+
 async def test_ending_twice_changes_nothing_but_still_asks_for_the_summary():
     store, summarizer, tenant = MemoryStore(), FakeSummarizer(), _tenant()
     interaction = await _open(store, tenant)

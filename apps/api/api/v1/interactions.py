@@ -18,6 +18,7 @@ from core.db import get_session
 from core.inbox import get_inbox
 from core.tenant import Tenant
 from schemas.agent_turn import Intent
+from schemas.escalation import EscalationRead
 from schemas.inbox import (
     InteractionDetailRead,
     InteractionPageRead,
@@ -72,6 +73,7 @@ async def get_interaction(
         timezone=view.timezone,
         message_count=view.detail.message_count,
         operations=[OperationRead.model_validate(op) for op in view.detail.operations],
+        escalations=[EscalationRead.model_validate(e) for e in view.detail.escalations],
     )
 
 

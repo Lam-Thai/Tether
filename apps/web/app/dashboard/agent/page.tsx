@@ -6,6 +6,7 @@ import {
   getBookingRules,
   getBusiness,
   getBusinessHours,
+  getEscalationSettings,
   getTestTranscript,
   listFaqs,
   listServices,
@@ -33,7 +34,7 @@ export default async function AgentPage({
   const { chat } = await searchParams;
   const chatId = typeof chat === "string" && UUID.test(chat) ? chat : null;
 
-  const [agent, transcript, faqs, business, services, hours, bookingRules] = await Promise.all([
+  const [agent, transcript, faqs, business, services, hours, bookingRules, escalationSettings] = await Promise.all([
     getAgent(token),
     chatId ? getTestTranscript(token, chatId) : Promise.resolve(null),
     listFaqs(token),
@@ -41,6 +42,7 @@ export default async function AgentPage({
     listServices(token),
     getBusinessHours(token),
     getBookingRules(token),
+    getEscalationSettings(token),
   ]);
 
   if (agent.kind === "unauthorized") redirect("/sign-in");
@@ -51,14 +53,16 @@ export default async function AgentPage({
   if (
     services.kind === "unauthorized" ||
     hours.kind === "unauthorized" ||
-    bookingRules.kind === "unauthorized"
+    bookingRules.kind === "unauthorized" ||
+    escalationSettings.kind === "unauthorized"
   ) {
     redirect("/sign-in");
   }
   if (
     services.kind === "subscription_required" ||
     hours.kind === "subscription_required" ||
-    bookingRules.kind === "subscription_required"
+    bookingRules.kind === "subscription_required" ||
+    escalationSettings.kind === "subscription_required"
   ) {
     redirect("/billing/plan");
   }
@@ -96,6 +100,7 @@ export default async function AgentPage({
       services={services}
       hours={hours}
       bookingRules={bookingRules}
+      escalationSettings={escalationSettings}
     />
   );
 }

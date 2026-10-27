@@ -75,6 +75,9 @@ class PlayedTurn:
     rate_limited: bool
     # The longest retry delay the provider asked for in this turn, if it gave one.
     retry_after_seconds: float | None = None
+    # The interaction's escalation records after this turn, `(reason, urgency)`, all of
+    # them (not only this turn's). Empty for a `summary` case.
+    escalations: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,9 @@ class CaseEnv:
     operations: Callable[[uuid.UUID], Awaitable[Sequence[Operation]]]
     # Ends the unit of work, as the router's commit does after each request.
     commit: Callable[[], Awaitable[None]]
+    # The escalation records `(reason, urgency)` of one interaction (slice 13). None: the
+    # sandbox keeps none (every case then has no escalation).
+    escalations: Callable[[uuid.UUID], Awaitable[Sequence[tuple[str, str]]]] | None = None
 
 
 class Sandbox(Protocol):
@@ -196,6 +202,7 @@ async def play(env: CaseEnv, recorder: Recorder, utterances: Sequence[str]) -> P
         ops = await env.operations(interaction_id)
         parsed = [t for t in map(_parse, recorder.replies[replies_before:]) if t is not None]
         shown = parsed[-1] if parsed and not result.fallback else None
+        escalated = await env.escalations(interaction_id) if env.escalations else ()
         turn = PlayedTurn(
             customer=utterance,
             reply=result.reply_text,
@@ -207,6 +214,7 @@ async def play(env: CaseEnv, recorder: Recorder, utterances: Sequence[str]) -> P
             model_calls=recorder.calls - calls_before,
             rate_limited=recorder.rate_limited,
             retry_after_seconds=recorder.retry_after_seconds,
+            escalations=tuple(escalated),
         )
         seen_ops = len(ops)
         turns.append(turn)

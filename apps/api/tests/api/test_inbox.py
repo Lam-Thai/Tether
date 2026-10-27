@@ -645,7 +645,7 @@ async def test_ending_a_chat_closes_it_then_writes_the_summary_and_the_inbox_sho
     ).json()
     assert (detail["status"], detail["outcome"], detail["intent"]) == (
         "completed",
-        "answered",
+        "escalated",
         "HUMAN_REQUEST",
     )
     assert detail["summary"] and detail["summary_source"] in ("ai", "template")

@@ -5,12 +5,14 @@ import type {
   BookingRulesResult,
   BusinessHoursResult,
   BusinessResult,
+  EscalationSettingsResult,
   FaqListResult,
   ServiceListResult,
 } from "@/lib/api/client";
 import { AgentBuilder } from "@/components/agent/agent-builder";
 import { BookingRulesEditor } from "@/components/agent/booking-rules-editor";
 import { BusinessInfoForm } from "@/components/agent/business-info-form";
+import { EscalationRulesEditor } from "@/components/agent/escalation-rules-editor";
 import { FaqManager } from "@/components/agent/faq-manager";
 import { HoursEditor } from "@/components/agent/hours-editor";
 import { ServicesManager } from "@/components/agent/services-manager";
@@ -32,6 +34,7 @@ export function AgentWorkspace({
   services,
   hours,
   bookingRules,
+  escalationSettings,
 }: {
   agent: AgentResult;
   chat: ChatLoad;
@@ -40,6 +43,7 @@ export function AgentWorkspace({
   services: ServiceListResult;
   hours: BusinessHoursResult;
   bookingRules: BookingRulesResult;
+  escalationSettings: EscalationSettingsResult;
 }) {
   switch (agent.kind) {
     case "ok":
@@ -54,6 +58,7 @@ export function AgentWorkspace({
               <ServicesManager result={services} />
               <HoursEditor result={hours} />
               <BookingRulesEditor result={bookingRules} />
+              <EscalationRulesEditor result={escalationSettings} />
             </div>
             <div className="min-w-0 lg:sticky lg:top-6">
               <TestChat agentName={agent.data.name} chat={chat} />
