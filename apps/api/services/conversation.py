@@ -101,10 +101,21 @@ from schemas.agent_turn import AgentTurn
 from services.agent import AgentStore, load_agent, require_business
 from services.availability_tool import earlier_offer
 from services.directory import BusinessDirectory, Open
+from services.escalation import Recorded, TurnEscalations
+from services.escalation_policy import (
+    EMERGENCY_REPLY,
+    OperationFact,
+    TurnSignals,
+    evaluate,
+    needs_emergency_pointer,
+)
 from services.grounding import (
+    CALLBACK_CORRECTION,
+    PROMISED_CALLBACK,
     UNCONFIRMED_BOOKING,
     UNVERIFIED_TIME,
     TurnEvidence,
+    claims_team_notified,
     grounding_problem,
 )
 from services.knowledge import FaqSnippet
@@ -171,6 +182,8 @@ FailureKind = Literal[
     "unverified_time",
     "tool_rounds_exhausted",
     "unconfirmed_booking",
+    "promised_callback",
+    "unconfirmed_handoff",
 ]
 
 
@@ -230,6 +243,18 @@ def booking_fallback(business: Business) -> str:
     return f"Sorry, I can't confirm a booking right now. Please contact {business.name} directly."
 
 
+def handoff_fallback(business: Business) -> str:
+    """The fixed reply when the agent said the team was told but no escalation exists:
+    it claims nothing and promises no callback, and points to the business's own contacts."""
+    contacts = [c for c in (business.phone, business.contact_email) if c]
+    if contacts:
+        return (
+            "Sorry, I haven't been able to pass this on. "
+            f"Please reach the team directly at {' or '.join(contacts)}."
+        )
+    return f"Sorry, I haven't been able to pass this on. Please contact {business.name} directly."
+
+
 class InteractionEndedError(AppError):
     status_code = 409
     code = "interaction_ended"
@@ -261,6 +286,12 @@ class ConversationStore(AgentStore, OperationLog, LifecycleStore, Protocol):
         """Commit what's written so far and end the transaction (called before the model)."""
         ...
 
+    async def operation_facts(
+        self, business_id: uuid.UUID, interaction_id: uuid.UUID
+    ) -> Sequence[OperationFact]:
+        """This interaction's operation-log rows as facts, oldest first (escalation policy)."""
+        ...
+
     def savepoint(self) -> AbstractAsyncContextManager[Any]:
         """A nested unit of work: an error inside rolls back only what ran inside it
         (each tool executor runs in one, so its failure can still be logged)."""
@@ -289,6 +320,8 @@ class TurnResult:
     usage_limited: bool
     # Created by this turn: the greeting (new chat), the customer's message, the reply.
     messages: tuple[MessageView, ...]
+    # This turn needed a person: the escalation is recorded (once per reason).
+    escalated: bool = False
 
 
 @dataclass(frozen=True)
@@ -343,6 +376,7 @@ class ConversationEngine:
         llm_retry: RetryPolicy = LLM_RETRY,
         directory: BusinessDirectory | None = None,
         lifecycle: InteractionLifecycle | None = None,
+        escalations: TurnEscalations | None = None,
     ) -> None:
         """Without a `directory` the prompt has no BUSINESS HOURS, and BUSINESS FACTS
         comes from the tenant's business row (no currency). Without a `lifecycle` a
@@ -355,6 +389,7 @@ class ConversationEngine:
         self._usage = usage
         self._llm_retry = llm_retry
         self._directory = directory
+        self._escalations = escalations
         self._lifecycle = lifecycle or InteractionLifecycle(
             store, NoSummarizer(), idle_minutes=usage.interaction_idle_minutes
         )
@@ -433,6 +468,11 @@ class ConversationEngine:
         self._merge_state(locked, outcome, agent_message.sequence_number)
         if outcome.turn:
             locked.intent = primary_intent((locked.state or {}).get("intents", []))
+        # Decided on the state as it is after this merge, still under the interaction
+        # lock, so recording is serialized per interaction.
+        recorded: Recorded | None = None
+        if self._escalations is not None:
+            recorded = await self._escalate(tenant, locked, utterance, outcome, agent_message)
         await self._store.save_interaction(locked)
 
         for failure in outcome.failures:
@@ -441,16 +481,98 @@ class ConversationEngine:
                 extra={"interaction_id": str(locked.id), "failure_kind": failure["kind"]},
             )
 
+        if recorded is not None and self._escalations is not None:
+            await self._alert(tenant, recorded)
+
         return TurnResult(
             interaction_id=locked.id,
-            reply_text=reply_text,
+            reply_text=agent_message.message_text,
             intent=intent,
             status=locked.status,
             ended=False,
             fallback=outcome.turn is None,
             usage_limited=outcome.usage_limited,
             messages=tuple(_view(m, locked.state) for m in created),
+            escalated=recorded is not None and recorded.record.status == "open",
         )
+
+    async def _escalate(
+        self,
+        tenant: Tenant,
+        interaction: Interaction,
+        utterance: str,
+        outcome: _Outcome,
+        agent_message: InteractionMessage,
+    ) -> Recorded | None:
+        """Applies the escalation policy to this turn. On a decision: an urgent turn whose
+        reply lacks an emergency pointer gets the fixed `EMERGENCY_REPLY` (before the
+        reply is committed), the escalation is recorded in this transaction, and the
+        interaction is flagged for a human."""
+        assert self._escalations is not None
+        turn = outcome.turn
+        decision = evaluate(
+            interaction.state or {},
+            TurnSignals(
+                customer_text=utterance,
+                intent=turn.intent if turn else None,
+                model_requires_human=turn.requires_human if turn else False,
+                fallback=turn is None,
+            ),
+            await self._store.operation_facts(interaction.business_id, interaction.id),
+            await self._escalations.rules(tenant),
+        )
+        if decision is None:
+            if turn is not None and claims_team_notified(agent_message.message_text):
+                self._withdraw_handoff_claim(require_business(tenant), interaction, agent_message)
+            return None
+        if needs_emergency_pointer(decision, agent_message.message_text):
+            agent_message.message_text = EMERGENCY_REPLY
+        recorded = await self._escalations.record(tenant, interaction.id, decision)
+        if recorded.record.status == "open":
+            # Something is open for a person. A decision that maps to a RESOLVED row (a
+            # history-based reason the owner already closed) flags nothing new.
+            state: dict[str, Any] = dict(interaction.state or {})
+            state["requires_human"] = True
+            interaction.state = state
+        return recorded
+
+    @staticmethod
+    def _withdraw_handoff_claim(
+        business: Business, interaction: Interaction, agent_message: InteractionMessage
+    ) -> None:
+        """The reply said the team was told, but no escalation exists: nobody was. Replace
+        it with the fixed line, record why, and flag the interaction for a human."""
+        agent_message.message_text = handoff_fallback(business)
+        state: dict[str, Any] = dict(interaction.state or {})
+        state["failures"] = [
+            *state.get("failures", []),
+            _failure("unconfirmed_handoff", "no_escalation"),
+        ][-MAX_RECORDED_FAILURES:]
+        state["fallback_messages"] = [
+            *state.get("fallback_messages", []),
+            agent_message.sequence_number,
+        ]
+        state["requires_human"] = True
+        interaction.state = state
+        logger.warning(
+            "model turn failed",
+            extra={"interaction_id": str(interaction.id), "failure_kind": "unconfirmed_handoff"},
+        )
+
+    async def _alert(self, tenant: Tenant, recorded: Recorded) -> None:
+        """Commits the turn, then alerts the owner (a provider call, so outside any
+        transaction). A problem here never changes the reply or fails the turn."""
+        assert self._escalations is not None
+        # The turn's own commit: a failure here must propagate like any turn commit.
+        await self._store.checkpoint()
+        try:
+            await self._escalations.notify(tenant, recorded)
+        except Exception as exc:
+            logger.warning("escalation alert step failed", extra={"error_type": type(exc).__name__})
+            try:
+                await self._store.rollback()
+            except Exception:
+                logger.warning("escalation alert rollback failed")
 
     async def end(self, tenant: Tenant, interaction_id: uuid.UUID, channel: Channel) -> Transcript:
         # A plain id: a failed summary rolls the session back, expiring the ORM objects.
@@ -713,7 +835,9 @@ class ConversationEngine:
                     *state.get("usage_limited_messages", []),
                     reply_sequence,
                 ]
-            if outcome.fallback_text == INVALID_OUTPUT_FALLBACK:
+            if outcome.fallback_text == INVALID_OUTPUT_FALLBACK or any(
+                f["kind"] in ("ungrounded", "tool_rounds_exhausted") for f in outcome.failures
+            ):
                 state["clarification_attempts"] = int(state.get("clarification_attempts", 0)) + 1
         else:
             entities = dict(state.get("entities") or {})
@@ -722,6 +846,8 @@ class ConversationEngine:
             state["intents"] = record_intent(state.get("intents", []), outcome.turn.intent)
             state.update(outcome.state_updates)
             state["requires_human"] = outcome.turn.requires_human or outcome.needs_human
+            # Consecutive failed turns: a reply the customer actually got ends the streak.
+            state.pop("clarification_attempts", None)
         interaction.state = state
 
 
@@ -730,6 +856,7 @@ class ConversationEngine:
 _CORRECTABLE: dict[str, tuple[FailureKind, str, Callable[[Business], str]]] = {
     UNVERIFIED_TIME: ("unverified_time", TIME_CORRECTION, availability_fallback),
     UNCONFIRMED_BOOKING: ("unconfirmed_booking", BOOKING_CORRECTION, booking_fallback),
+    PROMISED_CALLBACK: ("promised_callback", CALLBACK_CORRECTION, no_info_fallback),
 }
 
 

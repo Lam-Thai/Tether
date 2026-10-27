@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from models.agent import Agent
 from models.interaction import Interaction, InteractionMessage
+from services.escalation_policy import OperationFact
 
 NOW = datetime(2026, 10, 20, tzinfo=UTC)
 
@@ -24,6 +25,8 @@ class MemoryStore:
         # (confirmed booking, booking_failed op) that the SQL store reads from other tables.
         self.now = NOW
         self.signals: dict[uuid.UUID, tuple[bool, bool]] = {}
+        # Interactions with a recorded escalation (the SQL store reads `escalations`).
+        self.escalated: set[uuid.UUID] = set()
 
     async def get_or_create(self, business_id, *, name, tone, greeting):
         if business_id not in self.agents:
@@ -96,6 +99,16 @@ class MemoryStore:
 
     async def closing_signals(self, business_id, interaction_id):
         return self.signals.get(interaction_id, (False, False))
+
+    async def has_escalation(self, business_id, interaction_id):
+        return interaction_id in self.escalated
+
+    async def operation_facts(self, business_id, interaction_id):
+        return [
+            OperationFact(op["tool_name"], op["status"], (op.get("result") or {}).get("result"))
+            for op in self.operations
+            if op["business_id"] == business_id and op["interaction_id"] == interaction_id
+        ]
 
     async def lock_idle(self, business_id, idle_minutes, limit):
         cutoff = self.now - timedelta(minutes=idle_minutes)

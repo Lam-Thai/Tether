@@ -1,5 +1,6 @@
 """`prompt_builder.build` at its boundary: pure, no DB, no model."""
 
+import re
 import uuid
 from datetime import date, datetime, time
 from typing import get_args
@@ -614,6 +615,7 @@ def test_with_create_booking_the_rules_carry_booking_and_change_requests():
     assert "unless a create_booking result in this turn says confirmed" in rules
     # Reschedule / cancel go to a person (slice 13 escalates them).
     assert "intent RESCHEDULE or CANCEL" in rules and "requires_human to true" in rules
+    assert "the team will be notified and will need to make the change" in rules
     assert "never say it was changed or cancelled" in rules
     assert "Name no time of day in that reply" in rules
     assert "never repeat it" in rules
@@ -624,3 +626,17 @@ def test_without_create_booking_the_rules_never_mention_it():
 
     assert "create_booking" not in rules and BOOKING_PARAGRAPH not in rules
     assert "never say an appointment is booked or held." in rules
+
+
+def test_handoff_rules_notify_the_team_and_never_promise_a_callback():
+    rules = " ".join(PLATFORM_RULES.split())
+
+    assert "Never promise a callback, a callback time or any follow-up" in rules
+    assert "intent HUMAN_REQUEST" in rules and "intent COMPLAINT" in rules
+    assert "say the team will be notified and will review it" in rules
+    # Urgent: emergency services, no medical advice, team notified.
+    assert "contact local emergency services right away, give no medical advice" in rules
+    assert "set intent to URGENT" in rules
+    # Numbering stays coherent: 1..9 in order.
+    numbers = [int(n) for n in re.findall(r"(?m)^(\d+)\. ", PLATFORM_RULES)]
+    assert numbers == sorted(numbers) and numbers[:9] == list(range(1, 10))

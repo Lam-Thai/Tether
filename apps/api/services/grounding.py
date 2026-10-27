@@ -45,6 +45,12 @@ or disabled the fact since).
   Questions ("shall I book it?") and conditionals ("once you're booked") are not
   claims, and neither is "that time is already booked" (someone else's booking).
 
+- Callback promises, every intent. A reply that promises a callback or follow-up ("we'll
+  call you back", "someone will contact you", "expect a call", "I'll get back to you
+  tomorrow") is `promised_callback`: no callback is ever arranged. The customer calling
+  the business ("you can call us back at ...") and questions ("shall we call you
+  back?") are fine. The engine regenerates once (`CALLBACK_CORRECTION`), then falls back.
+
 Amount detection is deliberately narrow, so clock times ("9:00", "10 AM"),
 dates, phone numbers, street numbers and ages are never amounts: money is a
 number next to a currency symbol, an ISO code or a currency word; a duration
@@ -85,6 +91,14 @@ BOOKING_INTENTS = frozenset({"BOOK_APPOINTMENT", "RESCHEDULE"})
 HOURS_TIME_INTENTS = frozenset({"BUSINESS_HOURS", "FAQ", "LOCATION"})
 UNVERIFIED_TIME = "unverified_time"
 UNCONFIRMED_BOOKING = "unconfirmed_booking"
+PROMISED_CALLBACK = "promised_callback"
+# Appended to the regeneration request when a reply promised a callback or follow-up.
+CALLBACK_CORRECTION = (
+    "Your previous reply promised a callback or follow-up, which nobody has arranged. "
+    "Rewrite it without saying anyone will call, contact or get back to the customer, or "
+    "when. Say the team will be notified and will review it, and give the phone or email "
+    "from BUSINESS FACTS."
+)
 # Wording that offers, accepts or proposes a time: such a reply is held to the slots.
 _OFFER_WORDING = re.compile(
     r"(?i:\b(?:availab\w*|book\w*|appointments?|slots?|reserv\w*|works?|"
@@ -165,6 +179,13 @@ class TurnEvidence:
         for claim in booking_claims(turn.response_text):
             if claim == "change" or not self._booking_confirmed:
                 return UNCONFIRMED_BOOKING
+        # Before the amount and time checks: a promise often carries its own timing
+        # ("within 24 hours"), and that is the problem to correct.
+        if promises_callback(turn.response_text):
+            return PROMISED_CALLBACK
+        return self._grounded_problem(turn)
+
+    def _grounded_problem(self, turn: AgentTurn) -> str | None:
         cited = {source.strip().lower() for source in turn.sources}
         kinds = {self._sources.get(source) for source in cited}
         if None in kinds:
@@ -308,6 +329,101 @@ def booking_claims(text: str) -> list[ClaimKind]:
                     changed = re.fullmatch(_CHANGED, verb, re.IGNORECASE) is not None
                     claims.append("change" if changed else "booking")
     return claims
+
+
+# --- Callback-promise detection ------------------------------------------------
+
+_CALLBACK_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(rf"\b(?:{body})", re.IGNORECASE)
+    for body in (
+        # "we'll call you", "someone will also phone you", "the team is going to text you"
+        r"(?:will|['’]ll|going\s+to)\s+(?:\w+\s+)?(?:call|phone|ring|text|message)\s+you\b",
+        r"(?:call|phone|ring|text|message)\s+you\s+back\b",
+        r"give\s+you\s+a\s+(?:call|ring|buzz)\b",
+        r"(?:will|['’]ll|going\s+to)\s+(?:\w+\s+)?(?:be\s+in\s+touch|get\s+in\s+touch|"
+        r"follow\s+up|reach\s+out\s+to\s+you|contact\s+you)\b",
+        r"get\s+back\s+to\s+you\b",
+        r"expect\s+(?:a|an)\s+(?:call|text|message|phone\s+call)\b",
+    )
+)
+# "if you'd like us to call you back" / "would you like us to call you?" are offers, not
+# promises; a clause that asks, or is conditional on the customer's wish, is skipped.
+_CALLBACK_CONDITIONAL = re.compile(
+    r"\b(?:if|whether)\s+you(?:['’]d|\s+would|\s+do)?\s+(?:like|want|prefer|wish)\b|"
+    r"\bwould\s+you\s+like\b|\bdo\s+you\s+want\b|\b(?:want|like)\s+(?:us|me)\s+to\b|"
+    r"\b(?:can|could|may)\s+(?:i|we)\b|\bcan['’]t|\bcannot\b|\bunable\s+to\b|"
+    r"\b(?:won['’]t|will\s+not|don['’]t|do\s+not|not\s+able\s+to)",
+    re.IGNORECASE,
+)
+
+
+def promises_callback(text: str) -> bool:
+    """True when `text` promises that someone will call, contact or get back to the
+    customer. The customer calling the business, questions and offers are not promises."""
+    for sentence in _SENTENCE_END.split(text):
+        for clause in _CLAUSE_BREAK.split(sentence):
+            if not clause.strip() or clause.strip().endswith("?"):
+                continue
+            if _CALLBACK_CONDITIONAL.search(clause):
+                continue
+            if any(pattern.search(clause) for pattern in _CALLBACK_PATTERNS):
+                return True
+    return False
+
+
+# --- Team-notified claims ------------------------------------------------------
+
+_TEAM = r"(?:the\s+|our\s+|your\s+)?(?:team|owner|staff|manager|business)"
+_NOTIFIED_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(body, re.IGNORECASE)
+    for body in (
+        # "I've let the team know", "we have already notified the owner", "I just flagged this"
+        r"\b(?:i['’]ve|i\s+have|we['’]ve|we\s+have|i\s+just|i\s+went\s+ahead\s+and)\s+"
+        r"(?:already\s+|just\s+)?(?:"
+        rf"let\s+{_TEAM}\s+know|"
+        r"(?:notified|informed|alerted|told|flagged|escalated|passed|forwarded|sent)\b"
+        rf"[^.!?]*?\b(?:{_TEAM}|this\s+on|that\s+on|it\s+on|this\s+along|it\s+along)"
+        r")",
+        # "I'll pass this on to the team", "let me notify the owner", "I'll let the team know"
+        r"\b(?:i['’]ll|i\s+will|i['’]m\s+going\s+to|we['’]ll|we\s+will|let\s+me)\s+"
+        r"(?:also\s+|now\s+|go\s+ahead\s+and\s+)?(?:"
+        rf"let\s+{_TEAM}\s+know|pass\s+(?:this|that|it)\s+(?:on|along)|"
+        r"(?:notify|inform|alert|flag|escalate|forward)\b"
+        r")",
+        # "the team will be notified", "the owner has been informed"
+        rf"\b{_TEAM}\s+(?:will\s+(?:be\s+)?|has\s+been\s+|have\s+been\s+|is\s+being\s+)"
+        r"(?:notified|informed|alerted|told|made\s+aware)\b",
+        # "this has been flagged for the team", "it has been passed on"
+        r"\b(?:this|that|it|your\s+(?:request|message|issue|concern))\s+(?:has|have)\s+been\s+"
+        r"(?:passed\s+on|passed\s+along|flagged|escalated|forwarded|sent\s+(?:on|to))\b",
+    )
+)
+# Before a match: an offer, a condition or a negation makes it not a claim.
+_NOTIFIED_BLOCK = re.compile(
+    r"\b(?:if|whether)\s+you\b|\bwould\s+you\s+like\b|\bdo\s+you\s+want\b|"
+    r"\b(?:want|like)\s+(?:us|me)\s+to\b|\b(?:can|could|may|should)\s+(?:i|we|you)\b|"
+    r"\byou\s+(?:can|could|may|might|should|need\s+to)\b|\bcan['’]t|\bcannot\b|"
+    r"\bunable\s+to\b|\bwon['’]t|\bwill\s+not\b|\bdon['’]t|\bdo\s+not\b|"
+    r"\bnot\s+able\s+to\b|\bhaven['’]t|\bhave\s+not\b|\bnever\b|\bonce\b|\bwhen\b",
+    re.IGNORECASE,
+)
+
+
+def claims_team_notified(text: str) -> bool:
+    """True when `text` says the team or owner has been, or will be, told about this
+    conversation ("I've let the team know", "the team will be notified"). Questions,
+    offers ("would you like me to let the team know"), instructions to the customer
+    ("you can let the team know") and negations are not claims. Only a recorded
+    escalation makes such a statement true."""
+    for sentence in _SENTENCE_END.split(text):
+        for clause in _CLAUSE_BREAK.split(sentence):
+            if not clause.strip() or clause.strip().endswith("?"):
+                continue
+            for pattern in _NOTIFIED_PATTERNS:
+                for match in pattern.finditer(clause):
+                    if not _NOTIFIED_BLOCK.search(clause[: match.start()]):
+                        return True
+    return False
 
 
 # --- Amount detection ----------------------------------------------------------

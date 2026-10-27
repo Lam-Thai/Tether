@@ -28,13 +28,16 @@ from seeds.demo_salon import (
 from services.business_tools import get_business_info_tool, get_services_tool
 from services.conversation import ConversationEngine
 from services.directory import BusinessDirectory
+from services.escalation import EscalationService
 from services.faq_search import search_faq_tool
 from services.knowledge import KnowledgeBase
+from services.notifier import LogNotifier
 from services.redaction import redact
 from services.summarizer import Summarizer, Summary
 from services.tools import ToolRegistry
 from tests.services.memory_conversation_store import MemoryStore
 from tests.services.memory_directory_store import MemoryDirectoryStore
+from tests.services.memory_escalation_store import MemoryEscalationStore
 from tests.services.memory_faq_store import MemoryFaqStore
 from tests.services.memory_summary_store import MemorySummaryStore
 from tests.services.memory_usage_store import MemoryUsageStore, guard, limits
@@ -85,6 +88,7 @@ class MemorySandbox:
     def __post_init__(self) -> None:
         self.tenant, self.faqs, self.directory_store, self.faq_ids = demo_salon()
         self.store = MemoryStore()
+        self.escalation_store = MemoryEscalationStore()
 
     @asynccontextmanager
     async def __call__(self, spec: SandboxSpec) -> AsyncIterator["MemorySandbox"]:
@@ -134,6 +138,11 @@ class MemorySandbox:
             # LLM_RETRY's attempts without its real backoff sleep.
             llm_retry=RetryPolicy(attempts=LLM_RETRY.attempts),
             directory=directory,
+            escalations=EscalationService(
+                self.escalation_store,
+                LogNotifier(),
+                inbox_url=lambda interaction_id: f"https://eval.example.test/{interaction_id}",
+            ),
         )
 
         async def operations(interaction_id: uuid.UUID) -> list[Operation]:
@@ -146,4 +155,19 @@ class MemorySandbox:
         async def commit() -> None:
             self.store.calls.append("commit")
 
-        yield CaseEnv(tenant=self.tenant, engine=engine, operations=operations, commit=commit)
+        async def escalations(interaction_id: uuid.UUID) -> list[tuple[str, str]]:
+            rows = await self.escalation_store.list(
+                self.tenant.business.id,  # type: ignore[union-attr]
+                status=None,
+                interaction_id=interaction_id,
+                limit=100,
+            )
+            return [(r.reason, r.urgency) for r in reversed(rows)]
+
+        yield CaseEnv(
+            tenant=self.tenant,
+            engine=engine,
+            operations=operations,
+            commit=commit,
+            escalations=escalations,
+        )

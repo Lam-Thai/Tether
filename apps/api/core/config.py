@@ -117,6 +117,22 @@ class Settings(BaseSettings):
     # Per attempt; calls retry at most once (services/calendar.CALENDAR_RETRY).
     google_calendar_timeout_seconds: float = Field(default=10.0, gt=0, le=30)
 
+    # Twilio SMS (integrations/twilio). All optional: without the three values below the
+    # app runs in demo mode (`LogNotifier`: escalation alerts are recorded and logged,
+    # never sent). Twilio's free test credentials (magic number +15005550006 as the from
+    # number) or a free trial account both work; nothing here needs a paid plan.
+    twilio_account_sid: str | None = None
+    twilio_auth_token: SecretStr | None = None
+    # E.164 sender, e.g. +15005550006 (test credentials) or the trial number.
+    twilio_from_number: str | None = None
+    # Per attempt; SMS sends retry only when Twilio certainly didn't take the request.
+    twilio_timeout_seconds: float = Field(default=10.0, gt=0, le=30)
+    # Public origin of THIS API (e.g. an ngrok/cloudflared URL locally). Twilio posts
+    # delivery status to `{api_public_base_url}/api/v1/webhooks/twilio/sms-status`, and
+    # webhook signatures are checked against that URL. Unset: no status callback is
+    # requested, and the status stays whatever the send returned.
+    api_public_base_url: str | None = None
+
     # Eval harness (`uv run tether-eval`, evals/runner.py). The tier picks the defaults
     # in `evals.runner.TIER_LIMITS`; each value below overrides one of them when set.
     eval_tier: Literal["free", "paid"] = "free"
@@ -171,6 +187,42 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator(
+        "twilio_account_sid",
+        "twilio_auth_token",
+        "twilio_from_number",
+        "api_public_base_url",
+        mode="before",
+    )
+    @classmethod
+    def _blank_twilio_setting_is_unset(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("twilio_account_sid")
+    @classmethod
+    def _account_sid_shape(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"AC[0-9a-fA-F]{32}", value):
+            raise ValueError("TWILIO_ACCOUNT_SID must look like AC followed by 32 hex digits.")
+        return value
+
+    @field_validator("twilio_from_number")
+    @classmethod
+    def _from_number_is_e164(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"\+[1-9][0-9]{6,14}", value):
+            raise ValueError("TWILIO_FROM_NUMBER must be an E.164 number like +15005550006.")
+        return value
+
+    @field_validator("api_public_base_url")
+    @classmethod
+    def _public_url_shape(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.startswith("https://") and not value.startswith("http://"):
+            raise ValueError("API_PUBLIC_BASE_URL must be an http(s) origin.")
+        return value.rstrip("/")
+
     @field_validator("calendar_token_keys")
     @classmethod
     def _token_keys_are_well_formed(cls, value: SecretStr | None) -> SecretStr | None:
@@ -216,6 +268,10 @@ class Settings(BaseSettings):
                 self.oauth_state_secret,
             )
         )
+
+    @property
+    def twilio_configured(self) -> bool:
+        return all((self.twilio_account_sid, self.twilio_auth_token, self.twilio_from_number))
 
     @property
     def clerk_jwks_url(self) -> str:

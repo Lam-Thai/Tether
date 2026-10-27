@@ -13,13 +13,14 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import { EscalationBadge, needsStatusMark, OutcomeBadge, StatusBadge } from "./badges";
+import { AttentionBadge, EscalationBadge, needsStatusMark, OutcomeBadge, StatusBadge } from "./badges";
 import { callerLabel, formatBusinessTime, intentLabel } from "./labels";
 
 const TABS: { type: InboxType; label: string }[] = [
   { type: "all", label: "All" },
   { type: "bookings", label: "Bookings" },
   { type: "faqs", label: "FAQs" },
+  { type: "attention", label: "Needs attention" },
   { type: "escalations", label: "Escalations" },
   { type: "failed", label: "Failed" },
 ];
@@ -274,7 +275,11 @@ function InboxRow({ row, timezone, query }: { row: InteractionRow; timezone: str
       <div className="flex flex-wrap items-center gap-2">
         {row.outcome && <OutcomeBadge outcome={row.outcome} />}
         {needsStatusMark(row.status, row.outcome) && <StatusBadge status={row.status} />}
-        {row.requires_human && <EscalationBadge />}
+        {row.needs_attention ? (
+          <AttentionBadge reason={row.escalation?.reason} />
+        ) : (
+          row.requires_human && !row.escalation && <EscalationBadge />
+        )}
       </div>
     </article>
   );

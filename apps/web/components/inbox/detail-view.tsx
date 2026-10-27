@@ -11,7 +11,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Eyebrow } from "@/components/ui/eyebrow";
-import { EscalationBadge, needsStatusMark, OutcomeBadge, StatusBadge } from "./badges";
+import { needsStatusMark, OutcomeBadge, StatusBadge } from "./badges";
+import { EscalationHeaderBadge, EscalationPanel, EscalationProvider } from "./escalation-panel";
 import { callerLabel, formatBusinessTime, intentLabel } from "./labels";
 import { Transcript } from "./transcript";
 
@@ -97,6 +98,7 @@ function DetailBody({
 }) {
   const started = formatBusinessTime(detail.started_at, detail.timezone, { long: true });
   return (
+    <EscalationProvider key={detail.id} initial={detail.escalations}>
     <div className="flex w-full max-w-4xl flex-col gap-6">
       <BackLink href={backHref} />
 
@@ -108,7 +110,7 @@ function DetailBody({
         <div className="flex flex-wrap items-center gap-2">
           {detail.outcome && <OutcomeBadge outcome={detail.outcome} />}
           {needsStatusMark(detail.status, detail.outcome) && <StatusBadge status={detail.status} />}
-          {detail.requires_human && <EscalationBadge />}
+          <EscalationHeaderBadge requiresHuman={detail.requires_human} />
         </div>
       </div>
 
@@ -124,6 +126,8 @@ function DetailBody({
           )}
         </CardContent>
       </Card>
+
+      <EscalationPanel timezone={detail.timezone} />
 
       <section aria-labelledby="actions-heading" className="flex flex-col gap-3">
         <h2 id="actions-heading" className="text-h2 font-bold tracking-tight uppercase">
@@ -153,6 +157,7 @@ function DetailBody({
         initial={messages}
       />
     </div>
+    </EscalationProvider>
   );
 }
 

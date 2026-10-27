@@ -9,6 +9,7 @@ paginated over `(started_at DESC, id DESC)`, served by
 - `type=faqs`: intent is an information intent
 - `type=escalations`: outcome `escalated`, or the state flags a human
 - `type=failed`: status `failed`
+- `type=attention`: the interaction has an OPEN escalation (slice 13)
 """
 
 import uuid
@@ -19,6 +20,7 @@ from sqlalchemy import ColumnElement, exists, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.booking import Booking
+from models.escalation import Escalation
 from models.interaction import Interaction, InteractionMessage
 from models.operation import InteractionOperation
 from repositories.base import business_scoped_select
@@ -34,6 +36,14 @@ def _has_confirmed_booking() -> ColumnElement[bool]:
         Booking.business_id == Interaction.business_id,
         Booking.interaction_id == Interaction.id,
         Booking.status == "confirmed",
+    )
+
+
+def _has_open_escalation() -> ColumnElement[bool]:
+    return exists().where(
+        Escalation.business_id == Interaction.business_id,
+        Escalation.interaction_id == Interaction.id,
+        Escalation.status == "open",
     )
 
 
@@ -53,6 +63,8 @@ def _type_clause(kind: str) -> ColumnElement[bool] | None:
         )
     if kind == "failed":
         return Interaction.status == "failed"
+    if kind == "attention":
+        return _has_open_escalation()
     return None
 
 

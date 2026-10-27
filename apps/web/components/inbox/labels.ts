@@ -46,6 +46,43 @@ export function statusLabel(status: InteractionStatus): string {
   return STATUS_LABELS[status];
 }
 
+const REASON_LABELS: Record<string, string> = {
+  urgent: "Urgent",
+  human_requested: "Asked for a person",
+  complaint: "Complaint",
+  change_request: "Appointment change",
+  booking_unresolved: "Booking failed",
+  integration_failing: "System problem",
+  clarification_exhausted: "Couldn't answer",
+};
+
+/** Known reasons get a plain label; an unknown one is derived from the string. */
+export function escalationReasonLabel(reason: string): string {
+  const known = REASON_LABELS[reason];
+  if (known) return known;
+  const words = reason.replace(/[_-]+/g, " ").trim().toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "Needs a person";
+}
+
+const SMS_STATUS_LABELS: Record<string, string> = {
+  pending: "Sending…",
+  disabled: "SMS off",
+  logged: "Logged (demo mode)",
+  skipped: "Already alerted",
+  accepted: "Sending…",
+  queued: "Sending…",
+  sending: "Sending…",
+  sent: "Sent",
+  delivered: "Delivered",
+  undelivered: "Not delivered",
+  failed: "Failed",
+};
+
+/** Known SMS statuses get a plain label; an unknown one reads as "Unknown". */
+export function smsStatusLabel(status: string): string {
+  return SMS_STATUS_LABELS[status] ?? "Unknown";
+}
+
 /** "Test chat" for an owner's test conversation, the caller otherwise, else "Unknown caller". */
 export function callerLabel(row: Pick<InteractionRow, "channel" | "caller">): string {
   if (row.caller) return row.caller;

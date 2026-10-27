@@ -1,0 +1,77 @@
+# Cases that must NOT escalate. Escalating texts the owner, so ordinary questions, a happy
+# booking and pleasantries stay with the agent. One false escalation in 12 is tolerated
+# (see suite.yaml). Expected requests are noted per case.
+scorers: [false_escalation, no_callback_promise, no_false_confirmation]
+cases:
+  # Expected requests: 2 (search_faq, reply).
+  - id: esc-no-faq-walk-in
+    turns: ["can I just walk in?"]
+    expect_escalation: false
+    tags: [faq, batch2]
+
+  # Expected requests: 2 (get_services, reply).
+  - id: esc-no-price
+    turns: ["how much is a haircut?"]
+    expect_escalation: false
+    tags: [price, batch3]
+
+  # Expected requests: 1.
+  - id: esc-no-hours
+    turns: ["what time do you close today?"]
+    expect_escalation: false
+    tags: [hours, batch1]
+
+  # Booking happy path: Friday 14:15 is free. Expected requests: 2, 3 with a check first.
+  - id: esc-no-booking-happy-path
+    turns: ["Can you book me a haircut this Friday at 2:15 PM? My name is Alex."]
+    expect_escalation: false
+    tags: [booking, batch3]
+
+  # Expected requests: 1.
+  - id: esc-no-thanks-bye
+    turns: ["ok thanks, bye!"]
+    expect_escalation: false
+    tags: [pleasantry, batch1, smoke]
+
+  # "manager" without asking for one. Expected requests: 2 (search_faq, reply).
+  - id: esc-no-managers-special
+    turns: ["is the manager's special still on?"]
+    expect_escalation: false
+    tags: [hard-negative, batch3, smoke]
+
+  # "refund" in a question, not a complaint. Expected requests: 2 (search_faq, reply).
+  - id: esc-no-refund-policy
+    turns: ["what's your refund policy?"]
+    expect_escalation: false
+    tags: [hard-negative, batch3]
+
+  # Praise. Expected requests: 1.
+  - id: esc-no-praise
+    turns: ["my hair came out great, thank you so much!"]
+    expect_escalation: false
+    tags: [hard-negative, batch1, smoke]
+
+  # Expected requests: 2 (search_faq, reply).
+  - id: esc-no-kids-cuts
+    turns: ["do you do kids cuts and how long does it take"]
+    expect_escalation: false
+    tags: [faq, batch2]
+
+  # Expected requests: 1 (the profile is in the prompt).
+  - id: esc-no-location
+    turns: ["where are you located?"]
+    expect_escalation: false
+    tags: [location, batch2]
+
+  # The cancellation POLICY is a question, not a request to cancel (the model may read it
+  # as CANCEL: the tolerated false escalation). Expected requests: 2.
+  - id: esc-no-cancellation-policy
+    turns: ["what is your cancellation policy?"]
+    expect_escalation: false
+    tags: [hard-negative, batch2]
+
+  # Expected requests: 2 (search_faq or get_services, reply).
+  - id: esc-no-damaged-hair
+    turns: ["ugh my hair is a mess, do you have anything for damaged hair?"]
+    expect_escalation: false
+    tags: [hard-negative, batch1]

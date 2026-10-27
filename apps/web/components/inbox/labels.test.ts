@@ -1,7 +1,76 @@
 import { describe, expect, it } from "vitest";
 
 import type { InteractionRow } from "@/lib/api/client";
-import { callerLabel, formatBusinessTime, intentLabel, outcomeLabel, statusLabel } from "./labels";
+import {
+  callerLabel,
+  escalationReasonLabel,
+  formatBusinessTime,
+  intentLabel,
+  outcomeLabel,
+  smsStatusLabel,
+  statusLabel,
+} from "./labels";
+
+describe("escalation labels", () => {
+  it("labels every contract reason", () => {
+    expect(
+      [
+        "urgent",
+        "human_requested",
+        "complaint",
+        "change_request",
+        "booking_unresolved",
+        "integration_failing",
+        "clarification_exhausted",
+      ].map(escalationReasonLabel),
+    ).toEqual([
+      "Urgent",
+      "Asked for a person",
+      "Complaint",
+      "Appointment change",
+      "Booking failed",
+      "System problem",
+      "Couldn't answer",
+    ]);
+  });
+
+  it("derives a label for an unknown reason", () => {
+    expect(escalationReasonLabel("new_thing")).toBe("New thing");
+    expect(escalationReasonLabel("")).toBe("Needs a person");
+  });
+
+  it("labels every contract SMS status and falls back for unknown ones", () => {
+    const labels = Object.fromEntries(
+      [
+        "pending",
+        "disabled",
+        "logged",
+        "skipped",
+        "accepted",
+        "queued",
+        "sending",
+        "sent",
+        "delivered",
+        "undelivered",
+        "failed",
+      ].map((s) => [s, smsStatusLabel(s)]),
+    );
+    expect(labels).toEqual({
+      pending: "Sending…",
+      disabled: "SMS off",
+      logged: "Logged (demo mode)",
+      skipped: "Already alerted",
+      accepted: "Sending…",
+      queued: "Sending…",
+      sending: "Sending…",
+      sent: "Sent",
+      delivered: "Delivered",
+      undelivered: "Not delivered",
+      failed: "Failed",
+    });
+    expect(smsStatusLabel("mystery")).toBe("Unknown");
+  });
+});
 
 describe("formatBusinessTime", () => {
   it("formats in the business timezone, fixed en-US, not the viewer's", () => {

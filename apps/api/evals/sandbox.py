@@ -61,6 +61,7 @@ from models.interaction import Interaction, InteractionMessage
 from models.operation import InteractionOperation
 from models.user import User
 from repositories.calendar import SqlCalendarStore
+from repositories.escalations import list_escalations
 from repositories.operations import list_operations
 from seeds.demo_salon import add_faqs, add_services, new_demo_business, set_hours_if_missing
 from services.calendar import CalendarConfig, token_context
@@ -135,8 +136,18 @@ class _PostgresSandbox:
                 rows = await list_operations(session, business_id, interaction_id)
                 return [Operation(r.tool_name, r.status, dict(r.result or {})) for r in rows]
 
+            async def escalations(interaction_id: uuid.UUID) -> Sequence[tuple[str, str]]:
+                rows = await list_escalations(
+                    session, business_id, status=None, interaction_id=interaction_id, limit=100
+                )
+                return [(r.reason, r.urgency) for r in reversed(rows)]
+
             yield CaseEnv(
-                tenant=self.tenant, engine=engine, operations=operations, commit=session.commit
+                tenant=self.tenant,
+                engine=engine,
+                operations=operations,
+                commit=session.commit,
+                escalations=escalations,
             )
 
     async def summarize(self, llm: LLMClient, stored: StoredInteraction) -> Summary | None:

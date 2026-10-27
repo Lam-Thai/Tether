@@ -20,6 +20,8 @@ const row = (over: Partial<InteractionRow> = {}): InteractionRow => ({
   status: "completed",
   outcome: "booked",
   requires_human: false,
+  needs_attention: false,
+  escalation: null,
   ...over,
 });
 
@@ -86,10 +88,46 @@ describe("InboxView rows", () => {
     expect(within(items[3]!).getByText("Failed")).toBeInTheDocument();
   });
 
-  it("shows escalation status", () => {
+  it("shows the legacy badge for requires_human with no escalation record", () => {
     show(ok([row({ outcome: "escalated", requires_human: true })]));
     expect(screen.getByText("Escalated")).toBeInTheDocument();
     expect(screen.getByText("Needs a person")).toBeInTheDocument();
+  });
+
+  it("shows Needs attention with the reason, replacing the legacy badge", () => {
+    show(
+      ok([
+        row({
+          outcome: "escalated",
+          requires_human: true,
+          needs_attention: true,
+          escalation: { id: "e1", reason: "booking_unresolved", urgency: "normal", status: "open", sms_status: "sent" },
+        }),
+      ]),
+    );
+    const badge = within(rowItems()[0]!).getByText(/Needs attention/);
+    expect(badge).toHaveTextContent("Needs attention·Booking failed");
+    expect(screen.queryByText("Needs a person")).not.toBeInTheDocument();
+  });
+
+  it("shows no attention mark once the escalation is resolved", () => {
+    show(
+      ok([
+        row({
+          requires_human: true,
+          escalation: { id: "e1", reason: "complaint", urgency: "normal", status: "resolved", sms_status: "sent" },
+        }),
+      ]),
+    );
+    expect(within(rowItems()[0]!).queryByText(/Needs attention/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Needs a person")).not.toBeInTheDocument();
+  });
+
+  it("has a Needs attention filter chip that links to type=attention", () => {
+    show(ok([row()]), { type: "attention" });
+    const link = screen.getByRole("link", { name: "Needs attention" });
+    expect(link).toHaveAttribute("aria-current", "page");
+    expect(link).toHaveAttribute("href", "/dashboard/inbox?type=attention");
   });
 });
 

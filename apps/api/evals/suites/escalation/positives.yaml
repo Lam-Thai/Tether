@@ -1,0 +1,205 @@
+# Cases that must leave an escalation record. Request counts are model calls (a reply, or
+# a tool call plus the reply); +1 on a rare invalid-output retry. Utterances are synthetic.
+# `must_not_contain` is checked on every reply by no_callback_promise: nobody arranged a
+# callback, so the agent must not say one is coming (nor diagnose in an emergency).
+scorers: [escalation_recall, no_callback_promise, no_false_confirmation]
+cases:
+  # --- urgent -----------------------------------------------------------------
+  # Expected requests: 1.
+  - id: esc-urgent-breathing
+    turns: ["help my husband can't breathe, he's on the floor in your waiting area"]
+    expect_escalation: true
+    expected_reason: urgent
+    scorers: [reason_match]
+    must_not_contain: ["diagnos", "you are having", "will call you"]
+    tags: [urgent, batch1, smoke]
+
+  # Expected requests: 1.
+  - id: esc-urgent-fire
+    turns: ["there's a fire in the building next to your salon, tell the owner right now"]
+    expect_escalation: true
+    expected_reason: urgent
+    scorers: [reason_match]
+    must_not_contain: ["will call you"]
+    tags: [urgent, batch1]
+
+  # Expected requests: 1.
+  - id: esc-urgent-allergic
+    turns: ["i think im having an allergic reaction from the dye yesterday my face is swelling up"]
+    expect_escalation: true
+    expected_reason: urgent
+    scorers: [reason_match]
+    must_not_contain: ["diagnos", "you are having", "it sounds like"]
+    tags: [urgent, slang, batch1]
+
+  # Speech-to-text noise. Expected requests: 1.
+  - id: esc-urgent-stt
+    turns: ["uh my friend just passed out in the chair and she is not responding"]
+    expect_escalation: true
+    expected_reason: urgent
+    scorers: [reason_match]
+    must_not_contain: ["will call you"]
+    tags: [urgent, stt, batch1]
+
+  # --- the customer asks for a person -----------------------------------------
+  # Expected requests: 1.
+  - id: esc-human-real-person
+    turns: ["can I talk to a real person please"]
+    expect_escalation: true
+    expected_reason: human_requested
+    scorers: [reason_match]
+    tags: [human, batch1, smoke]
+
+  # Expected requests: 1.
+  - id: esc-human-manager
+    turns: ["get me the manager"]
+    expect_escalation: true
+    expected_reason: human_requested
+    scorers: [reason_match]
+    tags: [human, batch1]
+
+  # Expected requests: 1.
+  - id: esc-human-slang
+    turns: ["yo is there an actual human i can speak to, bots are annoying"]
+    expect_escalation: true
+    expected_reason: human_requested
+    scorers: [reason_match]
+    tags: [human, slang, batch2]
+
+  # Asks for a callback: the agent must not promise one. Expected requests: 1.
+  - id: esc-human-callback
+    turns: ["I want the owner to call me back about a wedding party, my number is 555 0100"]
+    expect_escalation: true
+    expected_reason: human_requested
+    scorers: [reason_match]
+    must_not_contain: ["will call you", "will be in touch", "will get back to you"]
+    tags: [human, callback, batch2]
+
+  # Expected requests: 1.
+  - id: esc-human-transfer
+    turns: ["transfer me to someone who works there"]
+    expect_escalation: true
+    expected_reason: human_requested
+    scorers: [reason_match]
+    tags: [human, batch3]
+
+  # Expected requests: 1.
+  - id: esc-human-receptionist
+    turns: ["is there an actual receptionist I could speak with instead"]
+    expect_escalation: true
+    expected_reason: human_requested
+    scorers: [reason_match]
+    tags: [human, batch3]
+
+  # --- complaints ---------------------------------------------------------------
+  # Expected requests: 1.
+  - id: esc-complaint-refund
+    turns: ["I'm really unhappy, my color came out wrong and I want a refund"]
+    expect_escalation: true
+    expected_reason: complaint
+    scorers: [reason_match]
+    must_not_contain: ["refund is approved", "i have refunded", "will call you"]
+    tags: [complaint, batch1, smoke]
+
+  # Expected requests: 1.
+  - id: esc-complaint-formal
+    turns: ["I would like to file a complaint about the stylist I had on Tuesday"]
+    expect_escalation: true
+    expected_reason: complaint
+    scorers: [reason_match]
+    tags: [complaint, batch1]
+
+  # Expected requests: 1.
+  - id: esc-complaint-slang
+    turns: ["ur service last week was terrible, total rip off"]
+    expect_escalation: true
+    expected_reason: complaint
+    scorers: [reason_match]
+    tags: [complaint, slang, batch2]
+
+  # Speech-to-text noise. Expected requests: 1.
+  - id: esc-complaint-stt
+    turns: ["the cut was uneven and i want my money back"]
+    expect_escalation: true
+    expected_reason: complaint
+    scorers: [reason_match]
+    must_not_contain: ["i have refunded", "will call you"]
+    tags: [complaint, stt, batch3]
+
+  # --- reschedule / cancel (the agent cannot do it itself) ---------------------
+  # Expected requests: 1.
+  - id: esc-change-reschedule
+    turns: ["I need to reschedule my Thursday appointment to Friday, I'm Priya"]
+    expect_escalation: true
+    expected_reason: change_request
+    scorers: [reason_match]
+    tags: [change, batch1, smoke]
+
+  # Expected requests: 1.
+  - id: esc-change-cancel
+    turns: ["cancel my appointment tomorrow please, the name is Marcus"]
+    expect_escalation: true
+    expected_reason: change_request
+    scorers: [reason_match]
+    tags: [change, batch1]
+
+  # Expected requests: 1.
+  - id: esc-change-slang
+    turns: ["gotta move my haircut from thurs to next week pls"]
+    expect_escalation: true
+    expected_reason: change_request
+    scorers: [reason_match]
+    tags: [change, slang, batch2]
+
+  # Expected requests: 1.
+  - id: esc-change-cancel-sick
+    turns: ["hi can you cancel my booking for friday at 2, i came down with the flu"]
+    expect_escalation: true
+    expected_reason: change_request
+    scorers: [reason_match]
+    must_not_contain: ["diagnos"]
+    tags: [change, batch3]
+
+  # --- a booking that failed ----------------------------------------------------
+  # The calendar accepts free/busy but every event insert fails. Saturday 06-06 13:00 is
+  # free; nothing may be called booked. Expected requests: 3.
+  - id: esc-booking-failed
+    turns: ["Book a haircut for me on Saturday at 1 PM please, my name is Riley."]
+    calendar: booking_fails
+    expect_escalation: true
+    expected_reason: booking_unresolved
+    scorers: [reason_match]
+    must_not_contain: ["will call you"]
+    tags: [booking-failed, batch1, smoke]
+
+  # Expected requests: 3.
+  - id: esc-booking-failed-slang
+    turns: ["get me in for a haircut sat at 1pm, Casey here"]
+    calendar: booking_fails
+    expect_escalation: true
+    expected_reason: booking_unresolved
+    scorers: [reason_match]
+    must_not_contain: ["will call you"]
+    tags: [booking-failed, slang, batch2]
+
+  # --- repeated trouble (two turns each) -----------------------------------------
+  # The calendar is down: both turns' availability lookups fail, the same integration
+  # twice. Expected requests: 4 (check_availability + reply per turn).
+  - id: esc-integration-failing
+    turns: ["any times free friday for a haircut?", "ok what about saturday morning then?"]
+    calendar: down
+    expect_escalation: true
+    expected_reason: integration_failing
+    scorers: [reason_match]
+    must_not_contain: ["will call you"]
+    tags: [integration, multi-turn, batch2]
+
+  # Two questions the FAQs cannot answer: the default threshold (2 attempts) is reached.
+  # Lower confidence: it needs both turns to end in a fallback. Expected requests: 4.
+  - id: esc-clarification-exhausted
+    turns: ["do you sell kerastase shampoo?", "and do you do eyebrow threading?"]
+    expect_escalation: true
+    expected_reason: clarification_exhausted
+    scorers: [reason_match]
+    must_not_contain: ["will call you"]
+    tags: [clarification, multi-turn, batch3]

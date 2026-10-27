@@ -1,8 +1,8 @@
-import { Ban, CalendarCheck, CircleCheck, Clock, Flag, TriangleAlert, UserRound } from "lucide-react";
+import { Ban, BellRing, CalendarCheck, CircleCheck, Clock, Flag, TriangleAlert, UserRound } from "lucide-react";
 
 import type { InteractionOutcome, InteractionStatus } from "@/lib/api/client";
 import { Badge } from "@/components/ui/badge";
-import { outcomeLabel, statusLabel } from "./labels";
+import { escalationReasonLabel, outcomeLabel, statusLabel } from "./labels";
 
 const OUTCOME_VIEW = {
   booked: { tone: "success", Icon: CalendarCheck },
@@ -47,6 +47,23 @@ export function StatusBadge({ status }: { status: InteractionStatus }) {
   );
 }
 
+/** Open escalation on a row or header: "Needs attention · <reason>". */
+export function AttentionBadge({ reason }: { reason?: string }) {
+  return (
+    <Badge tone="danger">
+      <BellRing aria-hidden />
+      Needs attention
+      {reason && (
+        <>
+          <span aria-hidden>·</span>
+          {escalationReasonLabel(reason)}
+        </>
+      )}
+    </Badge>
+  );
+}
+
+/** Legacy flag only: `requires_human` with no escalation record. */
 export function EscalationBadge() {
   return (
     <Badge tone="warning">

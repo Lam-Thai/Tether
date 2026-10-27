@@ -28,6 +28,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from schemas.agent_turn import Intent
+from services.escalation_policy import Reason
 
 SUITES_DIR = Path(__file__).parent / "suites"
 # Scorers that judge a stored interaction's summary (`evals/scorers.py`), not a chat.
@@ -142,6 +143,11 @@ class EvalCase(BaseModel):
         Literal["slot_taken", "invalid", "booking_failed", "ambiguous_service", "service_not_found"]
         | None
     ) = None
+    # For `escalation_recall` (true) and `false_escalation` (false): whether the case must
+    # leave an escalation record on its interaction. `expected_reason` (true only) is the
+    # reason `reason_match` checks, information beyond recall.
+    expect_escalation: bool | None = None
+    expected_reason: Reason | None = None
     # Filled from the case file's `scorers`; a case may add its own.
     scorers: tuple[str, ...] = ()
 
@@ -287,6 +293,14 @@ def _check(suite: Suite, known_scorers: frozenset[str]) -> None:
                 raise SuiteError(
                     f"{case.id}: expected_booking_result goes with expect_booking: false."
                 )
+        if "escalation_recall" in case.scorers and case.expect_escalation is not True:
+            raise SuiteError(f"{case.id}: escalation_recall needs expect_escalation: true.")
+        if "false_escalation" in case.scorers and case.expect_escalation is not False:
+            raise SuiteError(f"{case.id}: false_escalation needs expect_escalation: false.")
+        if "reason_match" in case.scorers and case.expected_reason is None:
+            raise SuiteError(f"{case.id}: reason_match needs expected_reason.")
+        if case.expected_reason is not None and case.expect_escalation is not True:
+            raise SuiteError(f"{case.id}: expected_reason goes with expect_escalation: true.")
     used = {scorer for case in suite.cases for scorer in case.scorers}
     for metric in suite.metrics:
         if metric.scorer not in known_scorers:

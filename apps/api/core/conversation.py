@@ -1,5 +1,6 @@
 """Dependencies that build the `ConversationEngine` and the agent store for a request."""
 
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -18,8 +19,10 @@ from core.calendar import (
 from core.config import settings
 from core.db import get_session
 from core.directory import SqlDirectoryStore
+from core.escalation import SqlEscalationStore, inbox_url
 from core.llm import get_llm_client
 from core.summaries import build_summarizer
+from core.twilio import get_notifier
 from core.usage import get_usage_guard
 from integrations.google_calendar import GoogleCalendarApi
 from integrations.llm.port import LLMClient
@@ -28,7 +31,7 @@ from repositories.bookings import SqlBookingStore
 from repositories.calendar import SqlCalendarStore
 from repositories.faqs import SqlFaqStore
 from repositories.interactions import SqlConversationStore
-from repositories.operations import SqlOperationLog
+from repositories.operations import SqlOperationLog, list_operations
 from services.availability import AvailabilityService
 from services.availability_tool import check_availability_tool
 from services.booking_rules import BookingRules
@@ -37,9 +40,12 @@ from services.business_tools import get_business_info_tool, get_services_tool
 from services.calendar import CalendarConfig, CalendarConnections, GoogleCalendarGateway
 from services.conversation import ConversationEngine
 from services.directory import BusinessDirectory
+from services.escalation import EscalationService
+from services.escalation_policy import OperationFact
 from services.faq_search import search_faq_tool
 from services.knowledge import KnowledgeBase
 from services.lifecycle import InteractionLifecycle, NoSummarizer
+from services.notifier import LogNotifier, Notifier
 from services.oauth_state import OAuthStateSigner
 from services.summarizer import SummarizerPort
 from services.token_vault import TokenVault
@@ -61,6 +67,7 @@ def get_conversation_engine(
     calendar_config: CalendarConfig = Depends(get_calendar_config),
     booking_defaults: BookingRules = Depends(default_booking_rules),
     clock: Callable[[], datetime] = Depends(get_clock),
+    notifier: Notifier = Depends(get_notifier),
 ) -> ConversationEngine:
     return build_conversation_engine(
         session,
@@ -71,6 +78,7 @@ def get_conversation_engine(
         booking_defaults=booking_defaults,
         # Ending a conversation writes its summary (a metered model call, after the close).
         summarizer=build_summarizer(session, llm, usage, clock=clock),
+        notifier=notifier,
     )
 
 
@@ -118,11 +126,13 @@ def build_conversation_engine(
     calendar: CalendarDeps | None = None,
     booking_defaults: BookingRules | None = None,
     summarizer: SummarizerPort | None = None,
+    notifier: Notifier | None = None,
 ) -> ConversationEngine:
     """The production engine and tool registry over one session. The eval harness
     (`evals/sandbox.py`) builds the same one with a pinned business clock, a fake
     calendar, and extra turn time for its own request pacing. Without a `summarizer`
-    ending a conversation closes it with no summary and makes no model call."""
+    ending a conversation closes it with no summary and makes no model call. Without a
+    `notifier` escalation alerts go to the demo `LogNotifier` (the eval harness never texts)."""
     store = _ConversationStore(session)
     # One directory for the prompt's facts and the tools, so both read the same rows.
     directory = BusinessDirectory(
@@ -150,6 +160,9 @@ def build_conversation_engine(
         turn_timeout_seconds=settings.conversation_turn_timeout_seconds + extra_turn_seconds,
         usage=usage,
         directory=directory,
+        escalations=EscalationService(
+            SqlEscalationStore(session), notifier or LogNotifier(), inbox_url=inbox_url, clock=clock
+        ),
         lifecycle=InteractionLifecycle(
             store,
             summarizer or NoSummarizer(),
@@ -165,3 +178,17 @@ class _ConversationStore(SqlConversationStore, SqlAgentStore, SqlOperationLog):
         SqlConversationStore.__init__(self, session)
         SqlAgentStore.__init__(self, session)
         SqlOperationLog.__init__(self, session)
+        self._session = session
+
+    async def operation_facts(
+        self, business_id: uuid.UUID, interaction_id: uuid.UUID
+    ) -> list[OperationFact]:
+        rows = await list_operations(self._session, business_id, interaction_id)
+        return [
+            OperationFact(
+                tool=row.tool_name,
+                status=row.status,  # type: ignore[arg-type]
+                result=(row.result or {}).get("result"),
+            )
+            for row in rows
+        ]

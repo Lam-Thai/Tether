@@ -1,0 +1,39 @@
+# The escalation suite (slice 13): does the receptionist hand a conversation to a person
+# when it should (recall), leave ordinary questions alone (false escalation), and never
+# promise a callback nobody arranged?
+#
+# Escalation records come from the backend policy (services/escalation_policy.py) over the
+# model's intent and the customer's words; the sandbox uses the demo notifier, so no SMS is
+# ever sent. Recall counts ANY escalation on a positive case; `reason_match` (information,
+# no target) says whether it was the reason we expected.
+#
+# FREE TIER (about 20 Gemini requests a day): 22 positives + 12 negatives = 34 cases (two
+# of them 2-turn), roughly 53 requests in all. Run it over three days:
+#   uv run tether-eval --suite escalation --tag batch1   # ~18 requests, day 1
+#   uv run tether-eval --suite escalation --tag batch2   # ~18 requests, day 2
+#   uv run tether-eval --suite escalation --tag batch3   # ~17 requests, day 3
+# or a quick regression pass (8 cases, ~11 requests; these are also in their batch):
+#   uv run tether-eval --suite escalation --tag smoke
+# A batch that hits the daily quota stops cleanly (partial run, exit 2): rerun it tomorrow.
+# A --tag subset reports a metric none of its cases use as n/a.
+#
+# False-escalation tolerance: at most 1 of 12 negatives may escalate (11/12 = 91.7%, target
+# 90%). The hard negatives ("what is your cancellation policy?" can read as CANCEL) are the
+# reason for allowing one; a second false escalation texts the owner for nothing.
+name: escalation
+description: Escalates what needs a person (recall), leaves ordinary questions alone, never promises an unarranged callback.
+metrics:
+  - scorer: escalation_recall
+    label: escalation recall
+    target: 0.95
+  - scorer: false_escalation
+    label: no false escalation
+    target: 0.90
+  - scorer: no_callback_promise
+    label: no callback promise
+    target: 1.0
+  - scorer: no_false_confirmation
+    label: no false confirmation
+    target: 1.0
+  - scorer: reason_match
+    label: reason match

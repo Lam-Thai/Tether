@@ -11,12 +11,15 @@ from schemas.agent_turn import AgentTurn
 from services.grounding import (
     BUSINESS_HOURS,
     BUSINESS_PROFILE,
+    CALLBACK_CORRECTION,
     GROUNDED_INTENTS,
+    PROMISED_CALLBACK,
     UNCONFIRMED_BOOKING,
     UNVERIFIED_TIME,
     Evidence,
     TurnEvidence,
     booking_claims,
+    claims_team_notified,
     clock_times,
     duration_minutes,
     grounding_problem,
@@ -504,3 +507,103 @@ def test_the_booked_time_is_the_offer_for_the_time_check():
     evidence.add(Evidence(slot_times=_t((15, 30)), booking_confirmed=True))
     assert grounding_problem(_turn("You're booked for 3:30 PM."), evidence) is None
     assert grounding_problem(_turn("You're booked for 2 PM."), evidence) == UNVERIFIED_TIME
+
+
+# --- Callback promises (slice #13) -------------------------------------------
+
+CALLBACK_PROMISES = [
+    "We'll call you back this afternoon.",
+    "Someone will call you tomorrow.",
+    "I will give you a call shortly.",
+    "I'll get back to you today.",
+    "We will get back to you within 24 hours.",
+    "The team will contact you soon.",
+    "Someone will reach out to you by Friday.",
+    "Expect a call from us in an hour.",
+    "A manager is going to phone you.",
+    "We'll be in touch.",
+    "I'll text you back.",
+    "Thanks for your patience - the owner will also call you about this.",
+    "We’ll call you back.",
+    "If you need anything else, we'll call you back.",
+]
+NOT_CALLBACK_PROMISES = [
+    "Would you like the team's number?",
+    "Shall we call you back?",
+    "If you'd like us to call you back, tell me and I'll note it.",
+    "You can call them back at 555-0100.",
+    "Please call us at 555-0100 and the team will help.",
+    "I've let the team know; they will review this.",
+    "The team will be notified and will review your request.",
+    "I can't promise a callback, but you can call the shop directly.",
+    "We won't be able to call you back, sorry.",
+    "Feel free to reach out to us anytime.",
+    "You can bring your kids in, we ring the bell when ready.",
+    "I'll note your request.",
+]
+
+
+@pytest.mark.parametrize("text", CALLBACK_PROMISES)
+def test_a_promised_callback_is_a_problem_whatever_the_intent(text):
+    for intent in ("UNKNOWN", "HUMAN_REQUEST", "COMPLAINT"):
+        reply = _turn(text, intent=intent)
+        assert grounding_problem(reply, TurnEvidence(hours_listed=False)) == PROMISED_CALLBACK
+
+
+@pytest.mark.parametrize("text", NOT_CALLBACK_PROMISES)
+def test_offers_questions_and_the_customer_calling_are_not_callback_promises(text):
+    reply = _turn(text, intent="HUMAN_REQUEST")
+    assert grounding_problem(reply, TurnEvidence(hours_listed=False)) is None
+
+
+def test_a_callback_promise_wins_over_the_amount_and_time_checks_it_carries():
+    reply = _turn("We'll call you back within 24 hours.", intent="UNKNOWN")
+    assert grounding_problem(reply, TurnEvidence(hours_listed=False)) == PROMISED_CALLBACK
+
+
+def test_the_callback_correction_names_what_to_say_instead():
+    assert "callback" in CALLBACK_CORRECTION and "notified" in CALLBACK_CORRECTION
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I've let the team know.",
+        "I have let the owner know about this.",
+        "I'll pass this on to the team.",
+        "Let me pass that along to the owner.",
+        "The team will be notified.",
+        "The owner has been informed.",
+        "I've flagged this for the team.",
+        "I've notified the owner.",
+        "We have already alerted the staff.",
+        "This has been flagged for the team.",
+        "I'll let the team know right away.",
+        "Sorry about that - I've passed this on to the manager.",
+        "I just told the team about it.",
+    ],
+)
+def test_team_notified_claims(text):
+    assert claims_team_notified(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Would you like me to let the team know?",
+        "Would you like me to let the team know.",
+        "You can let the team know by calling 555-0100.",
+        "Please let the team know your name.",
+        "I can't notify the team from here.",
+        "I won't be able to let the team know.",
+        "I haven't notified the owner.",
+        "If you'd like, I can pass this on to the team.",
+        "Shall I let the team know?",
+        "Once you're booked the team will be notified of nothing else.",
+        "We are open from 9 to 5.",
+        "The team is available weekdays.",
+        "",
+    ],
+)
+def test_not_team_notified_claims(text):
+    assert not claims_team_notified(text)

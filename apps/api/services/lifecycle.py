@@ -137,6 +137,10 @@ class LifecycleStore(Protocol):
         """(has a confirmed booking, a `create_booking` call logged `booking_failed`)."""
         ...
 
+    async def has_escalation(self, business_id: uuid.UUID, interaction_id: uuid.UUID) -> bool:
+        """The interaction has any recorded escalation (open or resolved)."""
+        ...
+
     async def lock_idle(
         self, business_id: uuid.UUID, idle_minutes: int, limit: int
     ) -> Sequence[Interaction]:
@@ -207,7 +211,9 @@ class InteractionLifecycle:
             has_confirmed_booking=booked,
             booking_failed=booking_failed,
             last_agent_message_was_fallback=last_was_fallback,
-            requires_human=bool(state.get("requires_human")),
+            # An escalation is a recorded fact: it counts even if a later turn cleared the flag.
+            requires_human=bool(state.get("requires_human"))
+            or await self._store.has_escalation(interaction.business_id, interaction.id),
         )
         interaction.status, interaction.outcome = close_outcome(facts, reason)
         interaction.ended_at = ended_at

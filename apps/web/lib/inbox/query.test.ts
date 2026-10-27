@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { inboxHref, interactionHref, parseInboxQuery, withFilters } from "./query";
 
+describe("parseInboxQuery attention", () => {
+  it("accepts type=attention and round-trips it", () => {
+    expect(parseInboxQuery({ type: "attention" })).toEqual({ type: "attention" });
+    expect(inboxHref({ type: "attention" })).toBe("/dashboard/inbox?type=attention");
+  });
+});
+
 describe("parseInboxQuery", () => {
   it("reads known params", () => {
     expect(

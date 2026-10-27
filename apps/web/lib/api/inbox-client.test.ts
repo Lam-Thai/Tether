@@ -23,6 +23,8 @@ const ROW: InteractionRow = {
   status: "completed",
   outcome: "booked",
   requires_human: false,
+  needs_attention: false,
+  escalation: null,
 };
 
 const LIST: InteractionList = { items: [ROW], next_cursor: "abc", timezone: "America/New_York" };
@@ -41,6 +43,7 @@ const DETAIL: InteractionDetail = {
       duration_ms: 120,
     },
   ],
+  escalations: [],
 };
 
 function respond(status: number, body: unknown) {

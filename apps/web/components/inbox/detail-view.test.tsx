@@ -30,6 +30,9 @@ const detail = (over: Partial<InteractionDetail> = {}): InteractionDetail => ({
   status: "completed",
   outcome: "booked",
   requires_human: false,
+  needs_attention: false,
+  escalation: null,
+  escalations: [],
   timezone: "America/New_York",
   message_count: 3,
   operations: [

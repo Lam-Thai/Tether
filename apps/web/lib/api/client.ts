@@ -1873,15 +1873,227 @@ function invalidMessageFor(body: unknown, fallback: string): string {
   return isApiErrorBody(body) ? body.error.message : fallback;
 }
 
+// Escalations (`/escalations`, `/business/escalation-settings`): when the receptionist hands a customer to a person.
+
+/** Open strings on purpose: an unknown value from a newer backend must not break the UI. */
+export type EscalationReason =
+  | "urgent"
+  | "human_requested"
+  | "complaint"
+  | "change_request"
+  | "booking_unresolved"
+  | "integration_failing"
+  | "clarification_exhausted"
+  | (string & {});
+export type EscalationUrgency = "normal" | "high" | (string & {});
+export type EscalationStatus = "open" | "resolved";
+export type EscalationSmsStatus =
+  | "pending"
+  | "disabled"
+  | "logged"
+  | "skipped"
+  | "accepted"
+  | "queued"
+  | "sending"
+  | "sent"
+  | "delivered"
+  | "undelivered"
+  | "failed"
+  | (string & {});
+
+export interface EscalationSummary {
+  id: string;
+  reason: EscalationReason;
+  urgency: EscalationUrgency;
+  status: EscalationStatus;
+  sms_status: EscalationSmsStatus;
+}
+
+export interface EscalationRead extends EscalationSummary {
+  interaction_id: string;
+  /** Fixed code only, such as "limit_reached" or a Twilio error code. */
+  sms_error: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface EscalationSettings {
+  contact_phone: string | null;
+  sms_enabled: boolean;
+  clarification_threshold: number;
+  urgent_keywords: string[];
+}
+
+export interface EscalationSettingsRead extends EscalationSettings {
+  /** False: nothing saved yet, so these are the server defaults. */
+  customized: boolean;
+  /** False: Twilio is not set up, so alerts are recorded but nothing is texted (demo mode). */
+  sms_configured: boolean;
+}
+
+export type EscalationSettingsResult =
+  | { kind: "ok"; data: EscalationSettingsRead }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type PutEscalationSettingsResult =
+  | { kind: "ok"; data: EscalationSettingsRead }
+  | { kind: "contact_phone_required"; message: string }
+  | { kind: "validation"; message: string; fieldErrors: FieldErrors }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type EscalationListResult =
+  | { kind: "ok"; data: EscalationRead[] }
+  | { kind: "validation"; message: string }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type ResolveEscalationResult =
+  | { kind: "ok"; data: EscalationRead }
+  | { kind: "not_found" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isEscalationSummary(value: unknown): value is EscalationSummary {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.reason === "string" &&
+    typeof value.urgency === "string" &&
+    (value.status === "open" || value.status === "resolved") &&
+    typeof value.sms_status === "string"
+  );
+}
+
+function isEscalationRead(value: unknown): value is EscalationRead {
+  if (!isRecord(value)) return false;
+  return (
+    isEscalationSummary(value) &&
+    typeof value.interaction_id === "string" &&
+    isNullableString(value.sms_error) &&
+    typeof value.created_at === "string" &&
+    isNullableString(value.resolved_at)
+  );
+}
+
+function isEscalationSettingsRead(value: unknown): value is EscalationSettingsRead {
+  if (!isRecord(value)) return false;
+  return (
+    isNullableString(value.contact_phone) &&
+    typeof value.sms_enabled === "boolean" &&
+    isCount(value.clarification_threshold) &&
+    Array.isArray(value.urgent_keywords) &&
+    value.urgent_keywords.every((keyword) => typeof keyword === "string") &&
+    typeof value.customized === "boolean" &&
+    typeof value.sms_configured === "boolean"
+  );
+}
+
+/** Calls `GET /api/v1/business/escalation-settings`. */
+export async function getEscalationSettings(token: string): Promise<EscalationSettingsResult> {
+  const outcome = await fetchApi("/business/escalation-settings", { headers: authHeaders(token) }, AGENT_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isEscalationSettingsRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `PUT /api/v1/business/escalation-settings`: all four fields, replacing the settings. */
+export async function updateEscalationSettings(
+  token: string,
+  settings: EscalationSettings,
+): Promise<PutEscalationSettingsResult> {
+  const body: EscalationSettings = {
+    contact_phone: settings.contact_phone,
+    sms_enabled: settings.sms_enabled,
+    clarification_threshold: settings.clarification_threshold,
+    urgent_keywords: settings.urgent_keywords,
+  };
+  const outcome = await fetchApi(
+    "/business/escalation-settings",
+    { method: "PUT", headers: jsonAuthHeaders(token), body: JSON.stringify(body) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 422) {
+    const failure = validationFrom(outcome.body, "The escalation rules are invalid.");
+    if (errorCode(outcome.body) === "contact_phone_required") {
+      return { kind: "contact_phone_required", message: failure.message };
+    }
+    return { kind: "validation", ...failure };
+  }
+  if (outcome.status === 200 && isEscalationSettingsRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `GET /api/v1/escalations` (newest first). `status` defaults to open on the server. */
+export async function listEscalations(
+  token: string,
+  query: { status?: "open" | "resolved" | "all"; interactionId?: string } = {},
+): Promise<EscalationListResult> {
+  const params = new URLSearchParams();
+  if (query.status) params.set("status", query.status);
+  if (query.interactionId) params.set("interaction_id", query.interactionId);
+  const qs = params.toString();
+
+  const outcome = await fetchApi(
+    `/escalations${qs ? `?${qs}` : ""}`,
+    { headers: authHeaders(token) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 422) {
+    return { kind: "validation", message: invalidMessageFor(outcome.body, "Those filters are invalid.") };
+  }
+  if (
+    outcome.status === 200 &&
+    isRecord(outcome.body) &&
+    Array.isArray(outcome.body.items) &&
+    outcome.body.items.every(isEscalationRead)
+  ) {
+    return { kind: "ok", data: outcome.body.items };
+  }
+  return UNEXPECTED;
+}
+
+/** Calls `PATCH /api/v1/escalations/{id}` with `{status: "resolved"}`. Idempotent on the server. */
+export async function resolveEscalation(token: string, id: string): Promise<ResolveEscalationResult> {
+  const outcome = await fetchApi(
+    `/escalations/${encodeURIComponent(id)}`,
+    { method: "PATCH", headers: jsonAuthHeaders(token), body: JSON.stringify({ status: "resolved" }) },
+    AGENT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 404) return { kind: "not_found" };
+  if (outcome.status === 200 && isEscalationRead(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
 // Inbox (`/interactions`): the owner's list of conversations, one detail view and its transcript.
 
 export type InteractionChannel = "test_chat" | "voice" | "sms" | (string & {});
 export type InteractionOutcome = "booked" | "answered" | "escalated" | "failed" | "abandoned";
 export type SummarySource = "ai" | "template";
 export type OperationStatus = "succeeded" | "rejected" | "failed";
-export type InboxType = "all" | "bookings" | "faqs" | "escalations" | "failed";
+export type InboxType = "all" | "bookings" | "faqs" | "escalations" | "attention" | "failed";
 
-const INBOX_TYPES: readonly string[] = ["all", "bookings", "faqs", "escalations", "failed"];
+const INBOX_TYPES: readonly string[] = ["all", "bookings", "faqs", "escalations", "attention", "failed"];
 const INTERACTION_OUTCOMES: readonly string[] = ["booked", "answered", "escalated", "failed", "abandoned"];
 const OPERATION_STATUSES: readonly string[] = ["succeeded", "rejected", "failed"];
 
@@ -1899,6 +2111,10 @@ export interface InteractionRow {
   status: InteractionStatus;
   outcome: InteractionOutcome | null;
   requires_human: boolean;
+  /** True while the interaction has an open escalation. */
+  needs_attention: boolean;
+  /** The open escalation with the highest priority, else the latest resolved one. */
+  escalation: EscalationSummary | null;
 }
 
 export interface InteractionList {
@@ -1921,6 +2137,7 @@ export interface InteractionDetail extends InteractionRow {
   timezone: string;
   message_count: number;
   operations: OperationItem[];
+  escalations: EscalationRead[];
 }
 
 export interface InteractionMessagePage {
@@ -1976,7 +2193,9 @@ function isInteractionRow(value: unknown): value is InteractionRow {
     INTERACTION_STATUSES.includes(value.status) &&
     (value.outcome === null ||
       (typeof value.outcome === "string" && INTERACTION_OUTCOMES.includes(value.outcome))) &&
-    typeof value.requires_human === "boolean"
+    typeof value.requires_human === "boolean" &&
+    typeof value.needs_attention === "boolean" &&
+    (value.escalation === null || isEscalationSummary(value.escalation))
   );
 }
 
@@ -2010,7 +2229,9 @@ function isInteractionDetail(value: unknown): value is InteractionDetail {
     typeof value.timezone === "string" &&
     isCount(value.message_count) &&
     Array.isArray(value.operations) &&
-    value.operations.every(isOperationItem)
+    value.operations.every(isOperationItem) &&
+    Array.isArray(value.escalations) &&
+    value.escalations.every(isEscalationRead)
   );
 }
 

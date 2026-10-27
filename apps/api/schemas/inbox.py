@@ -4,10 +4,22 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from schemas.escalation import EscalationRead, EscalationStatus, Reason, SmsStatus, Urgency
+
 InteractionStatus = Literal["in_progress", "completed", "failed", "abandoned"]
 InteractionOutcome = Literal["booked", "answered", "escalated", "failed", "abandoned"]
 SummarySource = Literal["ai", "template"]
 OperationStatus = Literal["succeeded", "rejected", "failed"]
+
+
+class EscalationSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    reason: Reason
+    urgency: Urgency
+    status: EscalationStatus
+    sms_status: SmsStatus
 
 
 class InteractionRead(BaseModel):
@@ -24,6 +36,8 @@ class InteractionRead(BaseModel):
     status: InteractionStatus
     outcome: InteractionOutcome | None
     requires_human: bool
+    needs_attention: bool = False
+    escalation: EscalationSummary | None = None
 
 
 class InteractionPageRead(BaseModel):
@@ -48,6 +62,7 @@ class InteractionDetailRead(InteractionRead):
     timezone: str
     message_count: int
     operations: list[OperationRead] = Field(default_factory=list)
+    escalations: list[EscalationRead] = Field(default_factory=list)
 
 
 class InboxMessageRead(BaseModel):
