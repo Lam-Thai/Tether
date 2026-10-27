@@ -1,8 +1,10 @@
 """Repository for `businesses` — the tenant root.
 
-Every lookup here is paired with the caller's `owner_id` (resolved from
-`TenantContext`, never from a client-supplied `business_id`): there is no
-function in this module that returns a business by id alone. Later
+Every owner-facing lookup here is paired with the caller's `owner_id` (resolved
+from `TenantContext`, never from a client-supplied `business_id`). The one exception
+is `get_business_for_stored_row`, for tenant-less provider webhooks whose business id
+comes from a stored row the webhook resolved (the phone number a call came in on),
+never from a request. Later
 domain repositories (FAQs, services, ...) scope by `tenant.business_id`
 instead — see `repositories/base.py`.
 """
@@ -18,6 +20,13 @@ from models.business import Business
 async def get_business_by_owner_id(session: AsyncSession, owner_id: uuid.UUID) -> Business | None:
     result = await session.execute(select(Business).where(Business.owner_id == owner_id))
     return result.scalar_one_or_none()
+
+
+async def get_business_for_stored_row(
+    session: AsyncSession, business_id: uuid.UUID
+) -> Business | None:
+    """Only with an id read from a stored row (see the module docstring)."""
+    return await session.get(Business, business_id)
 
 
 async def get_business_by_id_for_owner(

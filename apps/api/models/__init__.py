@@ -14,9 +14,11 @@ from models.faq import Faq
 from models.hours import BusinessHours
 from models.interaction import Interaction, InteractionMessage
 from models.operation import InteractionOperation
+from models.phone_number import PhoneNumber
 from models.service import Service
 from models.usage import UsageCounter, UsageEvent
 from models.user import User
+from models.voice_turn import VoiceTurn
 
 __all__ = [
     "Agent",
@@ -31,10 +33,12 @@ __all__ = [
     "Interaction",
     "InteractionMessage",
     "InteractionOperation",
+    "PhoneNumber",
     "Service",
     "StripeEvent",
     "Subscription",
     "UsageCounter",
     "UsageEvent",
     "User",
+    "VoiceTurn",
 ]

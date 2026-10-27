@@ -67,6 +67,15 @@ class Interaction(Base):
         Index("ix_interactions_business_started_id", "business_id", "started_at", "id"),
         Index("ix_interactions_business_id_status", "business_id", "status"),
         Index("ix_interactions_business_id_intent", "business_id", "intent"),
+        # One interaction per Twilio CallSid, so a retried or duplicate webhook can never
+        # start a second one (`services/call_session.py`). Voice only: other channels
+        # (the eval harness's seeds) use the column as a per-business key of their own.
+        Index(
+            "uq_interactions_voice_external_call_id",
+            "external_call_id",
+            unique=True,
+            postgresql_where=text("channel = 'voice'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -74,9 +83,13 @@ class Interaction(Base):
         UUID(as_uuid=True), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False
     )
     channel: Mapped[str] = mapped_column(String, nullable=False)
-    # No FK yet: `phone_numbers` lands with the voice slice.
-    phone_number_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # The number a call came in on; kept (NULL) when the number is later disconnected.
+    phone_number_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("phone_numbers.id", ondelete="SET NULL"), nullable=True
+    )
+    # Voice: Twilio's CallSid.
     external_call_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Voice: the caller ID (E.164) Twilio reported; masked in inbox lists.
     caller_identifier: Mapped[str | None] = mapped_column(String, nullable=True)
     intent: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(

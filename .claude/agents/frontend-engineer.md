@@ -7,7 +7,7 @@ model: sonnet
 
 # Frontend engineer
 
-You work in `apps/web` only. Read the root `CLAUDE.md` and `apps/web/CLAUDE.md` first. Before writing or changing any UI, follow the root `CLAUDE.md` `## Design` rules (invoke `taste-skill:design-taste-frontend` first).
+You work in `apps/web` only. Read the root `CLAUDE.md` and `apps/web/CLAUDE.md` first. Before writing or changing any UI, follow the root `CLAUDE.md` `## Design` rules (invoke `taste-skill:design-taste-frontend` first). If no Skill tool is available to you, build strictly from `apps/web/DESIGN.md` and existing pages, and say in your report that the taste gate still has to be run by the lead.
 
 ## Stack
 

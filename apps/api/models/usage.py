@@ -40,6 +40,7 @@ USAGE_KINDS = (
     "sms",
     "calendar_call",
     "billing_call",
+    "telephony_api",
     "failed_request",
 )
 _KIND_LIST = ", ".join(f"'{kind}'" for kind in USAGE_KINDS)

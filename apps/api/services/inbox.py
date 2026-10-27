@@ -32,7 +32,7 @@ from core.tenant import Tenant
 from services.agent import require_business
 from services.escalation import EscalationRecord
 from services.lifecycle import InteractionLifecycle, InteractionNotFoundError
-from services.redaction import redact
+from services.redaction import mask_phone, redact
 
 TypeFilter = Literal["all", "bookings", "faqs", "escalations", "failed", "attention"]
 DEFAULT_LIMIT = 25
@@ -255,7 +255,8 @@ class Inbox:
         await self._lifecycle.sweep_idle(business_id)
         page = await self._queries.list(business_id, scoped, decoded, max(1, min(limit, MAX_LIMIT)))
         return InboxPage(
-            tuple(_redacted_row(row) for row in page.items),
+            # Lists mask a caller ID to its last four digits; the detail view shows it.
+            tuple(_masked(_redacted_row(row)) for row in page.items),
             encode_cursor(page.next_cursor) if page.next_cursor else None,
             timezone,
         )
@@ -305,3 +306,7 @@ def _redacted_row(row: InteractionRow) -> InteractionRow:
         caller=redact(row.caller) if row.caller else None,
         summary=redact(row.summary) if row.summary else None,
     )
+
+
+def _masked(row: InteractionRow) -> InteractionRow:
+    return replace(row, caller=mask_phone(row.caller) if row.caller else None)

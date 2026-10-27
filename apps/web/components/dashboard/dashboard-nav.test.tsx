@@ -7,7 +7,7 @@ vi.mock("next/navigation", () => ({ usePathname: () => pathname }));
 import { DashboardNav } from "./dashboard-nav";
 
 describe("DashboardNav", () => {
-  it("links Agent, Calendar, Inbox and Settings and leaves the other sections disabled", () => {
+  it("links Agent, Calendar, Phone, Inbox and Settings and leaves the other sections disabled", () => {
     pathname = "/dashboard";
     render(<DashboardNav />);
 
@@ -23,9 +23,10 @@ describe("DashboardNav", () => {
       "/dashboard/settings/calendar",
     );
     expect(screen.getByRole("link", { name: "Inbox" })).toHaveAttribute("href", "/dashboard/inbox");
-    expect(screen.getAllByRole("link")).toHaveLength(4);
+    expect(screen.getByRole("link", { name: "Phone" })).toHaveAttribute("href", "/dashboard/phone");
+    expect(screen.getAllByRole("link")).toHaveLength(5);
 
-    for (const label of ["FAQs", "Services", "Phone"]) {
+    for (const label of ["FAQs", "Services"]) {
       expect(screen.getByText(label)).toHaveAttribute("aria-disabled", "true");
     }
   });

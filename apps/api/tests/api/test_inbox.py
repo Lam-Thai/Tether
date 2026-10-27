@@ -353,7 +353,8 @@ async def test_row_fields(client, entitled_tenants):
 
     first, second = (await _list(client, tenant_a))["items"]
 
-    assert first["caller"] == "Alex" and second["caller"] == "+15555550123"  # number wins
+    # The number wins over a name, and a list shows only its last four digits (slice 14).
+    assert first["caller"] == "Alex" and second["caller"] == "•••0123"
     assert first["summary"] == "Wanted a cut. A cut was booked."
     assert (first["summary_source"], first["outcome"], first["status"]) == (
         "ai",

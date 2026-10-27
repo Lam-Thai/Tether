@@ -230,7 +230,7 @@ def create_booking_tool(
                 date=day,
                 start_time=args.start_time,
                 customer_name=args.customer_name,
-                customer_phone=args.customer_phone,
+                customer_phone=args.customer_phone or ctx.caller_phone,
             ),
         )
         return _result(outcome, day, directory.now(ctx.tenant))
