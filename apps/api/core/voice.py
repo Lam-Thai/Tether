@@ -39,13 +39,13 @@ from integrations.google_calendar import GoogleCalendarApi
 from integrations.llm.port import LLMClient
 from integrations.twilio.numbers import HttpTwilioNumbersApi
 from integrations.twilio.port import NumbersApi
-from models.business import Business
 from models.interaction import Interaction
 from models.phone_number import PhoneNumber
-from models.user import User
 from models.voice_turn import VoiceTurn
+from repositories import business as business_repo
 from repositories import interactions as interactions_repo
 from repositories import phone_numbers as numbers_repo
+from repositories import users as users_repo
 from repositories import voice_turns as turns_repo
 from repositories.agents import SqlAgentStore
 from repositories.billing import SqlBillingStore
@@ -134,10 +134,10 @@ def get_twiml_renderer() -> TwimlRenderer:
 
 async def tenant_for_business(session: AsyncSession, business_id: uuid.UUID) -> Tenant | None:
     """The tenant a call belongs to, from the stored business row (never the payload)."""
-    business = await session.get(Business, business_id)
+    business = await business_repo.get_business_for_stored_row(session, business_id)
     if business is None:
         return None
-    owner = await session.get(User, business.owner_id)
+    owner = await users_repo.get_user_by_id(session, business.owner_id)
     if owner is None:
         return None
     return Tenant(user=owner, business=business)

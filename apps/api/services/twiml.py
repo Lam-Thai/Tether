@@ -142,7 +142,9 @@ _DONE = re.compile(
     r"i'm good|i am good)"
     # The phrase must END the utterance (only thanks or a farewell after it), so "that's
     # all I have on Tuesday" is not a goodbye.
-    r"(?: (?:for now|thanks|thank you|so much|very much|bye|bye bye|goodbye|good bye))*$"
+    # Each alternative starts with a different word, so the repetition is unambiguous (no
+    # catastrophic backtracking); "bye bye" is simply "bye" twice.
+    r"(?: (?:for now|thanks|thank you|so much|very much|bye|goodbye|good bye))*$"
 )
 _QUESTION = re.compile(
     r"\?|\b(?:what|when|where|which|how|why|who|can|could|would|do|does|is|are|will)\b"

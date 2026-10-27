@@ -1,5 +1,7 @@
 """Repository for `users`. Identity rows, not tenant-scoped."""
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +12,10 @@ from models.user import User
 async def get_user_by_external_auth_id(session: AsyncSession, external_auth_id: str) -> User | None:
     result = await session.execute(select(User).where(User.external_auth_id == external_auth_id))
     return result.scalar_one_or_none()
+
+
+async def get_user_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
+    return await session.get(User, user_id)
 
 
 async def create_user(session: AsyncSession, *, external_auth_id: str, email: str) -> User:

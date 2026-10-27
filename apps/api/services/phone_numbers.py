@@ -255,11 +255,20 @@ class PhoneNumberService:
             await self._store.checkpoint()
             try:
                 number = await self._call(business_id, lambda: api.get_number(sid))
-                # Only undo our own configuration; never wipe what someone set since.
-                if self._points_here(number):
+                # Only undo our own configuration, field by field; never wipe what
+                # someone set since (a console edit of just the Voice URL is kept).
+                voice = "" if number.voice_url == self._targets.voice_url else number.voice_url
+                status = (
+                    ""
+                    if number.status_callback == self._targets.status_callback
+                    else number.status_callback
+                )
+                if (voice, status) != (number.voice_url, number.status_callback):
                     await self._call(
                         business_id,
-                        lambda: api.set_webhooks(sid, voice_url="", status_callback=""),
+                        lambda: api.set_webhooks(
+                            sid, voice_url=voice or "", status_callback=status or ""
+                        ),
                     )
             except _NumberMissingError:
                 pass  # gone from the account: nothing points here any more
@@ -283,15 +292,6 @@ class PhoneNumberService:
         url = number.voice_url
         return (
             not url or url == self._targets.voice_url or urlsplit(url).hostname == TWILIO_DEMO_HOST
-        )
-
-    def _points_here(self, number: IncomingNumber) -> bool:
-        return bool(
-            self._targets.voice_url
-            and (
-                number.voice_url == self._targets.voice_url
-                or number.status_callback == self._targets.status_callback
-            )
         )
 
     def _verify(self, number: IncomingNumber) -> tuple[str, str | None]:

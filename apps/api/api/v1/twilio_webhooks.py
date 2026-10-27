@@ -73,7 +73,9 @@ async def _twiml(renderer: TwimlRenderer, step: Awaitable[CallStep]) -> Response
     try:
         decided = await step
     except Exception as exc:
-        logger.exception("voice webhook failed", extra={"error_type": type(exc).__name__})
+        # The type only: a database error's message quotes bound parameters (caller
+        # number, speech), like `services/tools.py` and `services/lifecycle.py`.
+        logger.error("voice webhook failed", extra={"error_type": type(exc).__name__})
         decided = Close(ERROR_LINE)
     return Response(content=renderer.render(decided), media_type="application/xml")
 
@@ -124,5 +126,5 @@ async def post_call_status(fields: SignedForm, calls: Calls) -> Response:
         )
     except Exception as exc:
         # Twilio doesn't retry status callbacks; the idle sweep closes the call later.
-        logger.exception("call status webhook failed", extra={"error_type": type(exc).__name__})
+        logger.error("call status webhook failed", extra={"error_type": type(exc).__name__})
     return Response(status_code=204)

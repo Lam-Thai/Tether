@@ -448,3 +448,15 @@ async def test_a_number_configured_for_something_else_is_neither_offered_nor_tak
 
     connected = await env.service.associate(env.alpha, fresh_trial.sid)
     assert connected.status == "connected"
+
+
+async def test_disconnect_keeps_a_voice_url_repointed_in_the_console_and_clears_only_ours(env):
+    number = env.api.add_number()
+    row = await env.service.associate(env.alpha, number.sid)
+    env.api.edit_externally(number.sid, voice_url="https://other-app.example/voice")
+
+    assert await env.service.disconnect(env.alpha, row.id) is True
+
+    after = env.api.numbers[number.sid]
+    assert after.voice_url == "https://other-app.example/voice"
+    assert after.status_callback is None
