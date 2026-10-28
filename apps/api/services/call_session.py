@@ -29,6 +29,16 @@ Four calls, one per webhook (`start` = voice, `respond` = input, `resume` = wait
   contacts) hangs up cleanly (`twiml.step_for`).
 - `complete` (a terminal call status) ends the interaction through the shared
   `InteractionLifecycle` (outcome, summary) and records the call's seconds, once.
+- Voice (slice 15): with a `SpeechSynthesizer`, every step of an admitted call gets the
+  agent's Gemini voice (`CallTarget.voice`, resolved by the voice catalog; `standard` is
+  Twilio's <Say>) inside what is left of `response_budget_seconds`, Twilio's webhook
+  timeout with a margin. Any TTS failure keeps `<Say>` for that line in the same turn.
+  Only fixed lines are marked `cacheable` (greeting, holds, reprompts, fixed endings);
+  a model reply never is. Refusals (unknown number, no plan, inactive agent, limits)
+  are never synthesized: they touch no business data and spend nothing.
+  Latency: the worker logs `llm_ms` (the whole engine turn), each webhook logs
+  `tts_ms` and `latency_ms` (`tether.voice`); speech-to-text happens at Twilio before
+  the input webhook arrives, so it is not observable here.
 
 No FastAPI or SQLAlchemy imports: everything comes in through ports.
 """
@@ -39,7 +49,7 @@ import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -49,6 +59,7 @@ from models.interaction import Interaction
 from models.phone_number import PhoneNumber
 from services.conversation import TurnResult, quota_fallback
 from services.redaction import redact
+from services.speech import SpeechSynthesizer
 from services.twiml import GOODBYE, CallStep, Close, Hold, Listen, step_for
 from services.usage import (
     ActiveCounts,
@@ -126,6 +137,9 @@ class VoiceSettings:
     # turn is still taken over inside one wait request.
     stale_after_seconds: float = 5.0
     poll_seconds: float = 0.5
+    # Everything one webhook may spend before answering (Twilio gives up at ~15 s); speech
+    # synthesis gets only what is left of it.
+    response_budget_seconds: float = 12.5
 
 
 @dataclass(frozen=True)
@@ -143,6 +157,8 @@ class CallTarget:
     greeting: str
     agent_active: bool
     entitled: bool
+    # The agent's stored voice (`None` = the configured default, `standard` = <Say>).
+    voice: str | None = None
 
     @property
     def business(self) -> Business:
@@ -257,6 +273,7 @@ class CallSessionService:
         replay: Replayer,
         end: Ender,
         settings: VoiceSettings,
+        speech: SpeechSynthesizer | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
@@ -266,11 +283,13 @@ class CallSessionService:
         self._replay = replay
         self._end = end
         self._settings = settings
+        self._speech = speech
         self._clock = clock
 
     # --- webhooks ----------------------------------------------------------------------
 
     async def start(self, call: InboundCall) -> CallStep:
+        started = time.monotonic()
         if not CALL_SID.match(call.call_sid):
             return Close(UNKNOWN_NUMBER_LINE)
         number = await self._store.find_number(call.to)
@@ -289,7 +308,7 @@ class CallSessionService:
             return Close(unavailable_line(target.business))
         existing = await self._store.find_call(call.call_sid)
         if existing is not None:
-            return await self._rejoin(existing, target)
+            return await self._rejoin(existing, target, started)
 
         try:
             everyone, mine = await self._store.lock_admission_and_count(
@@ -300,7 +319,7 @@ class CallSessionService:
             existing = await self._store.find_call(call.call_sid)
             if existing is not None:
                 await self._store.checkpoint()
-                return await self._rejoin(existing, target)
+                return await self._rejoin(existing, target, started)
             self._usage.check_admission(ActiveCounts(all_businesses=everyone, business=mine))
             async with self._usage.metered(UsageKind.CALL, business_id=business_id):
                 pass  # an inbound call has no provider call to wrap: this reserves one call
@@ -318,7 +337,7 @@ class CallSessionService:
                 # creating this very call: rejoin it rather than hang up on the caller.
                 existing = await self._store.find_call(call.call_sid)
                 if existing is not None:
-                    return await self._rejoin(existing, target)
+                    return await self._rejoin(existing, target, started)
             logger.info(
                 "call refused",
                 extra={"business_id": str(business_id), "reason": type(exc).__name__},
@@ -338,7 +357,9 @@ class CallSessionService:
             "call started",
             extra={"business_id": str(business_id), "interaction_id": str(interaction.id)},
         )
-        return Listen(target.greeting, 1)
+        return await self._voiced(
+            Listen(target.greeting, 1, cacheable=True), target, interaction.id, started
+        )
 
     async def respond(
         self, call_sid: str, turn: int, silences: int, speech: str | None
@@ -348,8 +369,7 @@ class CallSessionService:
         if not isinstance(call, _Call):
             return call
         step = await self._respond(call, turn, silences, (speech or "").strip())
-        self._log_latency(call, turn, started, step, "respond")
-        return step
+        return await self._voiced_and_logged(call, turn, started, step, "respond")
 
     async def resume(self, call_sid: str, turn: int, attempt: int) -> CallStep:
         started = time.monotonic()
@@ -357,9 +377,9 @@ class CallSessionService:
         if not isinstance(call, _Call):
             return call
         await self._store.checkpoint()
-        step = await self._await_turn(call, turn, attempt, self._settings.wait_seconds)
-        self._log_latency(call, turn, started, step, "resume")
-        return step
+        # The wait leaves room to synthesize the reply inside Twilio's timeout.
+        step = await self._await_turn(call, turn, attempt, self._wait_budget())
+        return await self._voiced_and_logged(call, turn, started, step, "resume")
 
     async def complete(self, call_sid: str, status: str, duration_seconds: int | None) -> None:
         """A call status callback. Only a terminal status ends the interaction."""
@@ -392,11 +412,11 @@ class CallSessionService:
     async def _respond(self, call: _Call, turn: int, silences: int, speech: str) -> CallStep:
         interaction, target = call.interaction, call.target
         if self._over_time(interaction):
-            return Close(time_limit_line(target.business))
+            return Close(time_limit_line(target.business), cacheable=True)
         if not speech:
             if silences + 1 >= self._settings.max_silences:
-                return Close(NO_INPUT_LINE)
-            return Listen(REPROMPT_LINE, turn, silences + 1)
+                return Close(NO_INPUT_LINE, cacheable=True)
+            return Listen(REPROMPT_LINE, turn, silences + 1, cacheable=True)
 
         replayed = await self._replay(target.tenant, interaction.id, turn_key(turn))
         if replayed is not None:
@@ -427,9 +447,9 @@ class CallSessionService:
                 return step_for(replayed, next_turn=turn + 1)
             view = await self._claims.get(interaction.business_id, interaction.id, turn)
             if view is None:
-                return Close(give_up_line(target.business))
+                return Close(give_up_line(target.business), cacheable=True)
             if view.status == "failed":
-                return Listen(TROUBLE_LINE, turn + 1)
+                return Listen(TROUBLE_LINE, turn + 1, cacheable=True)
             if view.status == "pending" and view.utterance:
                 new = uuid.uuid4()
                 if await self._claims.take_over(
@@ -477,7 +497,7 @@ class CallSessionService:
         except TimeoutError:
             return self._hold(call.target.business, turn, attempt + 1)
         except Exception:
-            return Listen(TROUBLE_LINE, turn + 1)
+            return Listen(TROUBLE_LINE, turn + 1, cacheable=True)
         return step_for(result, next_turn=turn + 1)
 
     async def _work(
@@ -490,6 +510,7 @@ class CallSessionService:
         key: str,
     ) -> TurnResult:
         beat = asyncio.create_task(self._heartbeat(turn_id, claim))
+        started = time.monotonic()
         try:
             result = await self._run_turn(business_id, interaction_id, utterance, key)
         except BaseException as exc:
@@ -501,6 +522,15 @@ class CallSessionService:
             raise
         finally:
             beat.cancel()
+        # The whole engine turn: model calls, tools (calendar, booking) and the DB writes.
+        logger.info(
+            "voice turn worker",
+            extra={
+                "interaction_id": str(interaction_id),
+                "turn_key": key,
+                "llm_ms": int((time.monotonic() - started) * 1000),
+            },
+        )
         await self._finish_quietly(turn_id, claim, "answered")
         return result
 
@@ -535,30 +565,82 @@ class CallSessionService:
             return Close(GOODBYE)
         return _Call(interaction, target)
 
-    async def _rejoin(self, interaction: Interaction, target: CallTarget) -> CallStep:
+    async def _rejoin(
+        self, interaction: Interaction, target: CallTarget, started: float
+    ) -> CallStep:
         """A repeated voice webhook for a call already started: no second interaction."""
         if interaction.status != "in_progress":
             return Close(GOODBYE)
-        turn = await self._store.next_turn(interaction.business_id, interaction.id)
-        return Listen(target.greeting, turn)
+        interaction_id = interaction.id
+        turn = await self._store.next_turn(interaction.business_id, interaction_id)
+        return await self._voiced(
+            Listen(target.greeting, turn, cacheable=True), target, interaction_id, started
+        )
 
     def _hold(self, business: Business, turn: int, attempt: int) -> CallStep:
         if attempt > self._settings.max_holds:
-            return Close(give_up_line(business))
-        return Hold(HOLDING_LINE if attempt == 1 else STILL_HOLDING_LINE, turn, attempt)
+            return Close(give_up_line(business), cacheable=True)
+        line = HOLDING_LINE if attempt == 1 else STILL_HOLDING_LINE
+        return Hold(line, turn, attempt, cacheable=True)
+
+    def _wait_budget(self) -> float:
+        """One `resume` request's polling budget: the configured wait, minus room to
+        synthesize the reply inside Twilio's timeout when the voice is on (never less
+        than two polls)."""
+        if self._speech is None or not self._speech.configured:
+            return self._settings.wait_seconds
+        spare = self._settings.response_budget_seconds - self._speech.timeout_seconds
+        return max(min(self._settings.wait_seconds, spare), 2 * self._settings.poll_seconds)
+
+    async def _voiced(
+        self, step: CallStep, target: CallTarget, interaction_id: uuid.UUID, started: float
+    ) -> CallStep:
+        """`step` with the agent's synthesized voice attached, when there is one and time
+        left in this webhook; otherwise `step` as is (<Say>)."""
+        if self._speech is None:
+            return step
+        voice = self._speech.catalog.tts_voice(target.voice)
+        if voice is None or not self._speech.configured:
+            return step
+        business_id = target.business.id
+        # Never hold the request's transaction (opened by the reads above) across TTS.
+        await self._store.checkpoint()
+        remaining = self._settings.response_budget_seconds - (time.monotonic() - started)
+        ref = await self._speech.synthesize(
+            step.text,
+            voice,
+            business_id=business_id,
+            interaction_id=interaction_id,
+            cacheable=step.cacheable,
+            deadline_seconds=remaining,
+        )
+        return replace(step, audio=ref.token) if ref is not None else step
+
+    async def _voiced_and_logged(
+        self, call: _Call, turn: int, started: float, step: CallStep, webhook: str
+    ) -> CallStep:
+        decided = time.monotonic()
+        step = await self._voiced(step, call.target, call.interaction.id, started)
+        tts_ms = int((time.monotonic() - decided) * 1000)
+        self._log_latency(call, turn, started, step, webhook, tts_ms)
+        return step
 
     def _over_time(self, interaction: Interaction) -> bool:
         elapsed = (self._clock() - interaction.started_at).total_seconds()
         return elapsed >= self._settings.max_call_seconds
 
     @staticmethod
-    def _log_latency(call: _Call, turn: int, started: float, step: CallStep, webhook: str) -> None:
+    def _log_latency(
+        call: _Call, turn: int, started: float, step: CallStep, webhook: str, tts_ms: int
+    ) -> None:
         latency_ms = int((time.monotonic() - started) * 1000)
         extra = {
             "interaction_id": str(call.interaction.id),
             "turn": turn,
             "webhook": webhook,
             "step": type(step).__name__.lower(),
+            "audio": "play" if step.audio else "say",
+            "tts_ms": tts_ms,
             "latency_ms": latency_ms,
         }
         if latency_ms > LATENCY_TARGET_MS:

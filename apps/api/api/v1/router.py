@@ -13,6 +13,7 @@ from api.v1.faqs import router as faqs_router
 from api.v1.hours import router as hours_router
 from api.v1.interactions import router as interactions_router
 from api.v1.me import router as me_router
+from api.v1.media import router as media_router
 from api.v1.phone_numbers import router as phone_numbers_router
 from api.v1.services import router as services_router
 from api.v1.twilio_webhooks import router as twilio_webhooks_router
@@ -34,3 +35,4 @@ router.include_router(bookings_router)
 router.include_router(interactions_router)
 router.include_router(phone_numbers_router)
 router.include_router(twilio_webhooks_router)
+router.include_router(media_router)  # public: the unguessable token is the capability

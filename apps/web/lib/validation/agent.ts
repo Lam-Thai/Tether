@@ -30,6 +30,8 @@ export const agentFormSchema = z.object({
     .min(1, "Greeting is required.")
     .max(AGENT_LIMITS.greeting, `Use ${AGENT_LIMITS.greeting} characters or fewer.`),
   tone: z.enum(["friendly", "professional", "concise"]),
+  // The allowed ids come from `GET /agent/voices`; the API rejects unknown ones.
+  voice: z.string().trim().min(1, "Choose a voice."),
   custom_instructions: z
     .string()
     .trim()

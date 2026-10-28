@@ -144,7 +144,7 @@ def test_usage_limit_closes_with_the_fallback_and_goodbye():
     step = step_for(
         _result("Please call us on 555.", "what are your hours", usage_limited=True), next_turn=3
     )
-    assert step == Close(f"Please call us on 555. {GOODBYE}")
+    assert step == Close(f"Please call us on 555. {GOODBYE}", cacheable=True)
 
 
 def test_goodbye_from_the_caller_closes_with_just_the_reply():
@@ -238,3 +238,43 @@ def test_farewells_end_the_call(utterance):
 )
 def test_other_utterances_keep_the_call_going(utterance):
     assert is_goodbye(utterance) is False
+
+
+# --- <Play> (slice 15) ---------------------------------------------------------------
+
+MEDIA = "https://api.example.test/api/v1/media"
+TOKEN = "A" * 21 + "_-" + "b" * 20  # the 43-character shape `MediaStore` mints
+
+
+def _voiced_renderer() -> TwimlRenderer:
+    return TwimlRenderer(VoiceUrls(input=INPUT, wait=WAIT, media=MEDIA))
+
+
+def test_a_step_with_audio_plays_the_media_url_instead_of_saying_it():
+    listen = _parse(_voiced_renderer().render(Listen("How can I help?", 2, audio=TOKEN)))
+    hold = _parse(_voiced_renderer().render(Hold("One moment, please.", 2, 1, audio=TOKEN)))
+    close = _parse(_voiced_renderer().render(Close("Goodbye.", audio=TOKEN)))
+
+    gather = listen.find("Gather")
+    assert gather is not None
+    assert [child.tag for child in gather] == ["Play"]
+    assert gather[0].text == f"{MEDIA}/{TOKEN}"
+    assert [child.tag for child in hold] == ["Play", "Redirect"]
+    assert [child.tag for child in close] == ["Play", "Hangup"]
+    assert "Goodbye." not in _voiced_renderer().render(Close("Goodbye.", audio=TOKEN))
+
+
+def test_a_step_without_audio_or_with_a_malformed_token_says_the_line():
+    for audio in (None, "", "short", TOKEN + "x", "../../etc/passwd" + "a" * 27):
+        root = _parse(_voiced_renderer().render(Close("Goodbye.", audio=audio)))
+        assert [child.tag for child in root] == ["Say", "Hangup"], audio
+        assert root[0].text == "Goodbye."
+
+
+def test_steps_are_not_cacheable_unless_marked():
+    reply = step_for(_result("Sure, 2 PM works.", "book me at 2"), next_turn=2)
+    goodbye = step_for(_result("Bye!", "goodbye"), next_turn=2)
+
+    assert not reply.cacheable and not goodbye.cacheable
+    assert not Listen("x", 1).cacheable and not Hold("x", 1, 1).cacheable
+    assert not Close("x").cacheable

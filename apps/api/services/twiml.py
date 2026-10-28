@@ -11,8 +11,14 @@ A call is a loop of `CallStep`s decided by `services/call_session.py`:
 
 `step_for(result, ...)` maps an engine `TurnResult` to the next step: a reached usage
 limit (the quota fallback, which already points to the business's own contacts) and a
-caller saying goodbye end the call; anything else keeps listening. Swapping `<Say>` for
-`<Play>` (Gemini TTS, next slice) changes only this module.
+caller saying goodbye end the call; anything else keeps listening.
+
+Each step speaks one line. When the call session attached synthesized audio to it
+(`audio`, a media token from `services/speech.py`) the line is `<Play>`ed from
+`GET /api/v1/media/{token}`; otherwise (TTS off, over quota, failed, too slow) it is
+`<Say>`, in the same turn. `cacheable` marks a FIXED line (owner or platform text, never
+caller-derived) whose audio may be reused; it is False by default, so a model reply is
+never cached unless someone decides it explicitly.
 
 Every text goes through an XML builder, never string formatting, so nothing a caller or
 the model says can inject TwiML.
@@ -30,6 +36,8 @@ MAX_SAY_CHARS = 4000
 LANGUAGE = "en-US"
 
 GOODBYE = "Thanks for calling. Goodbye."
+# A media token as `services/media.py` mints it; anything else is never put in a URL.
+MEDIA_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
 
 
 @dataclass(frozen=True)
@@ -37,6 +45,8 @@ class Listen:
     text: str
     turn: int
     silences: int = 0
+    audio: str | None = None
+    cacheable: bool = False
 
 
 @dataclass(frozen=True)
@@ -44,11 +54,15 @@ class Hold:
     text: str
     turn: int
     attempt: int
+    audio: str | None = None
+    cacheable: bool = False
 
 
 @dataclass(frozen=True)
 class Close:
     text: str
+    audio: str | None = None
+    cacheable: bool = False
 
 
 CallStep = Listen | Hold | Close
@@ -60,6 +74,8 @@ class VoiceUrls:
 
     input: str
     wait: str
+    # Media URL prefix: `{media}/{token}` is what Twilio fetches for `<Play>`.
+    media: str = "/api/v1/media"
 
 
 class TwimlRenderer:
@@ -69,7 +85,7 @@ class TwimlRenderer:
     def render(self, step: CallStep) -> str:
         response = ElementTree.Element("Response")
         match step:
-            case Listen(text=text, turn=turn, silences=silences):
+            case Listen(turn=turn, silences=silences):
                 query = {"turn": str(turn)}
                 if silences:
                     query["silences"] = str(silences)
@@ -87,18 +103,25 @@ class TwimlRenderer:
                         "actionOnEmptyResult": "true",
                     },
                 )
-                _say(gather, text)
-            case Hold(text=text, turn=turn, attempt=attempt):
-                _say(response, text)
+                self._speak(gather, step)
+            case Hold(turn=turn, attempt=attempt):
+                self._speak(response, step)
                 redirect = ElementTree.SubElement(response, "Redirect", {"method": "POST"})
                 redirect.text = _with_query(
                     self._urls.wait, {"turn": str(turn), "attempt": str(attempt)}
                 )
-            case Close(text=text):
-                _say(response, text)
+            case Close():
+                self._speak(response, step)
                 ElementTree.SubElement(response, "Hangup")
         body = ElementTree.tostring(response, encoding="unicode")
         return f'<?xml version="1.0" encoding="UTF-8"?>{body}'
+
+    def _speak(self, parent: ElementTree.Element, step: CallStep) -> None:
+        if step.audio and MEDIA_TOKEN.fullmatch(step.audio):
+            play = ElementTree.SubElement(parent, "Play")
+            play.text = f"{self._urls.media}/{step.audio}"
+        else:
+            _say(parent, step.text)
 
 
 def step_for(result: TurnResult, *, next_turn: int) -> CallStep:
@@ -106,7 +129,8 @@ def step_for(result: TurnResult, *, next_turn: int) -> CallStep:
     (which already gives the business's contacts); a caller's goodbye ends the call after
     the agent's reply; otherwise keep listening."""
     if result.usage_limited:
-        return Close(f"{result.reply_text} {GOODBYE}")
+        # The quota fallback is built from the business's own contacts: a fixed line.
+        return Close(f"{result.reply_text} {GOODBYE}", cacheable=True)
     customer = next((m.text for m in result.messages if m.speaker == "customer"), "")
     if is_goodbye(customer):
         return Close(result.reply_text)

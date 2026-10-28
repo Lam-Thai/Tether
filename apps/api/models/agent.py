@@ -33,6 +33,9 @@ class Agent(Base):
     custom_instructions: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
+    # TTS voice name; NULL = the settings default voice, 'standard' = Twilio <Say>.
+    # No CHECK: the allowed list comes from settings.
+    voice: Mapped[str | None] = mapped_column(String, nullable=True)
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )

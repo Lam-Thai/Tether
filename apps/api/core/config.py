@@ -141,6 +141,32 @@ class Settings(BaseSettings):
     # ...at most this many times before an apology and a clean hang-up.
     voice_max_holds: int = Field(default=3, ge=1, le=5)
 
+    # Gemini TTS (integrations/tts, services/speech.py). Uses `gemini_api_key`; without
+    # it every call line falls back to Twilio's <Say>. Never hardcode the model.
+    gemini_tts_model: str = "gemini-2.5-flash-preview-tts"
+    # Ceiling on one synthesis (retry included) on a call; past it the line is <Say>.
+    # The call webhook also caps it by what is left of Twilio's ~15 s timeout.
+    tts_timeout_seconds: float = Field(default=5.0, gt=0, le=14)
+    # The voices an owner may pick (Gemini prebuilt voice names), and the one every agent
+    # uses until its owner picks another. The default must be in the list.
+    tts_voices: Annotated[list[str], NoDecode] = [
+        "Kore",
+        "Puck",
+        "Charon",
+        "Aoede",
+        "Fenrir",
+        "Leda",
+        "Orus",
+        "Zephyr",
+    ]
+    tts_default_voice: str = "Kore"
+    # How long a media URL (`GET /api/v1/media/{token}`) works, and how long a call
+    # reply's audio is kept. Twilio fetches it right after the TwiML is served.
+    media_token_ttl_seconds: int = Field(default=300, ge=30, le=900)
+    # How long synthesized FIXED lines (greeting, holding phrase, reprompt; owner or
+    # platform text, never caller-derived) are reused before being synthesized again.
+    tts_cache_ttl_seconds: int = Field(default=86400, ge=0, le=7 * 86400)
+
     # Eval harness (`uv run tether-eval`, evals/runner.py). The tier picks the defaults
     # in `evals.runner.TIER_LIMITS`; each value below overrides one of them when set.
     eval_tier: Literal["free", "paid"] = "free"
@@ -261,6 +287,22 @@ class Settings(BaseSettings):
     def _split_clerk_authorized_parties(cls, value: object) -> object:
         return _split_csv_or_json(value)
 
+    @field_validator("tts_voices", mode="before")
+    @classmethod
+    def _split_tts_voices(cls, value: object) -> object:
+        return _split_csv_or_json(value)
+
+    @model_validator(mode="after")
+    def _tts_voices_are_usable(self) -> "Settings":
+        # Voice names reach Gemini's API and the owner's UI: plain names only.
+        if not self.tts_voices or not all(_VOICE_NAME.fullmatch(v) for v in self.tts_voices):
+            raise ValueError("TTS_VOICES must be a non-empty list of voice names.")
+        if len(set(self.tts_voices)) != len(self.tts_voices) or "standard" in self.tts_voices:
+            raise ValueError("TTS_VOICES must be unique and must not include 'standard'.")
+        if self.tts_default_voice not in self.tts_voices:
+            raise ValueError("TTS_DEFAULT_VOICE must be one of TTS_VOICES.")
+        return self
+
     @property
     def calendar_redirect_uri(self) -> str:
         """Where Google sends the owner back: a page of the web app, never the API."""
@@ -287,6 +329,8 @@ class Settings(BaseSettings):
 
 
 _KEY_ID = re.compile(r"[a-z0-9_-]{1,32}")
+# A Gemini prebuilt voice name, e.g. "Kore".
+_VOICE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,39}")
 
 
 def parse_token_keys(raw: str) -> tuple[dict[str, bytes], str]:
