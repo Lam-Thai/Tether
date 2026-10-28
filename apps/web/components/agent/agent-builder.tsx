@@ -8,7 +8,13 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useAuth } from "@clerk/nextjs";
 import { CircleCheck } from "lucide-react";
 
-import { updateAgent, type AgentRead, type AgentUpdate } from "@/lib/api/client";
+import {
+  updateAgent,
+  type AgentRead,
+  type AgentUpdate,
+  type VoiceListResult,
+} from "@/lib/api/client";
+import { VoiceField } from "@/components/agent/voice-field";
 import {
   AGENT_LIMITS,
   TONE_OPTIONS,
@@ -29,6 +35,7 @@ function toFormValues(agent: AgentRead): AgentFormValues {
     name: agent.name,
     greeting: agent.greeting,
     tone: agent.tone,
+    voice: agent.voice,
     custom_instructions: agent.custom_instructions,
   };
 }
@@ -39,6 +46,7 @@ export function changedFields(values: AgentFormValues, saved: AgentRead): AgentU
   if (values.name !== saved.name) patch.name = values.name;
   if (values.greeting !== saved.greeting) patch.greeting = values.greeting;
   if (values.tone !== saved.tone) patch.tone = values.tone;
+  if (values.voice !== saved.voice) patch.voice = values.voice;
   if (values.custom_instructions !== saved.custom_instructions) {
     patch.custom_instructions = values.custom_instructions;
   }
@@ -51,7 +59,7 @@ type SaveState =
   | { kind: "error"; message: string }
   | { kind: "subscription_required" };
 
-export function AgentBuilder({ agent }: { agent: AgentRead }) {
+export function AgentBuilder({ agent, voices }: { agent: AgentRead; voices: VoiceListResult }) {
   const { getToken } = useAuth();
   const router = useRouter();
   const [saved, setSaved] = useState<AgentRead>(agent);
@@ -69,6 +77,8 @@ export function AgentBuilder({ agent }: { agent: AgentRead }) {
     defaultValues: toFormValues(agent),
   });
 
+  const selectedVoice = useWatch({ control, name: "voice" }) ?? agent.voice;
+  const draftGreeting = useWatch({ control, name: "greeting" }) ?? "";
   const instructionsLength = (useWatch({ control, name: "custom_instructions" }) ?? "").length;
 
   async function onSubmit(values: AgentFormValues) {
@@ -244,6 +254,13 @@ export function AgentBuilder({ agent }: { agent: AgentRead }) {
                 </div>
               )}
             </div>
+
+            <VoiceField
+              voices={voices}
+              selectProps={register("voice")}
+              selected={selectedVoice}
+              greetingChanged={draftGreeting.trim() !== saved.greeting}
+            />
           </fieldset>
 
           <div className="flex items-center gap-4">

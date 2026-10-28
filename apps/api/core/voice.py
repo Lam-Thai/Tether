@@ -31,6 +31,8 @@ from core.config import settings
 from core.conversation import CalendarDeps, build_conversation_engine, get_conversation_engine
 from core.db import async_session_factory, get_session
 from core.llm import get_llm_client
+from core.media import MEDIA_PATH
+from core.speech import get_speech_synthesizer
 from core.summaries import build_summarizer
 from core.tenant import Tenant
 from core.twilio import get_notifier
@@ -66,6 +68,7 @@ from services.lifecycle import InteractionLifecycle
 from services.notifier import Notifier
 from services.oauth_state import OAuthStateSigner
 from services.phone_numbers import PhoneNumberService, WebhookTargets
+from services.speech import SpeechSynthesizer
 from services.token_vault import TokenVault
 from services.twiml import TwimlRenderer, VoiceUrls
 from services.usage import ConcurrencyLimitedError, UsageGuard
@@ -129,7 +132,9 @@ def get_voice_settings() -> VoiceSettings:
 
 
 def get_twiml_renderer() -> TwimlRenderer:
-    return TwimlRenderer(VoiceUrls(input=_public(INPUT_PATH), wait=_public(WAIT_PATH)))
+    return TwimlRenderer(
+        VoiceUrls(input=_public(INPUT_PATH), wait=_public(WAIT_PATH), media=_public(MEDIA_PATH))
+    )
 
 
 async def tenant_for_business(session: AsyncSession, business_id: uuid.UUID) -> Tenant | None:
@@ -166,6 +171,7 @@ class SqlCallStore:
             greeting=agent.greeting,
             agent_active=agent.active,
             entitled=access_for(subscription).entitled,
+            voice=agent.voice,
         )
 
     async def lock_admission_and_count(
@@ -289,6 +295,7 @@ def get_call_session(
     clock: Callable[[], datetime] = Depends(get_clock),
     notifier: Notifier = Depends(get_notifier),
     voice: VoiceSettings = Depends(get_voice_settings),
+    speech: SpeechSynthesizer = Depends(get_speech_synthesizer),
 ) -> CallSessionService:
     calendar = CalendarDeps(calendar_api, vault, signer, calendar_config)
 
@@ -339,5 +346,6 @@ def get_call_session(
         replay=replay,
         end=end,
         settings=voice,
+        speech=speech,
         # Call duration is wall time; `clock` is the business clock tests may pin.
     )

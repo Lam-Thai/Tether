@@ -8,6 +8,7 @@ import type {
   EscalationSettingsResult,
   FaqListResult,
   ServiceListResult,
+  VoiceListResult,
 } from "@/lib/api/client";
 import { AgentBuilder } from "@/components/agent/agent-builder";
 import { BookingRulesEditor } from "@/components/agent/booking-rules-editor";
@@ -35,6 +36,7 @@ export function AgentWorkspace({
   hours,
   bookingRules,
   escalationSettings,
+  voices,
 }: {
   agent: AgentResult;
   chat: ChatLoad;
@@ -44,6 +46,7 @@ export function AgentWorkspace({
   hours: BusinessHoursResult;
   bookingRules: BookingRulesResult;
   escalationSettings: EscalationSettingsResult;
+  voices: VoiceListResult;
 }) {
   switch (agent.kind) {
     case "ok":
@@ -52,7 +55,7 @@ export function AgentWorkspace({
           <h1 className="text-h1 font-bold tracking-tight uppercase">Agent</h1>
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
             <div className="flex min-w-0 flex-col gap-6">
-              <AgentBuilder agent={agent.data} />
+              <AgentBuilder agent={agent.data} voices={voices} />
               <BusinessInfoForm result={business} />
               <FaqManager result={faqs} />
               <ServicesManager result={services} />

@@ -10,6 +10,7 @@ import {
   getTestTranscript,
   listFaqs,
   listServices,
+  listVoices,
 } from "@/lib/api/client";
 import type { ChatLoad } from "@/components/agent/test-chat";
 import { AgentWorkspace } from "@/components/agent/agent-workspace";
@@ -34,7 +35,7 @@ export default async function AgentPage({
   const { chat } = await searchParams;
   const chatId = typeof chat === "string" && UUID.test(chat) ? chat : null;
 
-  const [agent, transcript, faqs, business, services, hours, bookingRules, escalationSettings] = await Promise.all([
+  const [agent, transcript, faqs, business, services, hours, bookingRules, escalationSettings, voices] = await Promise.all([
     getAgent(token),
     chatId ? getTestTranscript(token, chatId) : Promise.resolve(null),
     listFaqs(token),
@@ -43,6 +44,7 @@ export default async function AgentPage({
     getBusinessHours(token),
     getBookingRules(token),
     getEscalationSettings(token),
+    listVoices(token),
   ]);
 
   if (agent.kind === "unauthorized") redirect("/sign-in");
@@ -54,7 +56,8 @@ export default async function AgentPage({
     services.kind === "unauthorized" ||
     hours.kind === "unauthorized" ||
     bookingRules.kind === "unauthorized" ||
-    escalationSettings.kind === "unauthorized"
+    escalationSettings.kind === "unauthorized" ||
+    voices.kind === "unauthorized"
   ) {
     redirect("/sign-in");
   }
@@ -62,7 +65,8 @@ export default async function AgentPage({
     services.kind === "subscription_required" ||
     hours.kind === "subscription_required" ||
     bookingRules.kind === "subscription_required" ||
-    escalationSettings.kind === "subscription_required"
+    escalationSettings.kind === "subscription_required" ||
+    voices.kind === "subscription_required"
   ) {
     redirect("/billing/plan");
   }
@@ -101,6 +105,7 @@ export default async function AgentPage({
       hours={hours}
       bookingRules={bookingRules}
       escalationSettings={escalationSettings}
+      voices={voices}
     />
   );
 }

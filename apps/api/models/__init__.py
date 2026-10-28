@@ -13,6 +13,7 @@ from models.escalation import Escalation, EscalationSettingsRow
 from models.faq import Faq
 from models.hours import BusinessHours
 from models.interaction import Interaction, InteractionMessage
+from models.media import MediaObject, MediaToken
 from models.operation import InteractionOperation
 from models.phone_number import PhoneNumber
 from models.service import Service
@@ -33,6 +34,8 @@ __all__ = [
     "Interaction",
     "InteractionMessage",
     "InteractionOperation",
+    "MediaObject",
+    "MediaToken",
     "PhoneNumber",
     "Service",
     "StripeEvent",

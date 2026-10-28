@@ -10,6 +10,8 @@ NameStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, 
 GreetingStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
 InstructionsStr = Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)]
 MessageStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
+# A voice id from `GET /agent/voices`; which ids exist is settings-driven, checked by the service.
+VoiceStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
 
 
 class AgentRead(BaseModel):
@@ -21,6 +23,8 @@ class AgentRead(BaseModel):
     greeting: str
     custom_instructions: str
     active: bool
+    # The effective voice: a Gemini voice name, or `standard` (Twilio's <Say>).
+    voice: str
     updated_at: datetime
 
 
@@ -31,6 +35,7 @@ class AgentUpdate(BaseModel):
     tone: Tone | None = None
     greeting: GreetingStr | None = None
     custom_instructions: InstructionsStr | None = None
+    voice: VoiceStr | None = None
 
     @model_validator(mode="after")
     def _no_explicit_nulls(self) -> "AgentUpdate":
@@ -38,6 +43,25 @@ class AgentUpdate(BaseModel):
             if getattr(self, field_name) is None:
                 raise ValueError(f"{field_name} cannot be null.")
         return self
+
+
+class VoiceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    label: str
+    description: str
+
+
+class VoicesRead(BaseModel):
+    voices: list[VoiceRead]
+    default_voice: str
+    # False: no Gemini key, so every call uses the standard voice whatever is picked.
+    tts_configured: bool
+
+
+class VoicePreviewCreate(BaseModel):
+    voice: VoiceStr
 
 
 class TestTurnCreate(BaseModel):

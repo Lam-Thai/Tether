@@ -616,6 +616,8 @@ export interface AgentRead {
   tone: AgentTone;
   greeting: string;
   custom_instructions: string;
+  /** Effective voice id: a Gemini voice name such as "Kore", or "standard" (the phone carrier's voice). */
+  voice: string;
   active: boolean;
   updated_at: string;
 }
@@ -626,6 +628,7 @@ export interface AgentUpdate {
   tone?: AgentTone;
   greeting?: string;
   custom_instructions?: string;
+  voice?: string;
 }
 
 export interface MessageRead {
@@ -720,6 +723,7 @@ function isAgentRead(value: unknown): value is AgentRead {
     (value.tone === "friendly" || value.tone === "professional" || value.tone === "concise") &&
     typeof value.greeting === "string" &&
     typeof value.custom_instructions === "string" &&
+    typeof value.voice === "string" &&
     typeof value.active === "boolean" &&
     typeof value.updated_at === "string"
   );
@@ -2514,6 +2518,126 @@ export async function disconnectPhoneNumber(token: string, id: string): Promise<
   if (outcome.status === 404 && errorCode(outcome.body) === "phone_number_not_found") return { kind: "not_found" };
   if (outcome.status === 200 && isRecord(outcome.body) && typeof outcome.body.webhooks_cleared === "boolean") {
     return { kind: "ok", webhooksCleared: outcome.body.webhooks_cleared };
+  }
+  return UNEXPECTED;
+}
+
+// Receptionist voice (`/agent/voices`, `/agent/voice-preview`). Previews are
+// synthesized by the API (Gemini TTS); this app only plays the bytes it returns.
+
+const VOICE_PREVIEW_TIMEOUT_MS = 30000;
+
+export interface VoiceOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface VoiceList {
+  voices: VoiceOption[];
+  default_voice: string;
+  /** False in demo mode: calls use the standard voice whatever is picked. */
+  tts_configured: boolean;
+}
+
+export type VoiceListResult =
+  | { kind: "ok"; data: VoiceList }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type VoicePreviewResult =
+  | { kind: "ok"; audio: Blob }
+  /** 429 `usage_limit_reached`: the daily voice limit is used up (resets 00:00 UTC). */
+  | { kind: "usage_limited" }
+  /** 503 `tts_unavailable` / `tts_not_configured`. */
+  | { kind: "unavailable" }
+  /** 422 `unknown_voice` / `preview_unavailable`. */
+  | { kind: "invalid"; message: string }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+function isVoiceOption(value: unknown): value is VoiceOption {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.label === "string" &&
+    typeof value.description === "string"
+  );
+}
+
+function isVoiceList(value: unknown): value is VoiceList {
+  if (!isRecord(value)) return false;
+  return (
+    Array.isArray(value.voices) &&
+    value.voices.every(isVoiceOption) &&
+    typeof value.default_voice === "string" &&
+    typeof value.tts_configured === "boolean"
+  );
+}
+
+/** Calls `GET /api/v1/agent/voices`. */
+export async function listVoices(token: string): Promise<VoiceListResult> {
+  const outcome = await fetchApi("/agent/voices", { headers: authHeaders(token) }, AGENT_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isVoiceList(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/**
+ * Calls `POST /api/v1/agent/voice-preview`. A 200 carries `audio/wav` bytes
+ * (not JSON), so this reads the body as a Blob; every error is a JSON envelope.
+ */
+export async function previewVoice(token: string, voice: string): Promise<VoicePreviewResult> {
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (!baseUrl) {
+    return { kind: "unreachable", reason: "NEXT_PUBLIC_API_BASE_URL is not configured." };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${normalizeBaseUrl(baseUrl)}/api/v1/agent/voice-preview`, {
+      method: "POST",
+      headers: jsonAuthHeaders(token),
+      body: JSON.stringify({ voice }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(VOICE_PREVIEW_TIMEOUT_MS),
+    });
+  } catch {
+    return {
+      kind: "unreachable",
+      reason: "Could not reach the API. It may be down or unreachable from here.",
+    };
+  }
+
+  if (response.status === 200) {
+    const type = response.headers.get("content-type") ?? "";
+    if (!type.toLowerCase().startsWith("audio/")) return UNEXPECTED;
+    try {
+      const audio = await response.blob();
+      return audio.size > 0 ? { kind: "ok", audio } : UNEXPECTED;
+    } catch {
+      return { kind: "unreachable", reason: "The API returned a response that could not be read." };
+    }
+  }
+
+  let body: unknown = null;
+  try {
+    body = await response.json();
+  } catch {
+    // Non-JSON error body: fall through to the status-only mapping.
+  }
+
+  if (response.status === 401) return { kind: "unauthorized" };
+  if (response.status === 402) return { kind: "subscription_required" };
+  if (response.status === 429) return errorCode(body) === "usage_limit_reached" ? { kind: "usage_limited" } : UNEXPECTED;
+  if (response.status === 503) return { kind: "unavailable" };
+  if (response.status === 422) {
+    return { kind: "invalid", message: isApiErrorBody(body) ? body.error.message : "That voice cannot be previewed." };
   }
   return UNEXPECTED;
 }
