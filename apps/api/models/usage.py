@@ -35,6 +35,7 @@ USAGE_KINDS = (
     "gemini_request",
     "gemini_tokens",
     "tts_request",
+    "stt_request",
     "call",
     "call_seconds",
     "sms",

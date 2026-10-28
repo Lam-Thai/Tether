@@ -56,6 +56,8 @@ class UsageKind(StrEnum):
     GEMINI_REQUEST = "gemini_request"
     GEMINI_TOKENS = "gemini_tokens"
     TTS_REQUEST = "tts_request"
+    # One Gemini transcription of a caller's recording (VOICE_INPUT_MODE=gemini_audio).
+    STT_REQUEST = "stt_request"
     CALL = "call"
     CALL_SECONDS = "call_seconds"
     SMS = "sms"
@@ -70,6 +72,7 @@ PROVIDER: Mapping[UsageKind, str] = {
     UsageKind.GEMINI_REQUEST: "gemini",
     UsageKind.GEMINI_TOKENS: "gemini",
     UsageKind.TTS_REQUEST: "gemini",
+    UsageKind.STT_REQUEST: "gemini",
     UsageKind.CALL: "twilio",
     UsageKind.CALL_SECONDS: "twilio",
     UsageKind.SMS: "twilio",
@@ -78,11 +81,21 @@ PROVIDER: Mapping[UsageKind, str] = {
     UsageKind.TELEPHONY_API: "twilio",
 }
 
+# Gemini requests whose tokens count toward `gemini_tokens` and the estimated cost (an
+# audio transcription is billed in tokens like a chat turn).
+TOKEN_KINDS = frozenset({UsageKind.GEMINI_REQUEST, UsageKind.STT_REQUEST})
+
 # Bounds the best-effort bookkeeping after a call, so it can't stretch a deadline.
 RECORD_TIMEOUT_SECONDS = 2.0
 
 # The kinds the owner's Usage panel shows against a daily limit, in display order.
-PANEL_KINDS = (UsageKind.GEMINI_REQUEST, UsageKind.TTS_REQUEST, UsageKind.CALL, UsageKind.SMS)
+PANEL_KINDS = (
+    UsageKind.GEMINI_REQUEST,
+    UsageKind.TTS_REQUEST,
+    UsageKind.STT_REQUEST,
+    UsageKind.CALL,
+    UsageKind.SMS,
+)
 
 LimitScope = Literal["global", "business"]
 ReserveOutcome = Literal["ok", "global", "business"]
@@ -312,7 +325,7 @@ class UsageGuard:
         await self._record_quietly(self._consumption(kind, meter, event), window)
 
     def _consumption(self, kind: UsageKind, meter: Meter, request: UsageEvent) -> list[UsageEvent]:
-        if kind is not UsageKind.GEMINI_REQUEST or not (meter.tokens_in or meter.tokens_out):
+        if kind not in TOKEN_KINDS or not (meter.tokens_in or meter.tokens_out):
             return []
         return [
             UsageEvent(

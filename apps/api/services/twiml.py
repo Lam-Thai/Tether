@@ -5,6 +5,13 @@ A call is a loop of `CallStep`s decided by `services/call_session.py`:
 - `Listen(text, turn)`: say `text`, then gather the caller's speech and post it to the
   input webhook as turn `turn` (silence posts too, with no `SpeechResult`, so the
   backend decides the reprompt; `silences` rides in the URL Twilio signs).
+  With `RecordSettings` (`VOICE_INPUT_MODE=gemini_audio`, slice 15b) the caller is
+  RECORDED instead (`<Record>`, no beep, no Twilio transcription) and the input webhook
+  gets the `RecordingSid`; Twilio skips the action when nothing was recorded, so a
+  `<Redirect>` to the same URL follows and posts the silence. A step with `stt=True`
+  (a transcription failed earlier in the call) gathers speech with Twilio's recognizer
+  again, and the flag rides in every later URL (input and wait), never in server memory.
+  The caller can't barge in on a line before `<Record>` (only `<Gather>` allows that).
 - `Hold(text, turn, attempt)`: say a short holding phrase and redirect to the wait
   webhook, which returns the turn's reply once a worker has stored it.
 - `Close(text)`: say `text` and hang up.
@@ -47,6 +54,7 @@ class Listen:
     silences: int = 0
     audio: str | None = None
     cacheable: bool = False
+    stt: bool = False  # Twilio's speech recognition for the rest of the call
 
 
 @dataclass(frozen=True)
@@ -56,6 +64,7 @@ class Hold:
     attempt: int
     audio: str | None = None
     cacheable: bool = False
+    stt: bool = False
 
 
 @dataclass(frozen=True)
@@ -78,17 +87,31 @@ class VoiceUrls:
     media: str = "/api/v1/media"
 
 
+@dataclass(frozen=True)
+class RecordSettings:
+    """`<Record>` for one utterance: its cap and the silence that ends it (seconds)."""
+
+    max_seconds: int
+    silence_seconds: int
+
+
 class TwimlRenderer:
-    def __init__(self, urls: VoiceUrls) -> None:
+    def __init__(self, urls: VoiceUrls, *, record: RecordSettings | None = None) -> None:
         self._urls = urls
+        self._record = record
 
     def render(self, step: CallStep) -> str:
         response = ElementTree.Element("Response")
         match step:
-            case Listen(turn=turn, silences=silences):
+            case Listen(turn=turn, silences=silences, stt=stt):
                 query = {"turn": str(turn)}
                 if silences:
                     query["silences"] = str(silences)
+                if stt:
+                    query["stt"] = "1"
+                if self._record is not None and not stt:
+                    self._recorded(response, step, _with_query(self._urls.input, query))
+                    return _document(response)
                 gather = ElementTree.SubElement(
                     response,
                     "Gather",
@@ -104,17 +127,36 @@ class TwimlRenderer:
                     },
                 )
                 self._speak(gather, step)
-            case Hold(turn=turn, attempt=attempt):
+            case Hold(turn=turn, attempt=attempt, stt=stt):
                 self._speak(response, step)
                 redirect = ElementTree.SubElement(response, "Redirect", {"method": "POST"})
-                redirect.text = _with_query(
-                    self._urls.wait, {"turn": str(turn), "attempt": str(attempt)}
-                )
+                query = {"turn": str(turn), "attempt": str(attempt)}
+                if stt:
+                    query["stt"] = "1"
+                redirect.text = _with_query(self._urls.wait, query)
             case Close():
                 self._speak(response, step)
                 ElementTree.SubElement(response, "Hangup")
-        body = ElementTree.tostring(response, encoding="unicode")
-        return f'<?xml version="1.0" encoding="UTF-8"?>{body}'
+        return _document(response)
+
+    def _recorded(self, response: ElementTree.Element, step: Listen, action: str) -> None:
+        assert self._record is not None
+        self._speak(response, step)
+        ElementTree.SubElement(
+            response,
+            "Record",
+            {
+                "action": action,
+                "method": "POST",
+                "maxLength": str(self._record.max_seconds),
+                "timeout": str(self._record.silence_seconds),
+                "playBeep": "false",
+                "trim": "trim-silence",
+            },
+        )
+        # Reached only when nothing was recorded (Twilio then skips the action).
+        redirect = ElementTree.SubElement(response, "Redirect", {"method": "POST"})
+        redirect.text = action
 
     def _speak(self, parent: ElementTree.Element, step: CallStep) -> None:
         if step.audio and MEDIA_TOKEN.fullmatch(step.audio):
@@ -122,6 +164,11 @@ class TwimlRenderer:
             play.text = f"{self._urls.media}/{step.audio}"
         else:
             _say(parent, step.text)
+
+
+def _document(response: ElementTree.Element) -> str:
+    body = ElementTree.tostring(response, encoding="unicode")
+    return f'<?xml version="1.0" encoding="UTF-8"?>{body}'
 
 
 def step_for(result: TurnResult, *, next_turn: int) -> CallStep:

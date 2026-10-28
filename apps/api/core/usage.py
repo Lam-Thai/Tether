@@ -39,6 +39,9 @@ def usage_limits(config: Settings) -> UsageLimits:
             UsageKind.TTS_REQUEST: DailyLimit(
                 config.tts_requests_per_day, config.tts_requests_per_business_per_day
             ),
+            UsageKind.STT_REQUEST: DailyLimit(
+                config.stt_requests_per_day, config.stt_requests_per_business_per_day
+            ),
             UsageKind.CALL: DailyLimit(config.calls_per_day, config.calls_per_business_per_day),
             UsageKind.SMS: DailyLimit(config.sms_per_day, config.sms_per_business_per_day),
         },

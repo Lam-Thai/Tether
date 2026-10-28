@@ -37,13 +37,25 @@ Four calls, one per webhook (`start` = voice, `respond` = input, `resume` = wait
   a model reply never is. Refusals (unknown number, no plan, inactive agent, limits)
   are never synthesized: they touch no business data and spend nothing.
   Latency: the worker logs `llm_ms` (the whole engine turn), each webhook logs
-  `tts_ms` and `latency_ms` (`tether.voice`); speech-to-text happens at Twilio before
-  the input webhook arrives, so it is not observable here.
+  `tts_ms` and `latency_ms` (`tether.voice`); with `twilio_stt`, speech-to-text happens
+  at Twilio before the input webhook arrives, so it is not observable here.
+- Gemini audio input (slice 15b, `VOICE_INPUT_MODE=gemini_audio`): with a configured
+  `SpeechRecognizer` the caller is recorded instead and `respond` gets a `Recording`. It
+  is transcribed in the webhook, before the turn is claimed (so the stored utterance is
+  text, as before), inside what is left of the response budget, and deleted at Twilio on
+  every path: a replayed or already-claimed turn, a call past its time limit and a call
+  that already ended (the caller hung up mid-recording) delete it untranscribed, and
+  `complete` sweeps whatever a failed delete left. A failed transcription (over quota,
+  provider or Twilio failure) never guesses: the caller hears `NOT_HEARD_LINE` in the
+  same turn and the rest of the call uses Twilio's recognizer (`stt` rides in the signed
+  URLs, like `silences`). An empty transcript is silence. Every voice turn log line
+  carries `input_mode`, plus `fetch_ms` and `stt_ms` when a recording was transcribed.
 
 No FastAPI or SQLAlchemy imports: everything comes in through ports.
 """
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -60,6 +72,7 @@ from models.phone_number import PhoneNumber
 from services.conversation import TurnResult, quota_fallback
 from services.redaction import redact
 from services.speech import SpeechSynthesizer
+from services.speech_input import Recording, SpeechRecognizer, Transcript
 from services.twiml import GOODBYE, CallStep, Close, Hold, Listen, step_for
 from services.usage import (
     ActiveCounts,
@@ -90,6 +103,11 @@ NO_INPUT_LINE = "I didn't hear anything, so I'll end the call now. Goodbye."
 HOLDING_LINE = "One moment, please."
 STILL_HOLDING_LINE = "Thanks for waiting, I'm still working on that."
 TROUBLE_LINE = "Sorry, I had trouble with that. Could you say it again?"
+# The recording couldn't be transcribed: ask again (now through Twilio's recognizer).
+NOT_HEARD_LINE = "Sorry, I didn't quite catch that. Could you say it again?"
+
+INPUT_TWILIO_STT = "twilio_stt"
+INPUT_GEMINI_AUDIO = "gemini_audio"
 
 
 def turn_key(turn: int) -> str:
@@ -262,6 +280,16 @@ class _Call:
     target: CallTarget
 
 
+@dataclass
+class _Input:
+    """How one webhook heard the caller: `stt` once the call uses Twilio's recognizer
+    (always in twilio_stt mode), and the transcript's timings when one was made."""
+
+    stt: bool
+    transcript: Transcript | None = None
+    handed_over: bool = False  # the recording went to `transcribe`, which deletes it
+
+
 class CallSessionService:
     def __init__(
         self,
@@ -274,6 +302,7 @@ class CallSessionService:
         end: Ender,
         settings: VoiceSettings,
         speech: SpeechSynthesizer | None = None,
+        recognizer: SpeechRecognizer | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
@@ -284,6 +313,12 @@ class CallSessionService:
         self._end = end
         self._settings = settings
         self._speech = speech
+        # Present whenever Twilio is configured, so a recording is always deleted (even
+        # with the mode switched off mid-call). Recording mode only when it can also
+        # transcribe; `core/voice` gives the renderer its `RecordSettings` on the same
+        # condition, so the two always agree.
+        self._recognizer = recognizer
+        self._records = recognizer is not None and recognizer.configured
         self._clock = clock
 
     # --- webhooks ----------------------------------------------------------------------
@@ -362,16 +397,46 @@ class CallSessionService:
         )
 
     async def respond(
-        self, call_sid: str, turn: int, silences: int, speech: str | None
+        self,
+        call_sid: str,
+        turn: int,
+        silences: int,
+        speech: str | None,
+        *,
+        recording: Recording | None = None,
+        stt: bool = False,
     ) -> CallStep:
+        """One caller utterance: Twilio's transcript (`speech`), or a `recording` to
+        transcribe (gemini_audio). `stt`: this call already fell back to Twilio's
+        recognizer."""
         started = time.monotonic()
-        call = await self._active_call(call_sid)
-        if not isinstance(call, _Call):
-            return call
-        step = await self._respond(call, turn, silences, (speech or "").strip())
-        return await self._voiced_and_logged(call, turn, started, step, "respond")
+        heard = _Input(stt=stt or not self._records)
+        call: _Call | Close | None = None
+        try:
+            call = await self._active_call(call_sid)
+            if not isinstance(call, _Call):
+                return call
+            step = await self._respond(
+                call,
+                turn,
+                silences,
+                (speech or "").strip(),
+                recording if self._records else None,
+                heard,
+            )
+        finally:
+            # Retention (PRD §13.4): a recording not handed to `transcribe` (which deletes
+            # it itself) is deleted here on every other path: replayed or claimed turns,
+            # the time limit, an ended or unknown call, recording mode switched off
+            # mid-call, and any exception above.
+            if recording is not None and not heard.handed_over:
+                await self._discard(recording, call if isinstance(call, _Call) else None)
+        assert isinstance(call, _Call)
+        return await self._voiced_and_logged(call, turn, started, step, "respond", heard)
 
-    async def resume(self, call_sid: str, turn: int, attempt: int) -> CallStep:
+    async def resume(
+        self, call_sid: str, turn: int, attempt: int, *, stt: bool = False
+    ) -> CallStep:
         started = time.monotonic()
         call = await self._active_call(call_sid)
         if not isinstance(call, _Call):
@@ -379,7 +444,8 @@ class CallSessionService:
         await self._store.checkpoint()
         # The wait leaves room to synthesize the reply inside Twilio's timeout.
         step = await self._await_turn(call, turn, attempt, self._wait_budget())
-        return await self._voiced_and_logged(call, turn, started, step, "resume")
+        heard = _Input(stt=stt or not self._records)
+        return await self._voiced_and_logged(call, turn, started, step, "resume", heard)
 
     async def complete(self, call_sid: str, status: str, duration_seconds: int | None) -> None:
         """A call status callback. Only a terminal status ends the interaction."""
@@ -389,30 +455,71 @@ class CallSessionService:
         if interaction is None:
             return  # acknowledged and ignored: not a call we started
         business_id, interaction_id = interaction.business_id, interaction.id
-        target = await self._store.call_target(business_id)
-        if target is None:
-            return
-        closed = await self._end(target.tenant, interaction_id)
-        # Once per call: only the callback that closed it records the seconds. If the idle
-        # sweep closed it first they go unrecorded (an undercount, never a double count).
-        if closed and duration_seconds:
-            await self._usage.record(
-                UsageKind.CALL_SECONDS,
-                duration_seconds,
-                business_id=business_id,
-                interaction_id=interaction_id,
+        try:
+            target = await self._store.call_target(business_id)
+            if target is None:
+                return
+            closed = await self._end(target.tenant, interaction_id)
+            # Once per call: only the callback that closed it records the seconds. If the
+            # idle sweep closed it first they go unrecorded (undercount, never double).
+            if closed and duration_seconds:
+                await self._usage.record(
+                    UsageKind.CALL_SECONDS,
+                    duration_seconds,
+                    business_id=business_id,
+                    interaction_id=interaction_id,
+                )
+            logger.info(
+                "call ended",
+                extra={
+                    "interaction_id": str(interaction_id),
+                    "call_status": status,
+                    "closed": closed,
+                },
             )
-        logger.info(
-            "call ended",
-            extra={"interaction_id": str(interaction_id), "call_status": status, "closed": closed},
-        )
+        finally:
+            if self._records and self._recognizer is not None:
+                # After the close (bounded, never raises), even if closing failed: whatever
+                # a failed delete left at Twilio goes (PRD §13.4).
+                with contextlib.suppress(Exception):
+                    await self._store.checkpoint()
+                await self._recognizer.sweep(
+                    call_sid, business_id=business_id, interaction_id=interaction_id
+                )
 
     # --- turns ---------------------------------------------------------------------------
 
-    async def _respond(self, call: _Call, turn: int, silences: int, speech: str) -> CallStep:
+    async def _respond(
+        self,
+        call: _Call,
+        turn: int,
+        silences: int,
+        speech: str,
+        recording: Recording | None,
+        heard: _Input,
+    ) -> CallStep:
         interaction, target = call.interaction, call.target
+        hold_after = self._settings.hold_after_seconds
         if self._over_time(interaction):
-            return Close(time_limit_line(target.business), cacheable=True)
+            return Close(time_limit_line(target.business), cacheable=True)  # `respond` deletes
+        if recording is not None:
+            listening = time.monotonic()
+            if await self._turn_taken(call, turn):
+                # A retried webhook: the turn is answered or being answered; `respond`
+                # deletes its recording untranscribed.
+                return await self._await_turn(call, turn, 0, hold_after)
+            heard.handed_over = True  # from here on `transcribe` owns the delete
+            transcript = await self._transcribe(call, recording)
+            if transcript is None:
+                if await self._turn_taken(call, turn):  # a duplicate claimed it meanwhile
+                    return await self._await_turn(call, turn, 0, hold_after)
+                # Never a guessed utterance: ask again, through Twilio's recognizer now.
+                heard.stt = True
+                return Listen(NOT_HEARD_LINE, turn, silences, cacheable=True)
+            heard.transcript = transcript
+            speech = transcript.text
+            # The caller still hears something about `hold_after` after they stop talking.
+            hold_after = max(hold_after - (time.monotonic() - listening), self._min_wait())
         if not speech:
             if silences + 1 >= self._settings.max_silences:
                 return Close(NO_INPUT_LINE, cacheable=True)
@@ -430,9 +537,43 @@ class CallSessionService:
         )
         if not view.created:
             # A retried webhook: the first delivery's worker owns this turn. Wait for it.
-            return await self._await_turn(call, turn, 0, self._settings.hold_after_seconds)
-        return await self._run_and_wait(
-            call, view.id, claim, utterance, turn, 0, self._settings.hold_after_seconds
+            return await self._await_turn(call, turn, 0, hold_after)
+        return await self._run_and_wait(call, view.id, claim, utterance, turn, 0, hold_after)
+
+    async def _turn_taken(self, call: _Call, turn: int) -> bool:
+        """Already answered, or claimed by another delivery of the same webhook."""
+        interaction = call.interaction
+        if await self._replay(call.target.tenant, interaction.id, turn_key(turn)) is not None:
+            return True
+        return await self._claims.get(interaction.business_id, interaction.id, turn) is not None
+
+    async def _transcribe(self, call: _Call, recording: Recording) -> Transcript | None:
+        assert self._recognizer is not None
+        # Never hold the request's transaction (opened by the reads above) across Twilio
+        # and Gemini. The deadline leaves the turn its first wait inside Twilio's timeout.
+        await self._store.checkpoint()
+        return await self._recognizer.transcribe(
+            recording,
+            business_id=call.interaction.business_id,
+            interaction_id=call.interaction.id,
+            deadline_seconds=self._settings.response_budget_seconds
+            - self._settings.hold_after_seconds,
+        )
+
+    async def _discard(self, recording: Recording, call: _Call | None) -> None:
+        """Deletes a recording this webhook won't transcribe. Never raises: it runs in a
+        `finally`, possibly after a database error. Without an active call (ended,
+        unknown) the Twilio calls are metered globally."""
+        if self._recognizer is None:
+            return  # no Twilio credentials: nothing could have recorded
+        # Don't hold the request's transaction across Twilio; a failed session can't
+        # commit, and the delete doesn't need it.
+        with contextlib.suppress(Exception):
+            await self._store.checkpoint()
+        await self._recognizer.discard(
+            recording,
+            business_id=call.interaction.business_id if call else None,
+            interaction_id=call.interaction.id if call else None,
         )
 
     async def _await_turn(self, call: _Call, turn: int, attempt: int, budget: float) -> CallStep:
@@ -617,13 +758,19 @@ class CallSessionService:
         return replace(step, audio=ref.token) if ref is not None else step
 
     async def _voiced_and_logged(
-        self, call: _Call, turn: int, started: float, step: CallStep, webhook: str
+        self, call: _Call, turn: int, started: float, step: CallStep, webhook: str, heard: _Input
     ) -> CallStep:
+        if heard.stt and self._records and isinstance(step, Listen | Hold):
+            # The fallback sticks: every later URL of this call asks for Twilio's STT.
+            step = replace(step, stt=True)
         decided = time.monotonic()
         step = await self._voiced(step, call.target, call.interaction.id, started)
         tts_ms = int((time.monotonic() - decided) * 1000)
-        self._log_latency(call, turn, started, step, webhook, tts_ms)
+        self._log_latency(call, turn, started, step, webhook, tts_ms, heard)
         return step
+
+    def _min_wait(self) -> float:
+        return 2 * self._settings.poll_seconds
 
     def _over_time(self, interaction: Interaction) -> bool:
         elapsed = (self._clock() - interaction.started_at).total_seconds()
@@ -631,18 +778,28 @@ class CallSessionService:
 
     @staticmethod
     def _log_latency(
-        call: _Call, turn: int, started: float, step: CallStep, webhook: str, tts_ms: int
+        call: _Call,
+        turn: int,
+        started: float,
+        step: CallStep,
+        webhook: str,
+        tts_ms: int,
+        heard: _Input,
     ) -> None:
         latency_ms = int((time.monotonic() - started) * 1000)
-        extra = {
+        extra: dict[str, object] = {
             "interaction_id": str(call.interaction.id),
             "turn": turn,
             "webhook": webhook,
             "step": type(step).__name__.lower(),
             "audio": "play" if step.audio else "say",
+            "input_mode": INPUT_TWILIO_STT if heard.stt else INPUT_GEMINI_AUDIO,
             "tts_ms": tts_ms,
             "latency_ms": latency_ms,
         }
+        if heard.transcript is not None:
+            extra["fetch_ms"] = heard.transcript.fetch_ms
+            extra["stt_ms"] = heard.transcript.stt_ms
         if latency_ms > LATENCY_TARGET_MS:
             logger.warning("voice turn slow", extra=extra)
         else:

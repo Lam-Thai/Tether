@@ -7,9 +7,11 @@ from api.health import router as health_router
 from api.v1.router import router as v1_router
 from core.config import settings
 from core.errors import register_exception_handlers
+from core.log_format import configure_logging
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     app = FastAPI(title="Tether API", version=settings.app_version)
 
     app.add_middleware(

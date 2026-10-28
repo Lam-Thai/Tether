@@ -7,6 +7,7 @@ message are `retryable` (connect errors, 429); a timeout or 5xx after the reques
 sent is `send_unconfirmed` and never retried (a retry could text the owner twice).
 """
 
+import re
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -91,4 +92,40 @@ class NumbersApi(Protocol):
     ) -> IncomingNumber:
         """Point the number's Voice URL and status callback (both POST) at these URLs; empty
         strings clear them. Returns the number as Twilio now reports it."""
+        ...
+
+
+# Recordings (slice 15b): a caller's utterance, recorded with <Record> when
+# VOICE_INPUT_MODE=gemini_audio, fetched once to transcribe it and then deleted. Every
+# call names the recording by its sid; the adapter builds the URL on this account itself
+# and never follows a URL from a webhook payload (it would send our credentials there).
+# All three calls are idempotent, so timeouts and 5xx are retryable; a fetch 404 is too
+# (a recording can lag the <Record> action briefly), and a delete 404 is success.
+RECORDING_SID = re.compile(r"^RE[0-9a-f]{32}$")
+
+
+@dataclass(frozen=True)
+class RecordingAudio:
+    """One recording's media: a WAV file (8 kHz mono PCM, as Twilio stores calls)."""
+
+    data: bytes
+    content_type: str
+
+    def __repr__(self) -> str:  # never dump a caller's audio into a log line
+        return f"RecordingAudio(bytes={len(self.data)}, content_type={self.content_type!r})"
+
+
+class RecordingsApi(Protocol):
+    async def fetch(self, sid: str) -> RecordingAudio:
+        """The recording's WAV. `TwilioApiError(REASON_NOT_FOUND)` when it isn't there."""
+        ...
+
+    async def delete(self, sid: str) -> None:
+        """Deletes the recording at Twilio; one already gone counts as deleted. Raises
+        `TwilioApiError`."""
+        ...
+
+    async def list_for_call(self, call_sid: str) -> list[str]:
+        """The sids of every recording Twilio still stores for this call (first page of
+        up to 100). Raises `TwilioApiError`."""
         ...
