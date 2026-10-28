@@ -288,6 +288,13 @@ class _Input:
     stt: bool
     transcript: Transcript | None = None
     handed_over: bool = False  # the recording went to `transcribe`, which deletes it
+    fell_back: bool = False  # this input's transcription failed: `stt` from now on
+
+    @property
+    def mode(self) -> str:
+        """The mode THIS input was heard in. A failed transcription was still a
+        gemini_audio attempt, though the call continues on Twilio's recognizer."""
+        return INPUT_TWILIO_STT if self.stt and not self.fell_back else INPUT_GEMINI_AUDIO
 
 
 class CallSessionService:
@@ -518,7 +525,7 @@ class CallSessionService:
                 if await self._turn_taken(call, turn):  # a duplicate claimed it meanwhile
                     return await self._await_turn(call, turn, 0, hold_after)
                 # Never a guessed utterance: ask again, through Twilio's recognizer now.
-                heard.stt = True
+                heard.stt = heard.fell_back = True
                 return Listen(NOT_HEARD_LINE, turn, silences, cacheable=True)
             heard.transcript = transcript
             speech = transcript.text
@@ -797,10 +804,12 @@ class CallSessionService:
             "webhook": webhook,
             "step": type(step).__name__.lower(),
             "audio": "play" if step.audio else "say",
-            "input_mode": INPUT_TWILIO_STT if heard.stt else INPUT_GEMINI_AUDIO,
+            "input_mode": heard.mode,
             "tts_ms": tts_ms,
             "latency_ms": latency_ms,
         }
+        if heard.fell_back:
+            extra["stt_fallback"] = True
         if heard.transcript is not None:
             extra["fetch_ms"] = heard.transcript.fetch_ms
             extra["stt_ms"] = heard.transcript.stt_ms

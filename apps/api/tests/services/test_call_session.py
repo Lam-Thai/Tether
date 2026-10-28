@@ -512,13 +512,19 @@ async def test_a_recorded_utterance_reaches_the_engine_as_text_and_is_deleted(pa
     assert line.__dict__["fetch_ms"] >= 0 and line.__dict__["stt_ms"] >= 0
 
 
-async def test_a_failed_transcription_reprompts_and_switches_the_call_to_twilio_stt(parts):
+async def test_a_failed_transcription_reprompts_and_switches_the_call_to_twilio_stt(parts, caplog):
     service, store, turns, stt, recordings = _recognizing(parts)
     sid = _sid()
     await service.start(InboundCall(sid, NUMBER, CALLER))
     stt.fail_next(SttUnavailableError("blocked"))
 
-    step = await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+    with caplog.at_level(logging.INFO, logger="tether.voice"):
+        step = await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+
+    # Logged as the gemini_audio attempt it was, never as a Twilio STT sample.
+    [line] = [r for r in caplog.records if r.getMessage() == "voice turn"]
+    assert line.__dict__["input_mode"] == "gemini_audio"
+    assert line.__dict__["stt_fallback"] is True
 
     assert step == Listen(NOT_HEARD_LINE, 1, cacheable=True, stt=True)  # same turn, no guess
     assert turns.runs == 0 and recordings.recordings == {}

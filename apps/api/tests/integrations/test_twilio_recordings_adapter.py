@@ -114,8 +114,25 @@ async def test_oversized_declared_length_is_rejected():
     assert err.value.reason == "provider_error" and not err.value.retryable
 
 
-async def test_oversized_actual_body_is_rejected():
-    api, _ = api_with(wav(b"RIFF" + b"\0" * MAX_AUDIO_BYTES))
+class _UndeclaredStream(httpx.AsyncByteStream):
+    """A streamed body with no Content-Length, so only the read cap can stop it."""
+
+    def __init__(self, *chunks: bytes) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+async def test_oversized_streamed_body_without_a_declared_length_is_rejected():
+    response = httpx.Response(
+        200,
+        stream=_UndeclaredStream(b"RIFF", b"\0" * MAX_AUDIO_BYTES),
+        headers={"content-type": "audio/x-wav"},
+    )
+    assert "content-length" not in response.headers  # reaches `_read_capped`
+    api, _ = api_with(response)
     with pytest.raises(TwilioApiError) as err:
         await api.fetch(RE)
     assert err.value.reason == "provider_error" and not err.value.retryable
