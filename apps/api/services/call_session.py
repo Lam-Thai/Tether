@@ -508,6 +508,10 @@ class CallSessionService:
                 # A retried webhook: the turn is answered or being answered; `respond`
                 # deletes its recording untranscribed.
                 return await self._await_turn(call, turn, 0, hold_after)
+            # Never hold the request's transaction (opened by the reads above) across Twilio
+            # and Gemini. Committed BEFORE the hand-over: if this raises, `respond` still
+            # deletes the recording.
+            await self._store.checkpoint()
             heard.handed_over = True  # from here on `transcribe` owns the delete
             transcript = await self._transcribe(call, recording)
             if transcript is None:
@@ -548,10 +552,10 @@ class CallSessionService:
         return await self._claims.get(interaction.business_id, interaction.id, turn) is not None
 
     async def _transcribe(self, call: _Call, recording: Recording) -> Transcript | None:
+        """Deletes the recording on every path, so it must run with nothing left that can
+        raise before it (the caller has already committed). The deadline leaves the turn
+        its first wait inside Twilio's timeout."""
         assert self._recognizer is not None
-        # Never hold the request's transaction (opened by the reads above) across Twilio
-        # and Gemini. The deadline leaves the turn its first wait inside Twilio's timeout.
-        await self._store.checkpoint()
         return await self._recognizer.transcribe(
             recording,
             business_id=call.interaction.business_id,

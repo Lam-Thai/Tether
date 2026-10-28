@@ -632,6 +632,26 @@ async def test_a_database_error_before_transcribing_still_deletes_the_recording(
     assert recordings.recordings == {} and stt.requests == []
 
 
+async def test_a_failed_commit_before_transcribing_still_deletes_the_recording(parts):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    commits = 0
+
+    async def checkpoint_then_fail() -> None:
+        # The commit before the hand-over to `transcribe` loses the connection; the
+        # `finally` in `respond` must still delete (its own commit attempt then works).
+        nonlocal commits
+        commits += 1
+        if commits == 1:
+            raise ConnectionError("database connection dropped")
+
+    store.checkpoint = checkpoint_then_fail
+    with pytest.raises(ConnectionError):
+        await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+    assert recordings.recordings == {} and stt.requests == []
+
+
 async def test_with_recording_mode_off_mid_call_a_recording_is_deleted_and_treated_as_silence(
     parts,
 ):

@@ -133,6 +133,12 @@ def _cell(values: Sequence[float], pct: float) -> str:
     return "-" if result is None else f"{result:.0f}"
 
 
+def _label(name: str) -> str:
+    """`latency_ms` is the input webhook only (fetch + STT, then the reply or a hold), not
+    a whole held turn: say so in the table."""
+    return "latency_ms (respond: first reply or hold)" if name == "latency_ms" else name
+
+
 def latency_table(stats: LatencyStats) -> str:
     rows = ["| input_mode | field | p50 | p95 | n |", "|---|---|---|---|---|"]
     for mode in sorted(stats.by_mode):
@@ -140,7 +146,7 @@ def latency_table(stats: LatencyStats) -> str:
             values = stats.by_mode[mode][name]
             if values:
                 p50, p95 = _cell(values, 50), _cell(values, 95)
-                rows.append(f"| {mode} | {name} | {p50} | {p95} | {len(values)} |")
+                rows.append(f"| {mode} | {_label(name)} | {p50} | {p95} | {len(values)} |")
     if stats.llm_ms:
         rows += ["", "| file | field | p50 | p95 | n |", "|---|---|---|---|---|"]
         for source in sorted(stats.llm_ms):

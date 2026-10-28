@@ -67,6 +67,9 @@ def test_log_parsing_groups_by_mode_and_only_counts_respond_latency():
     assert gem["fetch_ms"] == [120, 200]
     assert gem["latency_ms"] == [2000, 6000]  # the wait webhook's 50 is excluded
     assert stats.by_mode["twilio_stt"]["latency_ms"] == [900]
+    assert "| twilio_stt | latency_ms (respond: first reply or hold) | 900 |" in latency_table(
+        stats
+    )
     assert stats.by_mode["twilio_stt"]["stt_ms"] == []
     assert stats.llm_ms["a.log"] == [1500]
 
