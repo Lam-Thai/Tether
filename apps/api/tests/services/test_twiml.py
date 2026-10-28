@@ -14,6 +14,7 @@ from services.twiml import (
     Close,
     Hold,
     Listen,
+    RecordSettings,
     TwimlRenderer,
     VoiceUrls,
     is_goodbye,
@@ -76,6 +77,66 @@ def test_close_says_then_hangs_up():
 
     assert [c.tag for c in root] == ["Say", "Hangup"]
     assert root[0].text == "Goodbye."
+
+
+RECORD = RecordSettings(max_seconds=30, silence_seconds=2)
+
+
+def _recording_renderer() -> TwimlRenderer:
+    return TwimlRenderer(VoiceUrls(input=INPUT, wait=WAIT), record=RECORD)
+
+
+def test_in_gemini_audio_mode_listen_says_then_records_the_utterance():
+    root = _parse(_recording_renderer().render(Listen("How can I help?", turn=3, silences=1)))
+
+    assert [c.tag for c in root] == ["Say", "Record", "Redirect"]
+    assert root[0].text == "How can I help?"
+    record = root[1]
+    assert record.attrib["method"] == "POST"
+    assert record.attrib["maxLength"] == "30"
+    assert record.attrib["timeout"] == "2"
+    assert record.attrib["playBeep"] == "false"
+    assert record.attrib["trim"] == "trim-silence"
+    assert "transcribe" not in record.attrib  # Twilio's own transcription: never
+    action = urlparse(record.attrib["action"])
+    assert f"{action.scheme}://{action.netloc}{action.path}" == INPUT
+    assert parse_qs(action.query) == {"turn": ["3"], "silences": ["1"]}
+    # Twilio skips the action when nothing was recorded: the redirect posts the silence.
+    assert root[2].attrib["method"] == "POST"
+    assert (root[2].text or "") == record.attrib["action"]
+
+
+def test_after_a_failed_transcription_listen_gathers_speech_and_keeps_the_stt_flag():
+    root = _parse(_recording_renderer().render(Listen("Sorry?", turn=4, stt=True)))
+
+    assert [c.tag for c in root] == ["Gather"]
+    assert root[0].attrib["input"] == "speech"
+    assert parse_qs(urlparse(root[0].attrib["action"]).query) == {"turn": ["4"], "stt": ["1"]}
+
+
+def test_hold_carries_the_stt_flag_to_the_wait_url():
+    root = _parse(_recording_renderer().render(Hold("One moment.", turn=4, attempt=1, stt=True)))
+
+    assert parse_qs(urlparse(root[1].text or "").query) == {
+        "turn": ["4"],
+        "attempt": ["1"],
+        "stt": ["1"],
+    }
+
+
+def test_without_record_settings_the_stt_flag_changes_nothing_but_the_url():
+    plain = _parse(_renderer().render(Listen("Hi", turn=2)))
+    flagged = _parse(_renderer().render(Listen("Hi", turn=2, stt=True)))
+
+    assert [c.tag for c in plain] == [c.tag for c in flagged] == ["Gather"]
+    assert "stt" not in plain[0].attrib["action"]
+
+
+def test_recorded_listen_plays_audio_before_recording():
+    token = "a" * 43
+    root = _parse(_recording_renderer().render(Listen("Hi", turn=2, audio=token)))
+
+    assert [c.tag for c in root] == ["Play", "Record", "Redirect"]
 
 
 def test_urls_with_a_query_string_get_an_ampersand():

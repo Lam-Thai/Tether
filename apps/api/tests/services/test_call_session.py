@@ -3,6 +3,7 @@ The happy path, limits, holds and takeovers run end to end in `tests/api/test_vo
 these pin the races and failure paths that are awkward to stage over HTTP."""
 
 import asyncio
+import logging
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -11,13 +12,18 @@ from datetime import UTC, datetime
 import pytest
 
 from core.tenant import Tenant
+from integrations.stt.fake import FakeSpeechToText
+from integrations.stt.port import SttUnavailableError
 from integrations.tts.fake import FakeTtsClient
 from integrations.tts.port import TtsUnavailableError
+from integrations.twilio.fake import FakeRecordingsApi
 from models.business import Business
 from models.interaction import Interaction
 from models.phone_number import PhoneNumber
 from models.user import User
 from services.call_session import (
+    NOT_HEARD_LINE,
+    REPROMPT_LINE,
     TROUBLE_LINE,
     UNKNOWN_NUMBER_LINE,
     CallSessionService,
@@ -29,7 +35,8 @@ from services.call_session import (
 )
 from services.conversation import MessageView, TurnResult
 from services.speech import SpeechSynthesizer, VoiceCatalog
-from services.twiml import Close, Listen, TwimlRenderer, VoiceUrls
+from services.speech_input import Recording, SpeechRecognizer
+from services.twiml import Close, Hold, Listen, TwimlRenderer, VoiceUrls
 from services.usage import ConcurrencyLimitedError, DailyLimit, UsageKind
 from tests.services.memory_audio_store import MemoryAudioStore
 from tests.services.memory_usage_store import MemoryUsageStore, guard, limits
@@ -450,3 +457,270 @@ async def test_no_time_left_in_the_webhook_means_say(parts):
 
     assert isinstance(step, Listen) and step.audio is None
     assert tts.requests == []
+
+
+# --- gemini_audio input (slice 15b) ----------------------------------------------------
+
+
+def _recognizing(parts, *, stt_limit: int = 100, max_call_seconds: int = 600):
+    _, store, claims, turns, usage_store, _ = parts
+    stt, recordings = FakeSpeechToText(), FakeRecordingsApi()
+    usage = guard(
+        usage_store, limits(stt_request=DailyLimit(per_day=100, per_business_per_day=stt_limit))
+    )
+    recognizer = SpeechRecognizer(stt, recordings, usage, timeout_seconds=2.0)
+    service = CallSessionService(
+        store,
+        claims,
+        usage,
+        run_turn=turns.run,
+        replay=turns.replay,
+        end=lambda tenant, interaction_id: asyncio.sleep(0, True),
+        settings=VoiceSettings(
+            max_call_seconds=max_call_seconds,
+            hold_after_seconds=0.5,
+            wait_seconds=1.0,
+            heartbeat_seconds=0.05,
+            stale_after_seconds=0.3,
+            poll_seconds=0.02,
+        ),
+        recognizer=recognizer,
+    )
+    return service, store, turns, stt, recordings
+
+
+def _record(recordings: FakeRecordingsApi, call_sid: str) -> Recording:
+    """What a <Record> leaves at Twilio: half a second of (non-silent) audio."""
+    spoken = b"RIFF" + b"\x00" * 40 + b"\x01\x02" * 4000
+    return Recording(sid=recordings.add(call_sid, spoken), call_sid=call_sid)
+
+
+async def test_a_recorded_utterance_reaches_the_engine_as_text_and_is_deleted(parts, caplog):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    stt.say("Do you do beard trims?")
+    recording = _record(recordings, sid)
+
+    with caplog.at_level(logging.INFO, logger="tether.voice"):
+        step = await service.respond(sid, 1, 0, None, recording=recording)
+
+    assert step == Listen("Reply to: Do you do beard trims?", 2)
+    assert turns.runs == 1 and recordings.recordings == {}
+    [line] = [r for r in caplog.records if r.getMessage() == "voice turn"]
+    assert line.__dict__["input_mode"] == "gemini_audio"
+    assert line.__dict__["fetch_ms"] >= 0 and line.__dict__["stt_ms"] >= 0
+
+
+async def test_a_failed_transcription_reprompts_and_switches_the_call_to_twilio_stt(parts, caplog):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    stt.fail_next(SttUnavailableError("blocked"))
+
+    with caplog.at_level(logging.INFO, logger="tether.voice"):
+        step = await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+
+    # Logged as the gemini_audio attempt it was, never as a Twilio STT sample.
+    [line] = [r for r in caplog.records if r.getMessage() == "voice turn"]
+    assert line.__dict__["input_mode"] == "gemini_audio"
+    assert line.__dict__["stt_fallback"] is True
+
+    assert step == Listen(NOT_HEARD_LINE, 1, cacheable=True, stt=True)  # same turn, no guess
+    assert turns.runs == 0 and recordings.recordings == {}
+    # The next utterance comes from Twilio's recognizer; the flag sticks for the call.
+    reply = await service.respond(sid, 1, 0, "Do you do beards?", stt=True)
+    assert reply == Listen("Reply to: Do you do beards?", 2, stt=True)
+
+
+async def test_over_the_stt_limit_the_call_falls_back_with_no_gemini_call(parts):
+    service, store, turns, stt, recordings = _recognizing(parts, stt_limit=0)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+
+    step = await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+
+    assert step == Listen(NOT_HEARD_LINE, 1, cacheable=True, stt=True)
+    assert stt.requests == [] and recordings.recordings == {}
+
+
+async def test_an_empty_transcript_is_silence_and_keeps_recording(parts):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    stt.say("")
+
+    step = await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+
+    assert step == Listen(REPROMPT_LINE, 1, 1, cacheable=True)
+    assert turns.runs == 0 and recordings.recordings == {}
+
+
+async def test_a_replayed_recorded_turn_is_not_transcribed_again_and_the_recording_goes(parts):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    stt.say("Any openings Friday?")
+    first = await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+
+    # Twilio retries the webhook: the recording it names is deleted, never transcribed.
+    again = await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+
+    assert again == first and len(stt.requests) == 1
+    assert recordings.recordings == {} and turns.runs == 1
+
+
+async def test_past_the_time_limit_the_recording_is_deleted_untranscribed(parts):
+    service, store, turns, stt, recordings = _recognizing(parts, max_call_seconds=30)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    store.calls[sid].started_at = datetime(2000, 1, 1, tzinfo=UTC)
+
+    step = await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+
+    assert isinstance(step, Close) and stt.requests == []
+    assert recordings.recordings == {}
+
+
+async def test_a_hold_keeps_the_stt_flag_through_the_wait(parts):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    turns.gate = asyncio.Event()
+
+    held = await service.respond(sid, 1, 0, "Is Saturday open?", stt=True)
+    turns.gate.set()
+    resumed = await service.resume(sid, 1, 1, stt=True)
+
+    assert isinstance(held, Hold) and held.stt
+    assert resumed == Listen("Reply to: Is Saturday open?", 2, stt=True)
+
+
+async def test_the_end_of_the_call_sweeps_recordings_left_at_twilio(parts):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    leftover = recordings.add(sid)
+    other_call = recordings.add(_sid())
+
+    await service.complete(sid, "completed", 42)
+
+    assert recordings.deleted == [leftover] and list(recordings.recordings) == [other_call]
+
+
+async def test_a_recording_on_an_unknown_or_ended_call_is_still_deleted(parts):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    unknown = _record(recordings, _sid())
+    ended_sid = _sid()
+    await service.start(InboundCall(ended_sid, NUMBER, CALLER))
+    store.calls[ended_sid].status = "completed"  # the caller hung up mid-<Record>
+    late = _record(recordings, ended_sid)
+
+    assert await service.respond(unknown.call_sid, 1, 0, None, recording=unknown) == Close(
+        UNKNOWN_NUMBER_LINE
+    )
+    assert isinstance(await service.respond(ended_sid, 1, 0, None, recording=late), Close)
+    assert stt.requests == [] and recordings.recordings == {}
+
+
+async def test_a_database_error_before_transcribing_still_deletes_the_recording(parts):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    _, _, claims, *_ = parts
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+
+    async def broken_get(*args, **kwargs):
+        raise RuntimeError("database went away")
+
+    claims.get = broken_get
+    with pytest.raises(RuntimeError):
+        await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+    assert recordings.recordings == {} and stt.requests == []
+
+
+async def test_a_failed_commit_before_transcribing_still_deletes_the_recording(parts):
+    service, store, turns, stt, recordings = _recognizing(parts)
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    commits = 0
+
+    async def checkpoint_then_fail() -> None:
+        # The commit before the hand-over to `transcribe` loses the connection; the
+        # `finally` in `respond` must still delete (its own commit attempt then works).
+        nonlocal commits
+        commits += 1
+        if commits == 1:
+            raise ConnectionError("database connection dropped")
+
+    store.checkpoint = checkpoint_then_fail
+    with pytest.raises(ConnectionError):
+        await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+    assert recordings.recordings == {} and stt.requests == []
+
+
+async def test_with_recording_mode_off_mid_call_a_recording_is_deleted_and_treated_as_silence(
+    parts,
+):
+    _, store, claims, turns, usage_store, _ = parts
+    recordings = FakeRecordingsApi()
+    # Twilio configured, mode `twilio_stt` (no speech-to-text): deletes, never records.
+    off = SpeechRecognizer(None, recordings, guard(usage_store), timeout_seconds=2.0)
+    service = CallSessionService(
+        store,
+        claims,
+        guard(usage_store),
+        run_turn=turns.run,
+        replay=turns.replay,
+        end=lambda tenant, interaction_id: asyncio.sleep(0, True),
+        settings=VoiceSettings(max_call_seconds=600),
+        recognizer=off,
+    )
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+
+    step = await service.respond(sid, 1, 0, None, recording=_record(recordings, sid))
+
+    assert step == Listen(REPROMPT_LINE, 1, 1, cacheable=True)  # no `stt` flag: not recording
+    assert recordings.recordings == {}
+    await service.complete(sid, "completed", 10)
+    assert [op for op, _ in recordings.calls] == ["delete"]  # no sweep outside recording mode
+
+
+async def test_the_sweep_runs_even_when_closing_the_interaction_fails(parts):
+    _, store, claims, turns, usage_store, _ = parts
+    stt, recordings = FakeSpeechToText(), FakeRecordingsApi()
+
+    async def failing_end(tenant, interaction_id) -> bool:
+        raise RuntimeError("summary store down")
+
+    service = CallSessionService(
+        store,
+        claims,
+        guard(usage_store),
+        run_turn=turns.run,
+        replay=turns.replay,
+        end=failing_end,
+        settings=VoiceSettings(max_call_seconds=600),
+        recognizer=SpeechRecognizer(stt, recordings, guard(usage_store), timeout_seconds=2.0),
+    )
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+    leftover = recordings.add(sid)
+
+    with pytest.raises(RuntimeError):
+        await service.complete(sid, "completed", 10)
+    assert recordings.deleted == [leftover]
+
+
+async def test_twilio_stt_mode_logs_its_input_mode_and_never_touches_recordings(parts, caplog):
+    service, store, claims, turns, *_ = parts
+    sid = _sid()
+    await service.start(InboundCall(sid, NUMBER, CALLER))
+
+    with caplog.at_level(logging.INFO, logger="tether.voice"):
+        step = await service.respond(sid, 1, 0, "Hello")
+
+    assert step == Listen("Reply to: Hello", 2)
+    [line] = [r for r in caplog.records if r.getMessage() == "voice turn"]
+    assert line.__dict__["input_mode"] == "twilio_stt"
+    assert "fetch_ms" not in line.__dict__

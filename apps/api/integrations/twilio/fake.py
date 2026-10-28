@@ -1,5 +1,7 @@
-"""In-memory `SmsApi` and `NumbersApi` for tests: record calls, failures are scriptable."""
+"""In-memory `SmsApi`, `NumbersApi` and `RecordingsApi` for tests: record calls, failures
+are scriptable."""
 
+import asyncio
 import uuid
 from dataclasses import dataclass, replace
 
@@ -7,6 +9,7 @@ from integrations.twilio.port import (
     REASON_NOT_FOUND,
     AccountInfo,
     IncomingNumber,
+    RecordingAudio,
     SentSms,
     TwilioApiError,
 )
@@ -124,3 +127,60 @@ class FakeNumbersApi:
         )
         self.numbers[sid] = updated
         return updated
+
+
+def random_recording_sid() -> str:
+    """Twilio's shape (RE + 32 hex), random, like the other fake sids."""
+    return f"RE{uuid.uuid4().hex}"
+
+
+# A minimal valid WAV (8 kHz mono 16-bit, no samples): what `add` stores by default.
+FAKE_WAV = (
+    b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00@\x1f\x00\x00"
+    b"\x80>\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+)
+
+
+class FakeRecordingsApi:
+    """The account's recordings in memory, `{sid: (call_sid, wav)}`. `add` stores one (what
+    a <Record> leaves at Twilio); `deleted` lists sids in delete order; `calls` lists every
+    operation attempted (failed ones included) as `(op, sid)`. `fail_next(op, error)`
+    queues errors per operation; `delay_seconds` slows every call, to test deadlines."""
+
+    def __init__(self, *, delay_seconds: float = 0.0) -> None:
+        self.delay_seconds = delay_seconds
+        self.recordings: dict[str, tuple[str, bytes]] = {}
+        self.deleted: list[str] = []
+        self.calls: list[tuple[str, str]] = []
+        self._failures: dict[str, list[TwilioApiError]] = {}
+
+    def add(self, call_sid: str, data: bytes = FAKE_WAV, *, sid: str | None = None) -> str:
+        sid = sid or random_recording_sid()
+        self.recordings[sid] = (call_sid, data)
+        return sid
+
+    def fail_next(self, op: str, error: TwilioApiError, *, times: int = 1) -> None:
+        self._failures.setdefault(op, []).extend([error] * times)
+
+    async def _attempt(self, op: str, sid: str) -> None:
+        self.calls.append((op, sid))
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
+        queue = self._failures.get(op)
+        if queue:
+            raise queue.pop(0)
+
+    async def fetch(self, sid: str) -> RecordingAudio:
+        await self._attempt("fetch", sid)
+        if sid not in self.recordings:
+            raise TwilioApiError(REASON_NOT_FOUND, retryable=True, error_code="20404")
+        return RecordingAudio(data=self.recordings[sid][1], content_type="audio/x-wav")
+
+    async def delete(self, sid: str) -> None:
+        await self._attempt("delete", sid)
+        if self.recordings.pop(sid, None) is not None:
+            self.deleted.append(sid)
+
+    async def list_for_call(self, call_sid: str) -> list[str]:
+        await self._attempt("list_for_call", call_sid)
+        return [sid for sid, (call, _) in self.recordings.items() if call == call_sid]

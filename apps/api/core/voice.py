@@ -6,6 +6,13 @@ is overridable in tests: `get_numbers_api` (a `FakeNumbersApi`), `get_session_fa
 `get_voice_settings`, and the shared ones (`get_llm_client`, `get_usage_guard`,
 `get_clock`, the calendar harness, `get_sms_api`).
 
+Voice input (slice 15b): `get_voice_input_mode` (settings), `get_stt_client` (Gemini
+audio, `None` without a key) and `get_recordings_api` (Twilio, `None` unconfigured) build
+`get_speech_recognizer`: present whenever Twilio is (so a recording is always deleted),
+transcribing (`configured`) only when the mode is `gemini_audio` and there is a key. The
+renderer records (`<Record>`) exactly when the recognizer is configured, which is also
+the call session's condition, so the two never disagree; tests override the three inputs.
+
 A voice turn runs on a session of its OWN (`get_session_factory`), because it may keep
 running after the webhook that started it has answered Twilio with a holding phrase; the
 request's session closes with the request.
@@ -39,8 +46,11 @@ from core.twilio import get_notifier
 from core.usage import get_usage_guard
 from integrations.google_calendar import GoogleCalendarApi
 from integrations.llm.port import LLMClient
+from integrations.stt.gemini import GeminiSpeechToText
+from integrations.stt.port import SpeechToText
 from integrations.twilio.numbers import HttpTwilioNumbersApi
-from integrations.twilio.port import NumbersApi
+from integrations.twilio.port import NumbersApi, RecordingsApi
+from integrations.twilio.recordings import HttpTwilioRecordingsApi
 from models.interaction import Interaction
 from models.phone_number import PhoneNumber
 from models.voice_turn import VoiceTurn
@@ -69,8 +79,9 @@ from services.notifier import Notifier
 from services.oauth_state import OAuthStateSigner
 from services.phone_numbers import PhoneNumberService, WebhookTargets
 from services.speech import SpeechSynthesizer
+from services.speech_input import SpeechRecognizer
 from services.token_vault import TokenVault
-from services.twiml import TwimlRenderer, VoiceUrls
+from services.twiml import RecordSettings, TwimlRenderer, VoiceUrls
 from services.usage import ConcurrencyLimitedError, UsageGuard
 
 WEBHOOKS = "/api/v1/webhooks/twilio"
@@ -131,9 +142,74 @@ def get_voice_settings() -> VoiceSettings:
     )
 
 
-def get_twiml_renderer() -> TwimlRenderer:
+@lru_cache(maxsize=1)
+def _build_recordings_api() -> RecordingsApi | None:
+    if not settings.twilio_configured:
+        return None
+    assert settings.twilio_account_sid and settings.twilio_auth_token
+    return HttpTwilioRecordingsApi(
+        settings.twilio_account_sid,
+        settings.twilio_auth_token.get_secret_value(),
+        settings.twilio_timeout_seconds,
+    )
+
+
+def get_recordings_api() -> RecordingsApi | None:
+    """One adapter per process (it holds an HTTP pool); `None` when Twilio isn't set up."""
+    return _build_recordings_api()
+
+
+@lru_cache(maxsize=1)
+def _build_stt_client() -> SpeechToText | None:
+    key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else ""
+    if not key:
+        return None
+    return GeminiSpeechToText(
+        api_key=key, model=settings.gemini_stt_model, timeout_seconds=settings.stt_timeout_seconds
+    )
+
+
+def get_stt_client() -> SpeechToText | None:
+    return _build_stt_client()
+
+
+def get_voice_input_mode() -> str:
+    return settings.voice_input_mode
+
+
+def get_speech_recognizer(
+    mode: str = Depends(get_voice_input_mode),
+    stt: SpeechToText | None = Depends(get_stt_client),
+    recordings: RecordingsApi | None = Depends(get_recordings_api),
+    usage: UsageGuard = Depends(get_usage_guard),
+) -> SpeechRecognizer | None:
+    """Whenever Twilio is configured, so a recording that reaches `/input` is always
+    deleted (also with the mode switched off mid-call). It TRANSCRIBES (`configured`, and
+    so calls are recorded) only when the mode is `gemini_audio` and there is a key."""
+    if recordings is None:
+        return None
+    return SpeechRecognizer(
+        stt if mode == "gemini_audio" else None,
+        recordings,
+        usage,
+        timeout_seconds=settings.stt_timeout_seconds,
+    )
+
+
+def get_twiml_renderer(
+    recognizer: SpeechRecognizer | None = Depends(get_speech_recognizer),
+) -> TwimlRenderer:
+    record = (
+        RecordSettings(
+            max_seconds=settings.voice_record_max_seconds,
+            silence_seconds=settings.voice_record_silence_seconds,
+        )
+        if recognizer is not None and recognizer.configured
+        else None
+    )
     return TwimlRenderer(
-        VoiceUrls(input=_public(INPUT_PATH), wait=_public(WAIT_PATH), media=_public(MEDIA_PATH))
+        VoiceUrls(input=_public(INPUT_PATH), wait=_public(WAIT_PATH), media=_public(MEDIA_PATH)),
+        record=record,
     )
 
 
@@ -296,6 +372,7 @@ def get_call_session(
     notifier: Notifier = Depends(get_notifier),
     voice: VoiceSettings = Depends(get_voice_settings),
     speech: SpeechSynthesizer = Depends(get_speech_synthesizer),
+    recognizer: SpeechRecognizer | None = Depends(get_speech_recognizer),
 ) -> CallSessionService:
     calendar = CalendarDeps(calendar_api, vault, signer, calendar_config)
 
@@ -347,5 +424,6 @@ def get_call_session(
         end=end,
         settings=voice,
         speech=speech,
+        recognizer=recognizer,
         # Call duration is wall time; `clock` is the business clock tests may pin.
     )

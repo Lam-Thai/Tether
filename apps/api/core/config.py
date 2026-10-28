@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     gemini_requests_per_business_per_day: int = Field(default=50, ge=0)
     tts_requests_per_day: int = Field(default=50, ge=0)
     tts_requests_per_business_per_day: int = Field(default=10, ge=0)
+    stt_requests_per_day: int = Field(default=50, ge=0)
+    stt_requests_per_business_per_day: int = Field(default=10, ge=0)
     calls_per_day: int = Field(default=50, ge=0)
     calls_per_business_per_day: int = Field(default=10, ge=0)
     sms_per_day: int = Field(default=50, ge=0)
@@ -166,6 +168,21 @@ class Settings(BaseSettings):
     # How long synthesized FIXED lines (greeting, holding phrase, reprompt; owner or
     # platform text, never caller-derived) are reused before being synthesized again.
     tts_cache_ttl_seconds: int = Field(default=86400, ge=0, le=7 * 86400)
+
+    # Voice input (services/speech_input.py, slice 15b). `twilio_stt`: Twilio's own speech
+    # recognition (<Gather input="speech">). `gemini_audio`: the caller is RECORDED
+    # (<Record>), Gemini transcribes the recording and the recording is deleted at Twilio
+    # right after; it needs the Twilio settings and `gemini_api_key`, otherwise calls stay
+    # on `twilio_stt`. Every transcription is one metered `stt_request` (limits above).
+    voice_input_mode: Literal["twilio_stt", "gemini_audio"] = "twilio_stt"
+    # A separate model (and so a separate free-tier bucket) from the chat model.
+    gemini_stt_model: str = "gemini-2.5-flash-lite"
+    # Ceiling on one utterance's fetch + transcription (retries included); past it the
+    # caller is reprompted and the call switches to Twilio's speech recognition.
+    stt_timeout_seconds: float = Field(default=6.0, gt=0, le=10)
+    # <Record maxLength> and <Record timeout> (seconds of silence that end an utterance).
+    voice_record_max_seconds: int = Field(default=30, ge=5, le=120)
+    voice_record_silence_seconds: int = Field(default=2, ge=1, le=10)
 
     # Eval harness (`uv run tether-eval`, evals/runner.py). The tier picks the defaults
     # in `evals.runner.TIER_LIMITS`; each value below overrides one of them when set.

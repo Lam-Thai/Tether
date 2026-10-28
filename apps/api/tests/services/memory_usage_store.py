@@ -99,7 +99,13 @@ def limits(**daily: DailyLimit) -> UsageLimits:
     """Generous limits everywhere, overridden per kind (`gemini_request=DailyLimit(...)`)."""
     base = {
         kind: GENEROUS
-        for kind in (UsageKind.GEMINI_REQUEST, UsageKind.TTS_REQUEST, UsageKind.CALL, UsageKind.SMS)
+        for kind in (
+            UsageKind.GEMINI_REQUEST,
+            UsageKind.TTS_REQUEST,
+            UsageKind.STT_REQUEST,
+            UsageKind.CALL,
+            UsageKind.SMS,
+        )
     }
     base.update({UsageKind(name): limit for name, limit in daily.items()})
     return UsageLimits(

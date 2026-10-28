@@ -21,6 +21,7 @@ export const GLOBAL_CONCURRENCY_MESSAGE =
 const KNOWN_LABELS: Record<string, string> = {
   gemini_request: "AI replies",
   tts_request: "Voice replies",
+  stt_request: "Voice transcriptions",
   call: "Phone calls",
   sms: "Text messages",
   calendar_call: "Calendar checks",

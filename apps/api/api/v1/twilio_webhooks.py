@@ -9,9 +9,12 @@ phone number called, the interaction by CallSid), never from the payload.
   status update is monotonic (a repeat or an older status is a no-op) and the route
   always answers 204 after a valid signature, unknown sid included.
 - `voice`, `input`, `input/wait`: answer TwiML from `CallSessionService` +
-  `TwimlRenderer`. The turn number, silence count and hold attempt ride in the query
-  string of URLs Tether rendered (and Twilio signed). An unexpected error still answers
-  TwiML (an apology and a hang-up) so the caller never hears Twilio's error message.
+  `TwimlRenderer`. The turn number, silence count, hold attempt and the `stt` fallback
+  flag ride in the query string of URLs Tether rendered (and Twilio signed). In
+  gemini_audio mode `input` gets a `RecordingSid` (`<Record>`): only the sid is passed
+  on; the adapter builds the media URL itself and `RecordingUrl` is never followed. An
+  unexpected error still answers TwiML (an apology and a hang-up) so the caller never
+  hears Twilio's error message.
 - `status`: a terminal call status ends the interaction; always 204.
 """
 
@@ -35,6 +38,7 @@ from core.voice import (
 )
 from services.call_session import CallSessionService, InboundCall
 from services.notifier import LogNotifier
+from services.speech_input import Recording
 from services.twiml import CallStep, Close, TwimlRenderer
 
 logger = logging.getLogger("tether.voice")
@@ -48,6 +52,8 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 Calls = Annotated[CallSessionService, Depends(get_call_session)]
 Renderer = Annotated[TwimlRenderer, Depends(get_twiml_renderer)]
 Turn = Annotated[int, Query(ge=1, le=1000)]
+# 1 once a call fell back from gemini_audio to Twilio's speech recognition.
+SttFlag = Annotated[int, Query(ge=0, le=1)]
 
 ERROR_LINE = "Sorry, something went wrong on our end. Please call back in a moment. Goodbye."
 
@@ -97,10 +103,22 @@ async def post_input(
     renderer: Renderer,
     turn: Turn,
     silences: Annotated[int, Query(ge=0, le=10)] = 0,
+    stt: SttFlag = 0,
 ) -> Response:
+    call_sid = fields.get("CallSid", "")
+    # A <Record> result (gemini_audio): only the sid is used, never the RecordingUrl.
+    recording_sid = fields.get("RecordingSid")
+    recording = Recording(sid=recording_sid, call_sid=call_sid) if recording_sid else None
     return await _twiml(
         renderer,
-        calls.respond(fields.get("CallSid", ""), turn, silences, fields.get("SpeechResult")),
+        calls.respond(
+            call_sid,
+            turn,
+            silences,
+            fields.get("SpeechResult"),
+            recording=recording,
+            stt=bool(stt),
+        ),
     )
 
 
@@ -111,8 +129,11 @@ async def post_wait(
     renderer: Renderer,
     turn: Turn,
     attempt: Annotated[int, Query(ge=1, le=10)],
+    stt: SttFlag = 0,
 ) -> Response:
-    return await _twiml(renderer, calls.resume(fields.get("CallSid", ""), turn, attempt))
+    return await _twiml(
+        renderer, calls.resume(fields.get("CallSid", ""), turn, attempt, stt=bool(stt))
+    )
 
 
 @router.post(_path(STATUS_PATH), status_code=204, include_in_schema=False)

@@ -979,7 +979,13 @@ export async function listChatBookings(
 // Usage limits (`GET /usage`).
 
 /** Meter kinds the UI has a label for; the API may send others. */
-export type UsageMeterKind = "gemini_request" | "tts_request" | "call" | "sms" | (string & {});
+export type UsageMeterKind =
+  | "gemini_request"
+  | "tts_request"
+  | "stt_request"
+  | "call"
+  | "sms"
+  | (string & {});
 
 export interface UsageMeter {
   kind: UsageMeterKind;

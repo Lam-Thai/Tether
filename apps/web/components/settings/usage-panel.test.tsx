@@ -177,6 +177,7 @@ describe("helpers", () => {
   it("labels kinds", () => {
     expect(meterLabel("call")).toBe("Phone calls");
     expect(meterLabel("calendar_call")).toBe("Calendar checks");
+    expect(meterLabel("stt_request")).toBe("Voice transcriptions");
     expect(meterLabel("new_thing")).toBe("New thing");
     expect(meterLabel("")).toBe("Other usage");
   });
