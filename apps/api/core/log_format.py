@@ -31,6 +31,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 from core import log_context
 from services.redaction import redact
@@ -118,6 +119,14 @@ def _clean(key: str, value: object) -> object:
     return scrub(str(value))
 
 
+def _scrub_args(args: object) -> Any:
+    if isinstance(args, tuple):
+        return tuple(scrub(arg) if isinstance(arg, str) else arg for arg in args)
+    if isinstance(args, dict):
+        return {key: scrub(v) if isinstance(v, str) else v for key, v in args.items()}
+    return args
+
+
 def _extras(record: logging.LogRecord) -> dict[str, object]:
     return {
         key: value
@@ -127,15 +136,29 @@ def _extras(record: logging.LogRecord) -> dict[str, object]:
 
 
 class RedactionFilter(logging.Filter):
-    """Redacts a record in place (idempotent), then lets it through."""
+    """Redacts a record in place (idempotent), then lets it through.
+
+    `flatten=True` (our own handler) formats the message with its arguments first, so a
+    secret split between the template and an argument (`"Bearer %s"`) is still caught.
+    Other libraries' formatters read `record.args` themselves (uvicorn's access formatter
+    unpacks it as a 5-tuple), so for their loggers (`flatten=False`) the template and each
+    string argument are scrubbed separately and the args keep their shape."""
 
     _exceptions = logging.Formatter()
+
+    def __init__(self, *, flatten: bool = True) -> None:
+        super().__init__()
+        self._flatten = flatten
 
     def filter(self, record: logging.LogRecord) -> bool:
         if getattr(record, "_tether_redacted", False):
             return True
-        record.msg = scrub(record.getMessage())
-        record.args = None
+        if self._flatten:
+            record.msg = scrub(record.getMessage())
+            record.args = None
+        else:
+            record.msg = scrub(str(record.msg))
+            record.args = _scrub_args(record.args)
         for key, value in _extras(record).items():
             setattr(record, key, _clean(key, value))
         if record.exc_info and not record.exc_text:
@@ -187,4 +210,4 @@ def configure_logging(level: int = logging.INFO) -> None:
     for name in _FOREIGN_LOGGERS:
         other = logging.getLogger(name)
         if not any(isinstance(f, RedactionFilter) for f in other.filters):
-            other.addFilter(RedactionFilter())
+            other.addFilter(RedactionFilter(flatten=False))
