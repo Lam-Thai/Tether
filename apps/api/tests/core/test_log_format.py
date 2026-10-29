@@ -245,3 +245,37 @@ def test_the_handler_writes_json_lines():
     line = json.loads(stream.getvalue().strip().splitlines()[-1])
     assert line["msg"] == "slow"
     assert line["latency_ms"] == 6000
+
+
+def test_uvicorns_access_formatter_still_works_and_sees_a_redacted_path():
+    """uvicorn's AccessFormatter unpacks `record.args` as a 5-tuple: flattening the args
+    (as our own handler does) made every access line a `--- Logging error ---`."""
+    from uvicorn.logging import AccessFormatter
+
+    configure_logging()
+    access = logging.getLogger("uvicorn.access")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s'))
+    access.addHandler(handler)
+    previous_level, previous_propagate = access.level, access.propagate
+    access.setLevel(logging.INFO)
+    access.propagate = False
+    token = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde"
+    try:
+        access.info(
+            '%s - "%s %s HTTP/%s" %d',
+            "127.0.0.1:5000",
+            "GET",
+            f"/api/v1/media/{token}?From=%2B15551234567",
+            "1.1",
+            200,
+        )
+    finally:
+        access.removeHandler(handler)
+        access.setLevel(previous_level)
+        access.propagate = previous_propagate
+
+    line = stream.getvalue()
+    assert '"GET /api/v1/media/[redacted]?From=***4567 HTTP/1.1" 200' in line
+    assert token not in line
