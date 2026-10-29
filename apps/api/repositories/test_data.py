@@ -9,7 +9,7 @@ and voice turns (every `escalations` row belongs to an interaction, so none can 
 import uuid
 from datetime import date
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.booking import Booking
@@ -17,6 +17,7 @@ from models.escalation import Escalation
 from models.interaction import Interaction, InteractionMessage
 from models.media import MediaObject
 from models.usage import UsageCounter, UsageEvent
+from repositories.base import HasBusinessId, business_scoped_select
 
 EVENT_STATUSES = ("confirmed", "needs_reconciliation")
 # The erase is a single transaction with a cascading DELETE on `interactions`, which can
@@ -28,24 +29,20 @@ ERASE_STATEMENT_TIMEOUT = "20s"
 async def calendar_event_ids(session: AsyncSession, business_id: uuid.UUID) -> list[str]:
     """Google event ids of bookings that may still be on the owner's calendar."""
     result = await session.execute(
-        select(Booking.calendar_event_id)
-        .where(
-            Booking.business_id == business_id,
-            Booking.status.in_(EVENT_STATUSES),
-            Booking.calendar_event_id.is_not(None),
-        )
+        business_scoped_select(Booking, business_id)
+        .with_only_columns(Booking.calendar_event_id)
+        .where(Booking.status.in_(EVENT_STATUSES), Booking.calendar_event_id.is_not(None))
         .order_by(Booking.created_at, Booking.id)
     )
     return [event_id for event_id in result.scalars().all() if event_id is not None]
 
 
-async def _count(session: AsyncSession, model: type, business_id: uuid.UUID) -> int:
-    return int(
-        await session.scalar(
-            select(func.count()).select_from(model).where(model.business_id == business_id)  # type: ignore[attr-defined]
-        )
-        or 0
+async def _count(session: AsyncSession, model: type[HasBusinessId], business_id: uuid.UUID) -> int:
+    # `maintain_column_froms` keeps the model's table in FROM once its columns are replaced.
+    query = business_scoped_select(model, business_id).with_only_columns(
+        func.count(), maintain_column_froms=True
     )
+    return int(await session.scalar(query) or 0)
 
 
 async def erase_business_test_data(
