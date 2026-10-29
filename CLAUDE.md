@@ -46,6 +46,7 @@ For the generic "ticket → tests → implementation" loop, use the `mattpocock-
 ## Commands
 
 - Root: `pnpm install` (also installs the Husky `pre-push` hook), `pnpm test` (Vitest, all projects — tooling + `apps/web`), `pnpm typecheck` (root tooling).
+- `pnpm e2e` (same as `pnpm --filter web e2e`): the Playwright critical-journey suite against the real web app + the real API in `E2E_FAKE_PROVIDERS=1` mode + real Clerk dev auth. Needs the `E2E_CLERK_*` env vars and the local Postgres; see `apps/web/CLAUDE.md`, "E2E (slice 17)". Not part of `git push`; the `E2E` workflow runs it as a required PR check.
 - `pnpm dev` runs both apps at once (`apps/web` on Next.js dev server + `apps/api` on `uvicorn --reload`, via `concurrently`). Requires local Postgres running first (see below).
 - `git push` runs `pnpm test` and the API suite (`apps/api/scripts/test.sh`) side by side, about 40s. The API half needs the local Postgres running (`docker compose up -d`). Don't bypass it with `--no-verify` unless the user asks.
 - `pnpm scan:bundle` (after `pnpm --filter web build`): fails if a server secret's value, a secret-shaped string, or a secret-sounding `NEXT_PUBLIC_*` name is in `apps/web/.next/static` (`tooling/bundle-scan.ts`). A new server secret goes into its `SECRET_ENV_NAMES` and gets a canary in `.github/workflows/web.yml`.

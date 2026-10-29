@@ -22,4 +22,5 @@ description: Build a page or section in apps/web. Use when adding a new UI page,
 - [ ] Success state only rendered after a confirmed API response.
 - [ ] No secrets or provider calls in frontend code.
 - [ ] Copy uses plain hyphens, colons or two sentences in place of em/en dashes.
+- [ ] A change to a step of the MVP critical journey (onboarding, agent setup, calendar, test chat, inbox, usage) is reflected in `apps/web/e2e/critical-journey.spec.ts` with accessible locators (`getByRole` / `getByLabel`), and a 429 `rate_limited` from a mutating call is handled.
 - [ ] Any meter or progress bar has `role="meter"` (or equivalent) and states used/limit in text.
