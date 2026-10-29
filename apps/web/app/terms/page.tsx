@@ -11,7 +11,6 @@ const description =
 export const metadata = {
   title: "Terms of Service",
   description,
-  alternates: { canonical: TERMS_PATH },
 } satisfies Metadata;
 
 export default function TermsPage() {

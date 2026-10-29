@@ -161,9 +161,10 @@ export const PRIVACY_SECTIONS: LegalSection[] = [
           bookings) are stored so you can review them in your inbox.
         </P>
         <P>
-          Real customer data is not processed during the prototype phase: test your receptionist with
-          made-up conversations only. Content sent through the Gemini API&apos;s free tier may be used by Google
-          to improve its products, as explained above.
+          During the prototype phase, you must not enter real customer data: test your receptionist with
+          made-up conversations only. Tether cannot tell real text from made-up text, so anything typed into a
+          conversation is processed as described here. Content sent through the Gemini API&apos;s free tier may be
+          used by Google to improve its products, as explained above.
         </P>
       </>
     ),

@@ -11,7 +11,6 @@ const description =
 export const metadata = {
   title: "Privacy Policy",
   description,
-  alternates: { canonical: PRIVACY_PATH },
 } satisfies Metadata;
 
 export default function PrivacyPage() {
