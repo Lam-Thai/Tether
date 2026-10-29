@@ -8,6 +8,7 @@ from api.v1.booking_rules import router as booking_rules_router
 from api.v1.bookings import router as bookings_router
 from api.v1.business import router as business_router
 from api.v1.calendar import router as calendar_router
+from api.v1.dashboard import router as dashboard_router
 from api.v1.escalations import router as escalations_router
 from api.v1.faqs import router as faqs_router
 from api.v1.hours import router as hours_router
@@ -24,6 +25,7 @@ router.include_router(me_router)
 router.include_router(hours_router)  # before business: `/business/hours` is a literal path
 router.include_router(booking_rules_router)  # literal `/business/booking-rules`
 router.include_router(escalations_router)  # literal `/business/escalation-settings`
+router.include_router(dashboard_router)  # literal `/business/test-data`
 router.include_router(business_router)
 router.include_router(billing_router)
 router.include_router(agent_router)

@@ -7,10 +7,11 @@ vi.mock("next/navigation", () => ({ usePathname: () => pathname }));
 import { DashboardNav } from "./dashboard-nav";
 
 describe("DashboardNav", () => {
-  it("links Agent, Calendar, Phone, Inbox and Settings and leaves the other sections disabled", () => {
+  it("links Overview, Agent, Calendar, Phone, Inbox and Settings and leaves the other sections disabled", () => {
     pathname = "/dashboard";
     render(<DashboardNav />);
 
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("href", "/dashboard");
     const link = screen.getByRole("link", { name: "Agent" });
     expect(link).toHaveAttribute("href", "/dashboard/agent");
     expect(link).not.toHaveAttribute("aria-current");
@@ -24,11 +25,21 @@ describe("DashboardNav", () => {
     );
     expect(screen.getByRole("link", { name: "Inbox" })).toHaveAttribute("href", "/dashboard/inbox");
     expect(screen.getByRole("link", { name: "Phone" })).toHaveAttribute("href", "/dashboard/phone");
-    expect(screen.getAllByRole("link")).toHaveLength(5);
+    expect(screen.getAllByRole("link")).toHaveLength(6);
 
     for (const label of ["FAQs", "Services"]) {
       expect(screen.getByText(label)).toHaveAttribute("aria-disabled", "true");
     }
+  });
+
+  it("marks Overview as current only on the dashboard home", () => {
+    pathname = "/dashboard";
+    const { unmount } = render(<DashboardNav />);
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
+    unmount();
+    pathname = "/dashboard/agent";
+    render(<DashboardNav />);
+    expect(screen.getByRole("link", { name: "Overview" })).not.toHaveAttribute("aria-current");
   });
 
   it("marks Agent as the current page on its route", () => {
@@ -38,7 +49,7 @@ describe("DashboardNav", () => {
   });
 
   it("marks Settings as current on any settings route", () => {
-    pathname = "/dashboard/settings/usage";
+    pathname = "/dashboard/settings/integrations";
     render(<DashboardNav />);
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Agent" })).not.toHaveAttribute("aria-current");

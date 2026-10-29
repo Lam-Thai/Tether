@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 /** Sections with a page. Every other entry is a future slice, so it renders as a non-interactive item. */
 const NAV_ITEMS = [
+  { label: "Overview", href: "/dashboard", exact: true },
   { label: "Agent", href: "/dashboard/agent" },
   { label: "FAQs" },
   { label: "Services" },
@@ -38,7 +39,9 @@ export function DashboardNav() {
 
           const within = (base: string) => pathname === base || pathname.startsWith(`${base}/`);
           // Calendar lives under /settings but has its own entry, so Settings steps aside.
-          const active = within(item.href) && !("exclude" in item && within(item.exclude));
+          // Overview is /dashboard itself; every other page lives beneath it.
+          const active =
+            "exact" in item ? pathname === item.href : within(item.href) && !("exclude" in item && within(item.exclude));
           return (
             <li key={item.label}>
               <Link

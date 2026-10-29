@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import type {
+  AgentReadinessResult,
   AgentResult,
   BookingRulesResult,
   BusinessHoursResult,
@@ -10,6 +11,7 @@ import type {
   ServiceListResult,
   VoiceListResult,
 } from "@/lib/api/client";
+import { ActivationChecklist } from "@/components/agent/activation-checklist";
 import { AgentBuilder } from "@/components/agent/agent-builder";
 import { BookingRulesEditor } from "@/components/agent/booking-rules-editor";
 import { BusinessInfoForm } from "@/components/agent/business-info-form";
@@ -26,6 +28,8 @@ import { Callout } from "@/components/ui/callout";
  * `GET /agent` result. The chat's own load state travels in `chat`. The builder
  * column follows the PRD order: identity and personality, business information,
  * FAQs, services, business hours; each section handles its own load failure.
+ * Section anchors (`#persona`, `#services`, `#hours`, `#escalation`, `#test-chat`,
+ * `#activation`) are the targets of the readiness checklist's fix links.
  */
 export function AgentWorkspace({
   agent,
@@ -37,6 +41,7 @@ export function AgentWorkspace({
   bookingRules,
   escalationSettings,
   voices,
+  readiness,
 }: {
   agent: AgentResult;
   chat: ChatLoad;
@@ -47,6 +52,7 @@ export function AgentWorkspace({
   bookingRules: BookingRulesResult;
   escalationSettings: EscalationSettingsResult;
   voices: VoiceListResult;
+  readiness: AgentReadinessResult;
 }) {
   switch (agent.kind) {
     case "ok":
@@ -55,17 +61,28 @@ export function AgentWorkspace({
           <h1 className="text-h1 font-bold tracking-tight uppercase">Agent</h1>
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
             <div className="flex min-w-0 flex-col gap-6">
-              <AgentBuilder agent={agent.data} voices={voices} />
+              <div id="persona" className="scroll-mt-6">
+                <AgentBuilder agent={agent.data} voices={voices} />
+              </div>
               <BusinessInfoForm result={business} />
               <FaqManager result={faqs} />
-              <ServicesManager result={services} />
-              <HoursEditor result={hours} />
+              <div id="services" className="scroll-mt-6">
+                <ServicesManager result={services} />
+              </div>
+              <div id="hours" className="scroll-mt-6">
+                <HoursEditor result={hours} />
+              </div>
               <BookingRulesEditor result={bookingRules} />
-              <EscalationRulesEditor result={escalationSettings} />
+              <div id="escalation" className="scroll-mt-6">
+                <EscalationRulesEditor result={escalationSettings} />
+              </div>
             </div>
-            <div className="min-w-0 lg:sticky lg:top-6">
+            <div id="test-chat" className="min-w-0 scroll-mt-6 lg:sticky lg:top-6">
               <TestChat agentName={agent.data.name} chat={chat} />
             </div>
+          </div>
+          <div id="activation" className="max-w-3xl scroll-mt-6">
+            <ActivationChecklist result={readiness} />
           </div>
         </div>
       );

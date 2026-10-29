@@ -37,5 +37,8 @@ Only ask if the answer isn't already clear from the issue or the existing code â
 - [ ] Success UI only renders after a confirmed backend response.
 - [ ] Component follows existing shadcn/ui + Tailwind conventions rather than introducing a new pattern.
 - [ ] Copy uses plain hyphens, colons or two sentences in place of em/en dashes.
+- [ ] `tooling/repo-hygiene.test.ts` scans only files git tracks: run `git add -N <new files>` before `pnpm test`, or the new files are never checked.
+- [ ] A URL from an API response rendered as an `href` (readiness `fix_url`) is accepted only as a same-site path (`isSitePath` in `lib/api/client.ts`); anything else fails the parse.
+- [ ] Subagents have no Skill tool: the lead runs `taste-skill:design-taste-frontend` and passes its rules in the brief; apply them.
 
 Use the `web-feature` skill (`.claude/skills/`) for the step-by-step on a new page or section.

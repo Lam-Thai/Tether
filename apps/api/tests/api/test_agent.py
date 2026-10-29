@@ -49,7 +49,7 @@ async def test_get_agent_creates_the_defaults(client, entitled_tenants):
     assert body["tone"] == "friendly"
     assert body["greeting"] == "Hi, thanks for contacting Alpha Business! How can I help you today?"
     assert body["custom_instructions"] == ""
-    assert body["active"] is True
+    assert body["active"] is False  # new agents start inactive until activated
     again = await client.get("/api/v1/agent", headers=_auth(tenant_a))
     assert again.json()["id"] == body["id"]
 
