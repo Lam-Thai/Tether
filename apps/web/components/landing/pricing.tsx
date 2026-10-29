@@ -14,7 +14,7 @@ export function Pricing({ signedIn }: { signedIn: boolean }) {
   return (
     <section
       id="pricing"
-      className="mx-auto grid w-full max-w-[1280px] scroll-mt-20 grid-cols-1 items-center gap-10 px-6 pb-[clamp(4rem,8vw,8rem)] md:grid-cols-[5fr_6fr] md:gap-16"
+      className="mx-auto grid w-full max-w-[1280px] scroll-mt-28 grid-cols-1 items-center gap-10 px-6 pb-[clamp(4rem,8vw,8rem)] md:grid-cols-[5fr_6fr] md:gap-16"
     >
       <div className="flex flex-col gap-3">
         <h2 className="text-h1 font-bold tracking-tight uppercase">One plan. One price.</h2>
