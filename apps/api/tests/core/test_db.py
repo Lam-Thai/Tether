@@ -2,7 +2,7 @@
 
 import pytest
 
-from core.db import is_local_database
+from core.db_hosts import is_local_database
 
 
 @pytest.mark.parametrize(

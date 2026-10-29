@@ -1,5 +1,7 @@
 """FastAPI application factory."""
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,9 +13,16 @@ from core.log_format import configure_logging
 from core.rate_limit import warn_if_client_ip_unknown
 from core.request_context import RequestContextMiddleware
 
+logger = logging.getLogger("tether.app")
+
 
 def create_app() -> FastAPI:
     configure_logging()
+    if settings.e2e_fake_providers:
+        logger.warning(
+            "E2E_FAKE_PROVIDERS is ON: Gemini, Stripe and Google Calendar are fakes. "
+            "Never run this against real customers."
+        )
     warn_if_client_ip_unknown()
     app = FastAPI(title="Tether API", version=settings.app_version)
 

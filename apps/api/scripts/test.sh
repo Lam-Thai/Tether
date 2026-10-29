@@ -34,7 +34,7 @@ if [ "${TEST_DATABASE_ALLOW_REMOTE:-}" != "1" ]; then
   local_status=0
   uv run python -c 'import sys
 from core.config import settings
-from core.db import is_local_database
+from core.db_hosts import is_local_database
 sys.exit(0 if is_local_database(settings.database_url) else 3)' || local_status=$?
   if [ "$local_status" -eq 3 ]; then
     echo "api tests: refusing a database that is not on this machine. Use a local Postgres" >&2
