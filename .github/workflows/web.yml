@@ -19,6 +19,20 @@ jobs:
       # succeed, even though this CI job never talks to Clerk.
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
       CLERK_SECRET_KEY: sk_test_ZXhhbXBsZS1zZWNyZXQta2V5LWZvci1jaS1vbmx5LTAwMDAwMDAwMDA
+      # Bundle-scan canaries (slice 17): every server secret gets a unique fake value during
+      # the build, and the scan fails if any of them reaches a file served to browsers.
+      # The names are `tooling/bundle-scan.ts` SECRET_ENV_NAMES.
+      CLERK_WEBHOOK_SECRET: canary-clerk-webhook-${{ github.run_id }}
+      STRIPE_SECRET_KEY: canary-stripe-secret-${{ github.run_id }}
+      STRIPE_WEBHOOK_SECRET: canary-stripe-webhook-${{ github.run_id }}
+      GEMINI_API_KEY: canary-gemini-key-${{ github.run_id }}
+      TWILIO_AUTH_TOKEN: canary-twilio-token-${{ github.run_id }}
+      TWILIO_TEST_AUTH_TOKEN: canary-twilio-test-${{ github.run_id }}
+      DATABASE_URL: canary-database-url-${{ github.run_id }}
+      GOOGLE_OAUTH_CLIENT_SECRET: canary-google-secret-${{ github.run_id }}
+      CALENDAR_TOKEN_KEYS: canary-token-keys-${{ github.run_id }}
+      OAUTH_STATE_SECRET: canary-state-secret-${{ github.run_id }}
+      E2E_CLERK_USER_PASSWORD: canary-e2e-password-${{ github.run_id }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -46,3 +60,6 @@ jobs:
 
       - name: Build
         run: pnpm --filter web build
+
+      - name: Scan the client bundle for server secrets
+        run: pnpm scan:bundle
