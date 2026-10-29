@@ -1,0 +1,28 @@
+# gitleaks (slice 17, `.github/workflows/security.yml`): the default rules, plus the
+# synthetic values this repo commits on purpose. Allow a VALUE here only when it is a
+# documented placeholder or a test fixture that was never a real credential; never allow
+# a whole directory that real configuration could live in.
+title = "Tether gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic test fixtures and CI placeholders, never real credentials"
+paths = [
+  # Test suites: every key, token and phone number in them is synthetic by rule
+  # (root CLAUDE.md: synthetic data only).
+  '''^apps/api/tests/''',
+  '''^apps/web/.*\.test\.tsx?$''',
+  '''^tooling/.*\.test\.ts$''',
+]
+regexes = [
+  # web.yml's dummy Clerk keys (base64 of "example.clerk.accounts.dev$" and
+  # "example-secret-key-for-ci-only-0000000000"): `next build` needs syntactically valid keys.
+  '''pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk''',
+  '''sk_test_ZXhhbXBsZS1zZWNyZXQta2V5LWZvci1jaS1vbmx5LTAwMDAwMDAwMDA''',
+  # api.yml / eval.yml Stripe placeholders.
+  '''(?:sk_test|whsec|price)_ci_placeholder''',
+  # Bundle-scan canaries (web.yml): fake values planted to prove they never reach the bundle.
+  '''canary-[a-z0-9-]+-\$\{\{ github\.run_id \}\}''',
+]
