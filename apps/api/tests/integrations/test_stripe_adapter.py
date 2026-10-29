@@ -18,7 +18,7 @@ import stripe
 
 from core.config import settings
 from integrations.stripe.adapter import StripeBillingGateway
-from integrations.stripe.port import InvalidWebhookSignatureError
+from integrations.stripe.port import GatewayNotFoundError, InvalidWebhookSignatureError
 
 SECRET = "whsec_adapter_test"
 
@@ -128,6 +128,44 @@ async def test_retrieve_subscription_maps_a_real_sdk_object(gateway, monkeypatch
     assert info.cancel_at_period_end is True
     assert info.trial_start == datetime.fromtimestamp(1_760_000_000, tz=UTC)
     assert info.current_period_end == datetime.fromtimestamp(1_761_209_600, tz=UTC)
+
+
+async def test_delete_customer_calls_stripe_once_for_that_customer(gateway, monkeypatch):
+    seen: list[str] = []
+
+    async def fake_delete(customer_id, *args, **kwargs):
+        seen.append(customer_id)
+        return stripe.Customer.construct_from(
+            {"id": customer_id, "object": "customer", "deleted": True}, "sk_test_placeholder"
+        )
+
+    monkeypatch.setattr(gateway._client.v1.customers, "delete_async", fake_delete)
+
+    await gateway.delete_customer(customer_id="cus_1", business_id=uuid.uuid4())
+
+    assert seen == ["cus_1"]
+
+
+async def test_delete_customer_maps_a_missing_customer_to_not_found(gateway, monkeypatch):
+    async def missing(customer_id, *args, **kwargs):
+        raise stripe.InvalidRequestError(
+            "No such customer: 'cus_gone'", param="id", code="resource_missing"
+        )
+
+    monkeypatch.setattr(gateway._client.v1.customers, "delete_async", missing)
+
+    with pytest.raises(GatewayNotFoundError):
+        await gateway.delete_customer(customer_id="cus_gone", business_id=uuid.uuid4())
+
+
+async def test_delete_customer_lets_other_stripe_errors_through(gateway, monkeypatch):
+    async def unreachable(customer_id, *args, **kwargs):
+        raise stripe.APIConnectionError("connection reset")
+
+    monkeypatch.setattr(gateway._client.v1.customers, "delete_async", unreachable)
+
+    with pytest.raises(stripe.APIConnectionError):
+        await gateway.delete_customer(customer_id="cus_1", business_id=uuid.uuid4())
 
 
 @pytest.mark.live

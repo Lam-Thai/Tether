@@ -131,6 +131,12 @@ class StripeBillingGateway:
             interval=price.recurring.interval if price.recurring else "one_time",
         )
 
+    async def delete_customer(self, *, customer_id: str, business_id: uuid.UUID) -> None:
+        # Stripe ends the customer's subscriptions immediately when it deletes the customer
+        # (no proration, no refund) and removes its saved payment methods. DELETE is
+        # idempotent for the SDK's own bounded retries; a repeat is `resource_missing`.
+        await self._call(self._client.v1.customers.delete_async(customer_id))
+
     async def create_portal_session(self, *, customer_id: str, return_url: str) -> str:
         portal = await self._call(
             self._client.v1.billing_portal.sessions.create_async(

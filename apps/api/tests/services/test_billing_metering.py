@@ -32,3 +32,21 @@ async def test_webhook_parsing_is_local_and_not_metered():
     with pytest.raises(InvalidWebhookSignatureError):
         gateway.parse_webhook(b"{}", None)
     assert store.events == []
+
+
+async def test_deleting_a_customer_is_metered_and_attributed_to_the_business():
+    store = MemoryUsageStore()
+    fake = FakeBillingGateway()
+    gateway = MeteredBillingGateway(fake, guard(store))
+    business_id = uuid.uuid4()
+    customer_id = await gateway.create_customer(
+        business_id=business_id, email="o@example.com", name="Alpha"
+    )
+
+    await gateway.delete_customer(customer_id=customer_id, business_id=business_id)
+    with pytest.raises(GatewayNotFoundError):  # already gone: the second call is a miss
+        await gateway.delete_customer(customer_id=customer_id, business_id=business_id)
+
+    assert fake.deleted_customers == [customer_id, customer_id]
+    assert store.count(UsageKind.BILLING_CALL, business_id) == 3  # create + 2 deletes
+    assert store.count(UsageKind.FAILED_REQUEST) == 1

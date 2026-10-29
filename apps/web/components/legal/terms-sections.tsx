@@ -109,7 +109,7 @@ export const TERMS_SECTIONS: LegalSection[] = [
         </li>
         <li>
           When a subscription ends, the dashboard and your receptionist stop working until you subscribe again.
-          Your data is kept until you ask us to delete it, as the {privacyLink} describes.
+          Your data is kept until you delete your account, as the {privacyLink} describes.
         </li>
       </List>
     ),
@@ -187,7 +187,10 @@ export const TERMS_SECTIONS: LegalSection[] = [
     title: "Ending your account",
     body: (
       <P>
-        You can stop using Tether, cancel your subscription and ask us to delete your account at any time. We
+        You can stop using Tether, cancel your subscription and delete your account at any time. Deleting your
+        account is self-serve: use Settings, Data, or the plan page if you have no plan. It ends your subscription at once with no refund, and it
+        cannot be undone. The{" "}
+        <InlineLink href={PRIVACY_PATH}>Privacy Policy</InlineLink> explains what is deleted and what is kept. We
         may suspend or end your access if you break these terms or to protect the service or other people.
         Sections that by their nature should continue after your account ends, such as disclaimers and
         limitation of liability, continue to apply.

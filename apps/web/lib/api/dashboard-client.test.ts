@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activateAgent,
   deactivateAgent,
+  deleteAccount,
   deleteTestData,
   getAgentReadiness,
   getDashboardSummary,
   getIntegrationStatus,
+  type AccountDeletionResult,
   type AgentReadiness,
   type DashboardSummary,
   type IntegrationStatus,
@@ -311,4 +313,77 @@ describe("deleteTestData", () => {
   });
 
   sharedFailures(() => deleteTestData("tok", "DELETE TEST DATA"));
+});
+
+describe("deleteAccount", () => {
+  const RESULT: AccountDeletionResult = {
+    calendar_events_cancelled: 2,
+    calendar_events_not_cancelled: 1,
+    calendar_token_revoked: true,
+    sign_in_deleted: true,
+  };
+
+  it("sends the confirmation as a DELETE body and returns the API's result", async () => {
+    const fetchMock = respond(200, RESULT);
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toEqual({ kind: "ok", data: RESULT });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.example.test/api/v1/account");
+    expect(init.method).toBe("DELETE");
+    expect(init.headers).toEqual({ Authorization: "Bearer tok", "Content-Type": "application/json" });
+    expect(JSON.parse(init.body as string)).toEqual({ confirmation: "DELETE MY ACCOUNT" });
+  });
+
+  it("keeps sign_in_deleted: false as a successful deletion", async () => {
+    respond(200, { ...RESULT, sign_in_deleted: false });
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toEqual({
+      kind: "ok",
+      data: { ...RESULT, sign_in_deleted: false },
+    });
+  });
+
+  it("keeps calendar_token_revoked: null (no connection) as a successful deletion", async () => {
+    respond(200, { ...RESULT, calendar_token_revoked: null });
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toEqual({
+      kind: "ok",
+      data: { ...RESULT, calendar_token_revoked: null },
+    });
+  });
+
+  it("maps a 422 confirmation_mismatch", async () => {
+    respond(422, error("confirmation_mismatch"));
+    expect(await deleteAccount("tok", "nope")).toEqual({ kind: "confirmation_mismatch" });
+  });
+
+  it("maps a 503 billing_unreachable", async () => {
+    respond(503, error("billing_unreachable"));
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toEqual({ kind: "billing_unreachable" });
+  });
+
+  it("does not report a result for a different 422 or 503", async () => {
+    respond(422, error("validation_error"));
+    expect(await deleteAccount("tok", "nope")).toMatchObject({ kind: "unreachable" });
+    respond(503, error("service_unavailable"));
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toMatchObject({ kind: "unreachable" });
+  });
+
+  it("does not report a result when a field is missing or mistyped", async () => {
+    const { sign_in_deleted: _omit, ...partial } = RESULT;
+    void _omit;
+    respond(200, partial);
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toMatchObject({ kind: "unreachable" });
+    respond(200, { ...RESULT, calendar_token_revoked: "yes" });
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toMatchObject({ kind: "unreachable" });
+  });
+
+  it("maps 401", async () => {
+    respond(401, error("unauthorized"));
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toEqual({ kind: "unauthorized" });
+  });
+
+  it("reports an unreachable API when fetch throws or the body is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toMatchObject({ kind: "unreachable" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<html>", { status: 200 })));
+    expect(await deleteAccount("tok", "DELETE MY ACCOUNT")).toMatchObject({ kind: "unreachable" });
+  });
 });

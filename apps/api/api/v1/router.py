@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from api.v1.account import router as account_router
 from api.v1.agent import router as agent_router
 from api.v1.billing import router as billing_router
 from api.v1.booking_rules import router as booking_rules_router
@@ -22,6 +23,7 @@ from api.v1.usage import router as usage_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(me_router)
+router.include_router(account_router)
 router.include_router(hours_router)  # before business: `/business/hours` is a literal path
 router.include_router(booking_rules_router)  # literal `/business/booking-rules`
 router.include_router(escalations_router)  # literal `/business/escalation-settings`

@@ -75,6 +75,12 @@ class MeteredBillingGateway:
     async def retrieve_price(self, price_id: str) -> PriceInfo:
         return await self._metered(lambda: self._inner.retrieve_price(price_id))
 
+    async def delete_customer(self, *, customer_id: str, business_id: uuid.UUID) -> None:
+        await self._metered(
+            lambda: self._inner.delete_customer(customer_id=customer_id, business_id=business_id),
+            business_id,
+        )
+
     async def create_portal_session(self, *, customer_id: str, return_url: str) -> str:
         return await self._metered(
             lambda: self._inner.create_portal_session(

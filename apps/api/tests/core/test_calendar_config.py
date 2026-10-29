@@ -33,8 +33,8 @@ def test_calendar_is_optional_and_unconfigured_by_default(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
 
-    # Even in production, where a missing Gemini key is the only thing that may stop startup.
-    settings = _settings(environment="production", gemini_api_key="k")
+    # Even in production, where only a missing Gemini or Clerk key may stop startup.
+    settings = _settings(environment="production", gemini_api_key="k", clerk_secret_key="sk_test_k")
 
     assert settings.calendar_configured is False
     assert settings.calendar_redirect_uri == (

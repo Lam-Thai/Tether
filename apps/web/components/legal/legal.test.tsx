@@ -69,6 +69,22 @@ describe("privacy policy", () => {
       "https://myaccount.google.com/permissions",
     );
   });
+
+  it("describes self-serve account deletion in order, without an email request", () => {
+    render(<PrivacyPage />);
+    const section = document.getElementById("retention");
+    expect(section).not.toBeNull();
+    const steps = within(section!).getAllByRole("listitem").filter((li) => li.closest("ol"));
+    expect(steps).toHaveLength(5);
+    expect(steps[0]).toHaveTextContent(/Stripe customer is deleted and your subscription ends at once, with no refund/);
+    expect(steps[0]).toHaveTextContent(/Stripe keeps\s+billing records under its own obligations/);
+    expect(steps[1]).toHaveTextContent(/Upcoming appointments.*cancelled.*best\s+effort.*Past events stay/);
+    expect(steps[2]).toHaveTextContent(/token is revoked with Google and deleted/);
+    expect(steps[3]).toHaveTextContent(/business and everything in it is deleted/);
+    expect(steps[4]).toHaveTextContent(/sign-in is deleted from Clerk/);
+    expect(section).toHaveTextContent(/Usage totals that are not tied to any business are kept/);
+    expect(section).not.toHaveTextContent(/email .* from the address you signed up with/);
+  });
 });
 
 describe("terms of service", () => {
@@ -79,6 +95,13 @@ describe("terms of service", () => {
     render(<TermsPage />);
     expect(screen.getByRole("heading", { level: 1, name: "Terms of Service" })).toBeInTheDocument();
     expect(screen.getByText(formatLegalDate(LAST_UPDATED))).toHaveAttribute("dateTime", LAST_UPDATED);
+  });
+
+  it("says deleting the account is self-serve and ends the subscription at once", () => {
+    render(<TermsPage />);
+    const section = document.getElementById("termination");
+    expect(section).toHaveTextContent(/Deleting your account is self-serve: use Settings, Data/);
+    expect(document.body).toHaveTextContent(/ends your subscription at once with no refund/);
   });
 });
 

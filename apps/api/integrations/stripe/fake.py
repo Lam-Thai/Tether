@@ -45,6 +45,10 @@ class FakeBillingGateway:
     subscriptions: dict[str, SubscriptionInfo] = field(default_factory=dict)
     checkout_calls: list[CheckoutCall] = field(default_factory=list)
     expired_sessions: list[str] = field(default_factory=list)
+    # Every `delete_customer` call, in order (including repeats that found nothing).
+    deleted_customers: list[str] = field(default_factory=list)
+    # Raised by the next `delete_customer` (once), to script an outage.
+    fail_next_delete: Exception | None = None
 
     def _next(self, prefix: str) -> str:
         # Real Stripe ids are alphanumeric after the prefix (e.g. cs_test_a1B2...).
@@ -95,6 +99,23 @@ class FakeBillingGateway:
 
     async def retrieve_price(self, price_id: str) -> PriceInfo:
         return self.price
+
+    async def delete_customer(self, *, customer_id: str, business_id: uuid.UUID) -> None:
+        """Like Stripe: the customer and its subscriptions are gone; deleting it again is
+        "no such customer"."""
+        already_gone = customer_id in self.deleted_customers
+        self.deleted_customers.append(customer_id)
+        if self.fail_next_delete is not None:
+            failure, self.fail_next_delete = self.fail_next_delete, None
+            raise failure
+        if already_gone:
+            raise GatewayNotFoundError(customer_id)
+        self.customers = {b: c for b, c in self.customers.items() if c != customer_id}
+        self.subscriptions = {
+            sub_id: sub
+            for sub_id, sub in self.subscriptions.items()
+            if sub.customer_id != customer_id
+        }
 
     async def create_portal_session(self, *, customer_id: str, return_url: str) -> str:
         return f"https://billing.stripe.test/{customer_id}?return={return_url}"
