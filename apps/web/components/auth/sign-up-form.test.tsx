@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const pushMock = vi.fn();
@@ -212,6 +212,23 @@ describe("SignUpForm", () => {
     expect(alert).not.toHaveTextContent(/code didn.t work/i);
     expect(screen.getByRole("link", { name: /sign in/i })).toHaveAttribute("href", "/sign-in");
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it("says creating an account, by email or Google/GitHub, agrees to the Terms and Privacy Policy", () => {
+    render(<SignUpForm />);
+
+    const consent = screen.getByText((_, element) =>
+      element?.tagName === "P" &&
+      element.textContent === "By creating an account you agree to the Terms and Privacy Policy.",
+    );
+    expect(within(consent).getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+    expect(within(consent).getByRole("link", { name: "Privacy Policy" })).toHaveAttribute("href", "/privacy");
+
+    // One line under both paths: the provider buttons and the email form share the card it closes.
+    const card = consent.parentElement!;
+    for (const name of ["Continue with Google", "Continue with GitHub", "Create account"]) {
+      expect(within(card).getByRole("button", { name })).toBeInTheDocument();
+    }
   });
 
   it.each([

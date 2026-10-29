@@ -11,11 +11,13 @@ import { useSignUp } from "@clerk/nextjs/legacy";
 import { extractClerkMessage } from "@/components/auth/clerk-errors";
 import { signUpBlockedMessage, uncollectedFields } from "@/components/auth/clerk-status";
 import { OAuthButtons, type OAuthStrategy } from "@/components/auth/oauth-buttons";
+import { InlineLink } from "@/components/legal/prose";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError, FormError } from "@/components/ui/form-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PRIVACY_PATH, TERMS_PATH } from "@/lib/legal";
 import {
   signUpSchema,
   verificationCodeSchema,
@@ -232,6 +234,13 @@ export function SignUpForm() {
             {isSubmitting ? "Creating account…" : "Create account"}
           </Button>
         </form>
+        {/* Below both paths, so it covers the Google / GitHub buttons as well as the email form. */}
+        <p className="text-sm text-muted-foreground">
+          By creating an account you agree to the{" "}
+          <InlineLink href={TERMS_PATH}>Terms</InlineLink> and{" "}
+          <InlineLink href={PRIVACY_PATH}>Privacy Policy</InlineLink>
+          .
+        </p>
       </CardContent>
     </Card>
   );

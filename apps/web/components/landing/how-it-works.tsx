@@ -36,7 +36,7 @@ export function HowItWorks() {
   return (
     <section
       id="how-it-works"
-      className="mx-auto w-full max-w-[1280px] scroll-mt-20 px-6 py-[clamp(4rem,8vw,8rem)]"
+      className="mx-auto w-full max-w-[1280px] scroll-mt-28 px-6 py-[clamp(4rem,8vw,8rem)]"
     >
       <div className="mb-12 flex max-w-2xl flex-col gap-3">
         <Eyebrow>How it works</Eyebrow>
