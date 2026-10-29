@@ -6,6 +6,7 @@ import { getBillingPlan, getMe } from "@/lib/api/client";
 import { destinationFor } from "@/lib/billing/destination";
 import { BillingShell } from "@/components/billing/billing-shell";
 import { PlanChooser } from "@/components/billing/plan-chooser";
+import { AccountDeletionPanel } from "@/components/settings/account-deletion-panel";
 import { Callout } from "@/components/ui/callout";
 
 export const metadata: Metadata = { title: "Choose a plan" };
@@ -39,17 +40,20 @@ export default async function PlanPage({
 
   return (
     <BillingShell>
-      {plan.kind === "ok" ? (
-        <PlanChooser plan={plan.data} canceled={canceled === "1"} />
-      ) : (
-        <div className="w-full max-w-xl">
-          <Callout tone="danger" title="Can't load plans" headingLevel={1}>
-            {plan.kind === "unreachable"
-              ? plan.reason
-              : "Your session or business couldn't be confirmed. Please sign in again."}
-          </Callout>
-        </div>
-      )}
+      <div className="flex w-full flex-col items-center gap-12">
+        {plan.kind === "ok" ? (
+          <PlanChooser plan={plan.data} canceled={canceled === "1"} />
+        ) : (
+          <div className="w-full max-w-xl">
+            <Callout tone="danger" title="Can't load plans" headingLevel={1}>
+              {plan.kind === "unreachable"
+                ? plan.reason
+                : "Your session or business couldn't be confirmed. Please sign in again."}
+            </Callout>
+          </div>
+        )}
+        <AccountDeletionPanel variant="disclosure" />
+      </div>
     </BillingShell>
   );
 }

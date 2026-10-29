@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     # Clerk's `azp` claim, restricted to the frontend origin(s) allowed to
     # mint tokens for this API. Empty means "don't check" (local dev).
     clerk_authorized_parties: Annotated[list[str], NoDecode] = []
+    # Clerk's Backend API secret key, used ONLY to delete a user on account deletion
+    # (integrations/clerk/users.py). Optional: unset, deleting an account still removes
+    # all Tether data and reports that the sign-in could not be removed. `sk_test_`
+    # outside production, like the Stripe key; sent only in the Authorization header.
+    clerk_secret_key: SecretStr | None = None
+    # Per attempt; the delete is idempotent, so it is tried at most twice.
+    clerk_timeout_seconds: float = Field(default=10.0, gt=0, le=30)
 
     # Stripe (integrations/stripe). Test-mode keys only outside production.
     stripe_secret_key: str
@@ -216,12 +223,47 @@ class Settings(BaseSettings):
             raise ValueError("A live Stripe key is only allowed when ENVIRONMENT=production.")
         return self
 
+    @field_validator("clerk_secret_key", mode="before")
+    @classmethod
+    def _blank_clerk_secret_is_unset(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("clerk_secret_key")
+    @classmethod
+    def _clerk_secret_is_a_clerk_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not re.fullmatch(
+            r"sk_(test|live)_[A-Za-z0-9_-]+", value.get_secret_value()
+        ):
+            raise ValueError(
+                "CLERK_SECRET_KEY must be a Clerk secret key (sk_test_... or sk_live_...)."
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _live_clerk_key_only_in_production(self) -> "Settings":
+        if (
+            self.clerk_secret_key is not None
+            and self.clerk_secret_key.get_secret_value().startswith("sk_live_")
+            and self.environment != "production"
+        ):
+            raise ValueError("A live Clerk key is only allowed when ENVIRONMENT=production.")
+        return self
+
     @model_validator(mode="after")
     def _gemini_key_required_in_production(self) -> "Settings":
         if self.environment == "production" and not (
             self.gemini_api_key and self.gemini_api_key.get_secret_value()
         ):
             raise ValueError("GEMINI_API_KEY is required when ENVIRONMENT=production.")
+        return self
+
+    @model_validator(mode="after")
+    def _clerk_key_required_in_production(self) -> "Settings":
+        # Without it account deletion cannot remove the sign-in the privacy policy says it does.
+        if self.environment == "production" and self.clerk_secret_key is None:
+            raise ValueError("CLERK_SECRET_KEY is required when ENVIRONMENT=production.")
         return self
 
     @field_validator(

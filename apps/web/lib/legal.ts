@@ -8,7 +8,7 @@
 /** The legal name of the business that operates Tether. */
 export const LEGAL_NAME: string | null = null;
 
-/** Where users send privacy questions and deletion requests. */
+/** Where users send privacy questions. (Account deletion is self-serve, not by email.) */
 export const CONTACT_EMAIL: string | null = null;
 
 /** The governing law for the Terms, e.g. a state and country. */

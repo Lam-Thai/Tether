@@ -212,9 +212,29 @@ export const PRIVACY_SECTIONS: LegalSection[] = [
             <strong>Disconnecting Google Calendar</strong> asks Google to revoke the stored token and deletes it.
           </li>
           <li>
-            <strong>Deleting your account:</strong> email {contact} from the address you signed up with. Within
-            30 days, Tether deletes your account, business information, conversations and usage logs, and
-            asks Google to revoke any calendar token before deleting it. Stripe keeps billing records under its own obligations.
+            <strong>Deleting your account</strong> (Settings, Data, or the Delete account link on the plan page
+            if you have no plan yet) works straight away, with no email request. You confirm by typing a phrase.
+            Tether then does these steps in this order:
+            <ol className="mt-2 flex list-decimal flex-col gap-2 pl-6">
+              <li>
+                Your Stripe customer is deleted and your subscription ends at once, with no refund. If Stripe
+                can&apos;t be reached, Tether stops and deletes nothing, so you can try again. Stripe keeps
+                billing records under its own obligations.
+              </li>
+              <li>
+                Upcoming appointments that Tether added to your Google Calendar are cancelled. This is best
+                effort, and Tether tells you about any it couldn&apos;t cancel. Past events stay on your calendar.
+              </li>
+              <li>Your calendar token is revoked with Google and deleted.</li>
+              <li>
+                Your business and everything in it is deleted: its setup, conversations, bookings, usage logs
+                and reply audio.
+              </li>
+              <li>
+                Your sign-in is deleted from Clerk. If that step fails, Tether tells you and you can try again.
+              </li>
+            </ol>
+            Usage totals that are not tied to any business are kept.
           </li>
         </List>
       </>

@@ -2652,6 +2652,8 @@ export async function previewVoice(token: string, voice: string): Promise<VoiceP
 
 const DASHBOARD_TIMEOUT_MS = 20000;
 const DELETE_TEST_DATA_TIMEOUT_MS = 45000;
+// Stripe, then up to 15 s of calendar cancels, then the database, then Clerk.
+const DELETE_ACCOUNT_TIMEOUT_MS = 60000;
 
 /** `GET /dashboard/summary`: counts for a business-local date range (inclusive). */
 export interface DashboardSummary {
@@ -2992,5 +2994,61 @@ export async function deleteTestData(token: string, confirmation: string): Promi
     return { kind: "confirmation_mismatch" };
   }
   if (outcome.status === 200 && isTestDataReport(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** `DELETE /account` (slice 50): what the API did, in the order it did it. */
+export interface AccountDeletionResult {
+  calendar_events_cancelled: number;
+  calendar_events_not_cancelled: number;
+  /**
+   * `null`: no calendar connection. `false`: there was one and Google did not confirm the
+   * revoke, so the owner must remove Tether's access in their Google account.
+   */
+  calendar_token_revoked: boolean | null;
+  /** `false` means the data is gone but the Clerk sign-in could not be removed. */
+  sign_in_deleted: boolean;
+}
+
+export type DeleteAccountResult =
+  | { kind: "ok"; data: AccountDeletionResult }
+  /** 422 `confirmation_mismatch`: nothing was deleted. */
+  | { kind: "confirmation_mismatch" }
+  /** 503 `billing_unreachable`: Stripe could not end the subscription, so nothing was deleted. */
+  | { kind: "billing_unreachable" }
+  | { kind: "unauthorized" }
+  | { kind: "unreachable"; reason: string };
+
+function isAccountDeletionResult(value: unknown): value is AccountDeletionResult {
+  if (!isRecord(value)) return false;
+  return (
+    isCount(value.calendar_events_cancelled) &&
+    isCount(value.calendar_events_not_cancelled) &&
+    (value.calendar_token_revoked === null || typeof value.calendar_token_revoked === "boolean") &&
+    typeof value.sign_in_deleted === "boolean"
+  );
+}
+
+/**
+ * Calls `DELETE /api/v1/account`. `confirmation` is sent as typed; the API owns the
+ * comparison (a mismatch is a 422 and deletes nothing). Needs no plan and no business.
+ * Only a 200 means anything was deleted; the call is idempotent, so a retry is safe.
+ */
+export async function deleteAccount(token: string, confirmation: string): Promise<DeleteAccountResult> {
+  const outcome = await fetchApi(
+    "/account",
+    { method: "DELETE", headers: jsonAuthHeaders(token), body: JSON.stringify({ confirmation }) },
+    DELETE_ACCOUNT_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 422 && errorCode(outcome.body) === "confirmation_mismatch") {
+    return { kind: "confirmation_mismatch" };
+  }
+  if (outcome.status === 503 && errorCode(outcome.body) === "billing_unreachable") {
+    return { kind: "billing_unreachable" };
+  }
+  if (outcome.status === 200 && isAccountDeletionResult(outcome.body)) return { kind: "ok", data: outcome.body };
   return UNEXPECTED;
 }

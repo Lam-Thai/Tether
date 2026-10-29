@@ -65,6 +65,9 @@ class UsageKind(StrEnum):
     BILLING_CALL = "billing_call"
     # Twilio REST calls that manage numbers (list, configure, verify): metered, never capped.
     TELEPHONY_API = "telephony_api"
+    # Clerk Backend API calls (deleting a signed-in user on account deletion): metered, never
+    # capped, and attributed to no business since the business is gone by then.
+    IDENTITY_CALL = "identity_call"
     FAILED_REQUEST = "failed_request"
 
 
@@ -79,6 +82,7 @@ PROVIDER: Mapping[UsageKind, str] = {
     UsageKind.CALENDAR_CALL: "google_calendar",
     UsageKind.BILLING_CALL: "stripe",
     UsageKind.TELEPHONY_API: "twilio",
+    UsageKind.IDENTITY_CALL: "clerk",
 }
 
 # Gemini requests whose tokens count toward `gemini_tokens` and the estimated cost (an

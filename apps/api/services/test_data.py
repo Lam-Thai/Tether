@@ -29,16 +29,9 @@ from typing import Protocol
 from core.errors import AppError
 from core.tenant import Tenant
 from services.agent import require_business
-from services.calendar import (
-    CalendarAuthRevokedError,
-    CalendarError,
-    CalendarNotFoundError,
-    CalendarNotSelectedError,
-)
+from services.event_cancellation import DEADLINE_SECONDS, MAX_EVENT_CANCELS, cancel_events
 
 CONFIRMATION_PHRASE = "DELETE TEST DATA"
-MAX_EVENT_CANCELS = 50
-DEADLINE_SECONDS = 15.0
 
 logger = logging.getLogger("tether.test_data")
 
@@ -110,7 +103,14 @@ class TestDataEraser:
             raise ConfirmationMismatchError(f"Type {CONFIRMATION_PHRASE} to confirm.")
         business_id = require_business(tenant).id
         event_ids = await self._store.calendar_event_ids(business_id)
-        cancelled = await self._cancel_all(business_id, event_ids)
+        cancelled = await cancel_events(
+            self._cancel_event,
+            business_id,
+            event_ids,
+            deadline_seconds=self._deadline_seconds,
+            max_cancels=self._max_cancels,
+            monotonic=self._monotonic,
+        )
         counts = await self._store.erase(business_id, keep_usage_from=self._today_utc())
         # Judged on the rows actually deleted, so a booking confirmed after the snapshot
         # (nobody tried to cancel it) is reported as not cancelled, never silently dropped.
@@ -134,25 +134,3 @@ class TestDataEraser:
             calendar_events_cancelled=len(cancelled),
             calendar_events_not_cancelled=not_cancelled,
         )
-
-    async def _cancel_all(self, business_id: uuid.UUID, event_ids: list[str]) -> set[str]:
-        """The event ids that are gone from the calendar afterwards (cancelled or already
-        gone). The deadline is checked BETWEEN calls only: a call is never interrupted
-        (that could cancel it mid-database-work on the shared session); each one is already
-        bounded by the Google timeout and `CALENDAR_RETRY`."""
-        deadline = self._monotonic() + self._deadline_seconds
-        cancelled: set[str] = set()
-        for event_id in event_ids[: self._max_cancels]:
-            if self._monotonic() >= deadline:
-                break  # out of time; what remains is reported as not cancelled
-            try:
-                await self._cancel_event(business_id, event_id)
-            except CalendarNotFoundError:
-                cancelled.add(event_id)  # already gone: what the owner wanted
-            except (CalendarNotSelectedError, CalendarAuthRevokedError):
-                break  # every further attempt would fail the same way
-            except CalendarError:
-                continue
-            else:
-                cancelled.add(event_id)
-        return cancelled

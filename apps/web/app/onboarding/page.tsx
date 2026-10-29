@@ -5,6 +5,7 @@ import { getMe } from "@/lib/api/client";
 import { destinationFor } from "@/lib/billing/destination";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { OnboardingForm } from "@/components/onboarding/onboarding-form";
+import { AccountDeletionPanel } from "@/components/settings/account-deletion-panel";
 
 // Always re-checks `GET /me` — this page's whole job is deciding whether
 // the signed-in owner still needs to create a business, which must never
@@ -29,7 +30,11 @@ export default async function OnboardingPage() {
 
   return (
     <AuthShell>
-      <OnboardingForm />
+      <div className="flex w-full flex-col items-center gap-12">
+        <OnboardingForm />
+        {/* No business yet: deleting still removes the sign-in and the `users` row. */}
+        <AccountDeletionPanel variant="disclosure" />
+      </div>
     </AuthShell>
   );
 }
