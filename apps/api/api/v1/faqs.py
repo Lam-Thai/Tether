@@ -53,14 +53,3 @@ async def delete_faq(faq_id: UUID, tenant: Entitled, store: FaqStore, session: S
     await faq_service.delete_faq(store, tenant, faq_id)
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-# DELIBERATELY BROKEN (slice 17 CI proof, reverted in the next commit): loads a FAQ by id
-# with NO business scope, so any tenant can read any other tenant's FAQ.
-@router.get("/faqs/{faq_id}", response_model=FaqRead)
-async def get_faq_unscoped(faq_id: UUID, tenant: Entitled, session: Session) -> FaqRead:
-    from models.faq import Faq
-
-    faq = await session.get(Faq, faq_id)
-    assert faq is not None
-    return FaqRead.model_validate(faq)
