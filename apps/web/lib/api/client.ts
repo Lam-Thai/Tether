@@ -699,6 +699,8 @@ export type TestTurnResult =
   | { kind: "busy" }
   /** 429 `concurrency_limited`: too many active chats to start a new one. */
   | { kind: "concurrency_limited" }
+  /** 429 `rate_limited`: too many messages in a short time; the draft is kept. */
+  | { kind: "rate_limited" }
   | { kind: "not_found" }
   | { kind: "unauthorized" }
   | { kind: "subscription_required" }
@@ -849,7 +851,9 @@ export async function sendTestMessage(
     return errorCode(outcome.body) === "interaction_busy" ? { kind: "busy" } : { kind: "ended" };
   }
   if (outcome.status === 429) {
-    return errorCode(outcome.body) === "concurrency_limited" ? { kind: "concurrency_limited" } : UNEXPECTED;
+    const code = errorCode(outcome.body);
+    if (code === "rate_limited") return { kind: "rate_limited" };
+    return code === "concurrency_limited" ? { kind: "concurrency_limited" } : UNEXPECTED;
   }
   if (outcome.status === 422) {
     return { kind: "validation", ...validationFrom(outcome.body, "That message cannot be sent.") };

@@ -16,6 +16,7 @@ from models.interaction import Interaction, InteractionMessage
 from models.media import MediaObject, MediaToken
 from models.operation import InteractionOperation
 from models.phone_number import PhoneNumber
+from models.rate_limit import RateLimitWindow
 from models.service import Service
 from models.usage import UsageCounter, UsageEvent
 from models.user import User
@@ -37,6 +38,7 @@ __all__ = [
     "MediaObject",
     "MediaToken",
     "PhoneNumber",
+    "RateLimitWindow",
     "Service",
     "StripeEvent",
     "Subscription",

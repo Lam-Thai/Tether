@@ -83,6 +83,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import ValidationError
 
+from core import log_context
 from core.errors import AppError
 from core.retry import RetryPolicy, retry_bounded
 from core.tenant import Tenant
@@ -465,6 +466,7 @@ class ConversationEngine:
         # sits idle inside one during the (slow) model call. A new chat's
         # interaction and greeting are durable from here on, whatever happens next.
         business_id, interaction_id = business.id, interaction.id
+        log_context.bind(interaction_id=interaction_id)
         await self._store.checkpoint()
         outcome = await self._generate(context, tenant, business, interaction_id, caller_phone)
 

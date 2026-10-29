@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.billing import get_entitled_tenant
 from core.conversation import get_agent_store, get_conversation_engine
 from core.db import get_session
+from core.rate_limit import limit_agent_test, limit_voice_preview
 from core.readiness import get_agent_activation
 from core.speech import get_speech_synthesizer, get_voice_catalog
 from core.tenant import Tenant
@@ -117,6 +118,7 @@ async def get_voices(tenant: Entitled, catalog: Catalog, speech: Speech) -> Voic
 
 @router.post(
     "/agent/voice-preview",
+    dependencies=[Depends(limit_voice_preview)],
     response_class=Response,
     responses={200: {"content": {"audio/wav": {}}}},
 )
@@ -129,7 +131,7 @@ async def post_voice_preview(
     return Response(content=audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
-@router.post("/agent/test", response_model=TurnRead)
+@router.post("/agent/test", response_model=TurnRead, dependencies=[Depends(limit_agent_test)])
 async def post_test_turn(
     body: TestTurnCreate, tenant: Entitled, engine: Engine, session: Session
 ) -> TurnRead:
@@ -145,7 +147,11 @@ async def get_test_transcript(
     return TranscriptRead.model_validate(await engine.transcript(tenant, interaction_id, CHANNEL))
 
 
-@router.post("/agent/test/{interaction_id}/end", response_model=TranscriptRead)
+@router.post(
+    "/agent/test/{interaction_id}/end",
+    response_model=TranscriptRead,
+    dependencies=[Depends(limit_agent_test)],
+)
 async def post_end_test_chat(
     interaction_id: UUID, tenant: Entitled, engine: Engine, session: Session
 ) -> TranscriptRead:

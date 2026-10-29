@@ -31,6 +31,9 @@ export const FALLBACK_NOTE =
 
 export const USAGE_LIMITED_NOTE =
   "Today's AI limit is reached, so replies use the safe fallback until 00:00 UTC.";
+export const RATE_LIMITED_NOTE =
+  "Too many messages in a short time. Wait a moment, then send again. Your message is still in the box.";
+
 export const CONCURRENCY_NOTE =
   "Too many conversations are active right now. End one, or try again in a few minutes.";
 
@@ -198,6 +201,9 @@ export function TestChat({ agentName, chat }: { agentName: string; chat: ChatLoa
           return;
         case "concurrency_limited":
           setError({ kind: "concurrency_limited" });
+          return;
+        case "rate_limited":
+          setError({ kind: "message", text: RATE_LIMITED_NOTE });
           return;
         case "not_found":
           setError({ kind: "message", text: "This chat could not be found. Start a new chat." });

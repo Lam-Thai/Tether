@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.billing import get_billing_config, get_billing_gateway, get_billing_store
 from core.db import get_session
+from core.rate_limit import limit_tenant_mutations, limit_webhook
 from core.tenant import Tenant, get_tenant
 from integrations.stripe import BillingGateway
 from repositories.billing import SqlBillingStore
@@ -51,7 +52,9 @@ async def get_subscription(store: Store, tenant: Tenant = Depends(get_tenant)) -
     return SubscriptionRead.model_validate(access)
 
 
-@router.post("/billing/checkout", response_model=RedirectRead)
+@router.post(
+    "/billing/checkout", dependencies=[Depends(limit_tenant_mutations)], response_model=RedirectRead
+)
 async def post_checkout(
     body: CheckoutCreate,
     store: Store,
@@ -71,7 +74,11 @@ async def post_checkout(
     return RedirectRead(url=url)
 
 
-@router.post("/billing/checkout/{session_id}/sync", response_model=SubscriptionRead)
+@router.post(
+    "/billing/checkout/{session_id}/sync",
+    dependencies=[Depends(limit_tenant_mutations)],
+    response_model=SubscriptionRead,
+)
 async def post_checkout_sync(
     session_id: Annotated[str, Path(pattern=CHECKOUT_SESSION_ID_PATTERN)],
     store: Store,
@@ -84,14 +91,21 @@ async def post_checkout_sync(
     return SubscriptionRead.model_validate(access)
 
 
-@router.post("/billing/portal", response_model=RedirectRead)
+@router.post(
+    "/billing/portal", dependencies=[Depends(limit_tenant_mutations)], response_model=RedirectRead
+)
 async def post_portal(
     store: Store, gateway: Gateway, config: Config, tenant: Tenant = Depends(get_tenant)
 ) -> RedirectRead:
     return RedirectRead(url=await billing.open_portal(store, gateway, config, tenant))
 
 
-@router.post("/webhooks/stripe", response_model=WebhookAck, include_in_schema=False)
+@router.post(
+    "/webhooks/stripe",
+    dependencies=[Depends(limit_webhook)],
+    response_model=WebhookAck,
+    include_in_schema=False,
+)
 async def post_stripe_webhook(
     request: Request,
     store: Store,
