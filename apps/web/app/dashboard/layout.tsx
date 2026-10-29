@@ -4,7 +4,7 @@ import { auth } from "@clerk/nextjs/server";
 import { destinationFor } from "@/lib/billing/destination";
 import { getCurrentMe } from "@/lib/dashboard/current-me";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
-import { SignOutButton } from "@/components/dashboard/sign-out-button";
+import { SidebarFooter } from "@/components/dashboard/sidebar-footer";
 import { Callout } from "@/components/ui/callout";
 import { Wordmark } from "@/components/ui/construct";
 import { Eyebrow } from "@/components/ui/eyebrow";
@@ -53,7 +53,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           </div>
           <DashboardNav />
         </div>
-        <SignOutButton />
+        <SidebarFooter />
       </aside>
       <main className="animate-enter flex-1 p-6 md:p-10">
         {/* Without /me we can't confirm the plan, so no dashboard content. */}

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ClosingCta, LandingFooter } from "@/components/landing/closing-footer";
@@ -33,6 +33,31 @@ describe("Pricing", () => {
     expect(screen.getByText("$29")).toBeInTheDocument();
     expect(screen.getByText("14-day free trial")).toBeInTheDocument();
     expect(screen.getByText("No card required")).toBeInTheDocument();
+  });
+});
+
+describe("legal links", () => {
+  it.each([
+    ["signed out", false],
+    ["signed in", true],
+  ])("the header links Privacy and Terms (%s)", (_, signedIn) => {
+    render(<LandingHeader signedIn={signedIn} />);
+    const legal = screen.getByRole("navigation", { name: "Legal" });
+    expect(within(legal).getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
+    expect(within(legal).getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+  });
+
+  it("the footer links Privacy and Terms without a second Legal landmark", () => {
+    render(<LandingFooter />);
+    const footer = screen.getByRole("contentinfo");
+    expect(within(footer).getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
+    expect(within(footer).getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+    expect(screen.queryByRole("navigation", { name: "Legal" })).not.toBeInTheDocument();
+  });
+
+  it("keeps System status in the footer", () => {
+    render(<LandingFooter />);
+    expect(screen.getByRole("link", { name: "System status" })).toHaveAttribute("href", "/status");
   });
 });
 

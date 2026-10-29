@@ -1,16 +1,12 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkMiddleware } from "@clerk/nextjs/server";
+
+import { isProtectedRoute } from "@/lib/routes";
 
 /**
  * Defense in depth only: every protected page also checks the session and
  * `/me` itself, and the API enforces business + plan (402) on its own.
- * Public: the landing page, `/status`, sign-in, sign-up.
+ * Which routes are protected lives in `lib/routes.ts` (tested there).
  */
-const isProtectedRoute = createRouteMatcher([
-  "/dashboard(.*)",
-  "/onboarding(.*)",
-  "/billing(.*)",
-]);
-
 export default clerkMiddleware(async (auth, request) => {
   if (isProtectedRoute(request)) {
     await auth.protect();

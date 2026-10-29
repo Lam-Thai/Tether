@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { PrimaryCta } from "@/components/landing/primary-cta";
+import { LegalLinks } from "@/components/legal/legal-links";
 import { ConstructField, Wordmark } from "@/components/ui/construct";
 
 export function ClosingCta({ signedIn }: { signedIn: boolean }) {
@@ -29,6 +30,7 @@ export function LandingFooter() {
           >
             System status
           </Link>
+          <LegalLinks inverse landmark={false} />
           <span>&copy; 2026 Tether</span>
         </div>
       </div>

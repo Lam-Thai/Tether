@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { PrimaryCta } from "@/components/landing/primary-cta";
+import { LegalLinks } from "@/components/legal/legal-links";
 import { Wordmark } from "@/components/ui/construct";
 
 export function LandingHeader({ signedIn }: { signedIn: boolean }) {
@@ -14,17 +15,21 @@ export function LandingHeader({ signedIn }: { signedIn: boolean }) {
         >
           <Wordmark />
         </Link>
-        <nav aria-label="Account" className="flex items-center gap-4">
-          {signedIn ? null : (
-            <Link
-              href="/sign-in"
-              className="text-base font-medium text-foreground underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-            >
-              Sign in
-            </Link>
-          )}
-          <PrimaryCta signedIn={signedIn} size="sm" />
-        </nav>
+        <div className="flex items-center gap-8">
+          {/* No room beside the CTA on phones; the footer carries these links there. */}
+          <LegalLinks className="hidden text-base md:flex" />
+          <nav aria-label="Account" className="flex items-center gap-4">
+            {signedIn ? null : (
+              <Link
+                href="/sign-in"
+                className="text-base font-medium text-foreground underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                Sign in
+              </Link>
+            )}
+            <PrimaryCta signedIn={signedIn} size="sm" />
+          </nav>
+        </div>
       </div>
     </header>
   );

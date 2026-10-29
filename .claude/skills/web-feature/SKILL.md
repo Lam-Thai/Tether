@@ -11,7 +11,8 @@ description: Build a page or section in apps/web. Use when adding a new UI page,
 2. **Component.** First apply the root `CLAUDE.md` `## Design` rules (invoke `taste-skill:design-taste-frontend`). Then build with shadcn/ui primitives and Tailwind, following existing component conventions rather than introducing a new pattern.
 3. **Form (if any).** Define the Zod schema first, wire it to React Hook Form, and reuse the same schema (or one matching the API's) for both client-side validation and the submit call.
 4. **States.** Every data-fetching section needs loading, error, and empty states — not just the happy path. An action (submit, book, send) only shows success after the API call resolves and confirms it.
-5. **Auth scope.** If the page is business-scoped, confirm it reads the current business from Clerk's session context rather than trusting a route parameter.
+5. **Auth scope.** If the page is business-scoped, confirm it reads the current business from Clerk's session context rather than trusting a route parameter. A new public page is public only if `lib/routes.ts` `isProtectedRoute` leaves it out: add a case to `lib/routes.test.ts` either way.
+6. **Legal copy.** If the feature changes what data is collected, sent to a provider, kept or deleted, update `components/legal/privacy-sections.tsx` (and `terms-sections.tsx` for limits, billing or acceptable use) plus `LAST_UPDATED` in `lib/legal.ts` in the same PR (see `apps/web/CLAUDE.md`, "Legal pages").
 
 ## Checklist
 
