@@ -18,7 +18,7 @@ from services.speech import SpeechSynthesizer, UnknownVoiceError, VoiceCatalog
 
 DEFAULT_NAME = "Riley"
 DEFAULT_TONE = "friendly"
-EDITABLE_FIELDS = frozenset({"name", "tone", "greeting", "custom_instructions", "active", "voice"})
+EDITABLE_FIELDS = frozenset({"name", "tone", "greeting", "custom_instructions", "voice"})
 
 
 class AgentStore(Protocol):

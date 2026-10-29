@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 
 import { getUsage } from "@/lib/api/client";
+import { SettingsNav } from "@/components/settings/settings-nav";
 import { UsagePanel } from "@/components/settings/usage-panel";
 
 // The dashboard layout already gates on business + plan; this page only
@@ -19,5 +20,10 @@ export default async function UsagePage() {
   if (usage.kind === "unauthorized") redirect("/sign-in");
   if (usage.kind === "subscription_required") redirect("/billing/plan");
 
-  return <UsagePanel usage={usage} />;
+  return (
+    <div className="flex w-full max-w-[1280px] flex-col gap-6">
+      <SettingsNav current="usage" />
+      <UsagePanel usage={usage} />
+    </div>
+  );
 }

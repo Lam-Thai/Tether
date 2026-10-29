@@ -147,8 +147,11 @@ class Twiml:
         return {k: v[0] for k, v in parse_qs(parsed.query).items()}
 
 
-async def _associate(client, tenant, numbers: FakeNumbersApi) -> tuple[str, str]:
-    """Puts a number on the fake account and associates it; returns (number id, E.164)."""
+async def _associate(
+    client, tenant, numbers: FakeNumbersApi, *, activate: bool = True
+) -> tuple[str, str]:
+    """Puts a number on the fake account and associates it; returns (number id, E.164).
+    Also activates the agent unless told not to (new agents start inactive)."""
     on_account = numbers.add_number()
     listed = await client.get("/api/v1/phone-numbers", headers=_auth(tenant))
     assert listed.status_code == 200, listed.text
@@ -159,7 +162,22 @@ async def _associate(client, tenant, numbers: FakeNumbersApi) -> tuple[str, str]
         headers=_auth(tenant),
     )
     assert created.status_code == 201, created.text
+    if activate:
+        await _activate_agent(client, tenant)
     return created.json()["id"], on_account.phone_number
+
+
+async def _activate_agent(client, tenant) -> None:
+    """New agents start inactive and callers hear "not available" until the owner
+    activates (`POST /agent/activate`, covered in `test_readiness_api.py`). These call
+    tests are about the call itself, so they flip the flag directly; the inactive-agent
+    check is exercised on purpose in `test_limits_end_calls_gracefully`."""
+    assert (await client.get("/api/v1/agent", headers=_auth(tenant))).status_code == 200
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Agent).where(Agent.business_id == tenant.business_id).values(active=True)
+        )
+        await session.commit()
 
 
 async def _greeting(client, tenant) -> None:
@@ -409,7 +427,8 @@ async def test_limits_end_calls_gracefully(client, entitled_tenants, numbers, ll
     busy = await _start(client, to, _call_sid())
     assert busy.said == BUSY_LINE and busy.hangs_up
 
-    # The agent is switched off (no owner UI for that yet): a polite line, no interaction.
+    # The agent is inactive (what a new agent is until activated): a polite line, no
+    # interaction.
     usage.set_concurrency(total=1_000_000, per_business=1_000_000)
     async with async_session_factory() as session:
         await session.execute(

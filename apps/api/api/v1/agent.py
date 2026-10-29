@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.billing import get_entitled_tenant
 from core.conversation import get_agent_store, get_conversation_engine
 from core.db import get_session
+from core.readiness import get_agent_activation
 from core.speech import get_speech_synthesizer, get_voice_catalog
 from core.tenant import Tenant
 from models.agent import Agent
@@ -32,8 +33,10 @@ from schemas.agent import (
     VoiceRead,
     VoicesRead,
 )
+from schemas.dashboard import ReadinessRead
 from services import agent as agent_service
 from services.conversation import ConversationEngine
+from services.readiness import AgentActivation
 from services.speech import SpeechSynthesizer, VoiceCatalog
 
 router = APIRouter(tags=["agent"])
@@ -44,6 +47,7 @@ Engine = Annotated[ConversationEngine, Depends(get_conversation_engine)]
 Session = Annotated[AsyncSession, Depends(get_session)]
 Catalog = Annotated[VoiceCatalog, Depends(get_voice_catalog)]
 Speech = Annotated[SpeechSynthesizer, Depends(get_speech_synthesizer)]
+Activation = Annotated[AgentActivation, Depends(get_agent_activation)]
 
 CHANNEL = "test_chat"
 
@@ -71,6 +75,35 @@ async def patch_agent(
     )
     await session.commit()
     return _agent_read(agent, catalog)
+
+
+@router.get("/agent/readiness", response_model=ReadinessRead)
+async def get_readiness(
+    tenant: Entitled, activation: Activation, session: Session
+) -> ReadinessRead:
+    state = await activation.state(tenant)
+    await session.commit()  # the default agent row, a calendar probe's result
+    return ReadinessRead.from_activation(state)
+
+
+@router.post("/agent/activate", response_model=ReadinessRead)
+async def post_activate(
+    tenant: Entitled, activation: Activation, session: Session
+) -> ReadinessRead:
+    """Flips `active` only when every required checklist item passes (else 409
+    `agent_not_ready`); idempotent."""
+    state = await activation.activate(tenant)
+    await session.commit()
+    return ReadinessRead.from_activation(state)
+
+
+@router.post("/agent/deactivate", response_model=ReadinessRead)
+async def post_deactivate(
+    tenant: Entitled, activation: Activation, session: Session
+) -> ReadinessRead:
+    state = await activation.deactivate(tenant)
+    await session.commit()
+    return ReadinessRead.from_activation(state)
 
 
 @router.get("/agent/voices", response_model=VoicesRead)

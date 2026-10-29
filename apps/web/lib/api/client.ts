@@ -2647,3 +2647,350 @@ export async function previewVoice(token: string, voice: string): Promise<VoiceP
   }
   return UNEXPECTED;
 }
+
+// Dashboard home, integration status, agent activation and test-data deletion (slice 16).
+
+const DASHBOARD_TIMEOUT_MS = 20000;
+const DELETE_TEST_DATA_TIMEOUT_MS = 45000;
+
+/** `GET /dashboard/summary`: counts for a business-local date range (inclusive). */
+export interface DashboardSummary {
+  /** YYYY-MM-DD, business-local. */
+  from: string;
+  to: string;
+  timezone: string;
+  total_interactions: number;
+  successful_bookings: number;
+  faqs_answered: number;
+  /** The current queue, not bound to the range. */
+  open_escalations: number;
+}
+
+export interface DashboardRange {
+  from?: string;
+  to?: string;
+}
+
+export type DashboardSummaryResult =
+  | { kind: "ok"; data: DashboardSummary }
+  /** 422 `invalid_date_range`. */
+  | { kind: "validation"; message: string }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+/** One line of the activation checklist. `key` and `fix_url` come from the API; unknown keys still render. */
+export interface ReadinessItem {
+  key: string;
+  ok: boolean;
+  required: boolean;
+  message: string;
+  /** A same-site path such as `/dashboard/agent#services`. */
+  fix_url: string;
+}
+
+/** `GET /agent/readiness` and the body of `POST /agent/activate|deactivate`. */
+export interface AgentReadiness {
+  active: boolean;
+  ready: boolean;
+  items: ReadinessItem[];
+}
+
+export type AgentReadinessResult =
+  | { kind: "ok"; data: AgentReadiness }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type ActivateAgentResult =
+  | { kind: "ok"; data: AgentReadiness }
+  /** 409 `agent_not_ready`: the agent stays inactive; re-fetch readiness for the items. */
+  | { kind: "not_ready"; message: string }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+export type DeactivateAgentResult =
+  | { kind: "ok"; data: AgentReadiness }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+/** Connection status values are open strings: an unknown one from a newer backend must not break the UI. */
+export interface IntegrationCalendar {
+  configured: boolean;
+  status: CalendarConnectionStatus | (string & {});
+  calendar_name: string | null;
+  /** A fixed reason code, never provider text. */
+  last_error: string | null;
+  last_synced_at: string | null;
+}
+
+export interface IntegrationPhone {
+  configured: boolean;
+  status: "connected" | "misconfigured" | "not_connected" | (string & {});
+  /** E.164, or null when no number is connected. */
+  phone_number: string | null;
+  last_error: string | null;
+  verified_at: string | null;
+}
+
+export interface IntegrationError {
+  /** `calendar`, `phone`, `sms` or a newer source. */
+  source: string;
+  /** A fixed code, never provider text. */
+  code: string;
+  occurred_at: string | null;
+}
+
+export interface IntegrationStatus {
+  calendar: IntegrationCalendar;
+  phone: IntegrationPhone;
+  agent: { active: boolean; ready: boolean };
+  readiness: AgentReadiness;
+  /** Newest first. */
+  errors: IntegrationError[];
+  usage: UsageRead;
+}
+
+export type IntegrationStatusResult =
+  | { kind: "ok"; data: IntegrationStatus }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+/** `DELETE /business/test-data`: what was removed, counted by the API. */
+export interface TestDataReport {
+  interactions: number;
+  messages: number;
+  bookings: number;
+  escalations: number;
+  usage_events: number;
+  calendar_events_cancelled: number;
+  calendar_events_not_cancelled: number;
+}
+
+export type DeleteTestDataResult =
+  | { kind: "ok"; data: TestDataReport }
+  /** 422 `confirmation_mismatch`: nothing was deleted. */
+  | { kind: "confirmation_mismatch" }
+  | { kind: "unauthorized" }
+  | { kind: "subscription_required" }
+  | { kind: "unreachable"; reason: string };
+
+/**
+ * A same-site path only: the fix link is rendered as an `href`, so never accept an absolute or
+ * protocol-relative URL. The second character must be a plain path character, and control
+ * characters are refused anywhere, since browsers strip them (`"/\t/evil.example"` reads as `//evil.example`).
+ */
+function isSitePath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^\/(?:[A-Za-z0-9][^\\]*)?$/.test(value) &&
+    // eslint-disable-next-line no-control-regex
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function isDashboardSummary(value: unknown): value is DashboardSummary {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.from === "string" &&
+    typeof value.to === "string" &&
+    typeof value.timezone === "string" &&
+    isCount(value.total_interactions) &&
+    isCount(value.successful_bookings) &&
+    isCount(value.faqs_answered) &&
+    isCount(value.open_escalations)
+  );
+}
+
+function isReadinessItem(value: unknown): value is ReadinessItem {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.key === "string" &&
+    typeof value.ok === "boolean" &&
+    typeof value.required === "boolean" &&
+    typeof value.message === "string" &&
+    isSitePath(value.fix_url)
+  );
+}
+
+function isAgentReadiness(value: unknown): value is AgentReadiness {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.active === "boolean" &&
+    typeof value.ready === "boolean" &&
+    Array.isArray(value.items) &&
+    value.items.every(isReadinessItem)
+  );
+}
+
+function isIntegrationCalendar(value: unknown): value is IntegrationCalendar {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.configured === "boolean" &&
+    typeof value.status === "string" &&
+    isNullableString(value.calendar_name) &&
+    isNullableString(value.last_error) &&
+    isNullableString(value.last_synced_at)
+  );
+}
+
+function isIntegrationPhone(value: unknown): value is IntegrationPhone {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.configured === "boolean" &&
+    typeof value.status === "string" &&
+    isNullableString(value.phone_number) &&
+    isNullableString(value.last_error) &&
+    isNullableString(value.verified_at)
+  );
+}
+
+function isIntegrationError(value: unknown): value is IntegrationError {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.source === "string" &&
+    typeof value.code === "string" &&
+    (value.occurred_at === undefined || isNullableString(value.occurred_at))
+  );
+}
+
+function isIntegrationStatus(value: unknown): value is IntegrationStatus {
+  if (!isRecord(value)) return false;
+  const agent = value.agent;
+  return (
+    isIntegrationCalendar(value.calendar) &&
+    isIntegrationPhone(value.phone) &&
+    isRecord(agent) &&
+    typeof agent.active === "boolean" &&
+    typeof agent.ready === "boolean" &&
+    isAgentReadiness(value.readiness) &&
+    Array.isArray(value.errors) &&
+    value.errors.every(isIntegrationError) &&
+    isUsageRead(value.usage)
+  );
+}
+
+function isTestDataReport(value: unknown): value is TestDataReport {
+  if (!isRecord(value)) return false;
+  return (
+    isCount(value.interactions) &&
+    isCount(value.messages) &&
+    isCount(value.bookings) &&
+    isCount(value.escalations) &&
+    isCount(value.usage_events) &&
+    isCount(value.calendar_events_cancelled) &&
+    isCount(value.calendar_events_not_cancelled)
+  );
+}
+
+/** Calls `GET /api/v1/dashboard/summary`. Without a range the API uses the last 30 business-local days. */
+export async function getDashboardSummary(
+  token: string,
+  range: DashboardRange = {},
+): Promise<DashboardSummaryResult> {
+  const params = new URLSearchParams();
+  if (range.from) params.set("from", range.from);
+  if (range.to) params.set("to", range.to);
+  const qs = params.toString();
+
+  const outcome = await fetchApi(
+    `/dashboard/summary${qs ? `?${qs}` : ""}`,
+    { headers: authHeaders(token) },
+    DASHBOARD_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 400 || outcome.status === 422) {
+    return { kind: "validation", message: invalidMessageFor(outcome.body, "That date range is invalid.") };
+  }
+  if (outcome.status === 200 && isDashboardSummary(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `GET /api/v1/integrations/status` (the API may probe Google, so it gets the longer timeout). */
+export async function getIntegrationStatus(token: string): Promise<IntegrationStatusResult> {
+  const outcome = await fetchApi(
+    "/integrations/status",
+    { headers: authHeaders(token) },
+    DASHBOARD_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isIntegrationStatus(outcome.body)) {
+    const errors = outcome.body.errors.map((e) => ({ ...e, occurred_at: e.occurred_at ?? null }));
+    return { kind: "ok", data: { ...outcome.body, errors } };
+  }
+  return UNEXPECTED;
+}
+
+/** Calls `GET /api/v1/agent/readiness`. */
+export async function getAgentReadiness(token: string): Promise<AgentReadinessResult> {
+  const outcome = await fetchApi("/agent/readiness", { headers: authHeaders(token) }, DASHBOARD_TIMEOUT_MS);
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isAgentReadiness(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/agent/activate`. Only a 200 means the agent is live. */
+export async function activateAgent(token: string): Promise<ActivateAgentResult> {
+  const outcome = await fetchApi(
+    "/agent/activate",
+    { method: "POST", headers: authHeaders(token) },
+    DASHBOARD_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 409 && errorCode(outcome.body) === "agent_not_ready") {
+    return { kind: "not_ready", message: invalidMessageFor(outcome.body, "Your receptionist is not ready yet.") };
+  }
+  if (outcome.status === 200 && isAgentReadiness(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/** Calls `POST /api/v1/agent/deactivate`. Only a 200 means callers are no longer answered. */
+export async function deactivateAgent(token: string): Promise<DeactivateAgentResult> {
+  const outcome = await fetchApi(
+    "/agent/deactivate",
+    { method: "POST", headers: authHeaders(token) },
+    DASHBOARD_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 200 && isAgentReadiness(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}
+
+/**
+ * Calls `DELETE /api/v1/business/test-data`. `confirmation` is sent as typed;
+ * the API owns the comparison (a mismatch is a 422 and deletes nothing).
+ */
+export async function deleteTestData(token: string, confirmation: string): Promise<DeleteTestDataResult> {
+  const outcome = await fetchApi(
+    "/business/test-data",
+    { method: "DELETE", headers: jsonAuthHeaders(token), body: JSON.stringify({ confirmation }) },
+    DELETE_TEST_DATA_TIMEOUT_MS,
+  );
+
+  if (outcome.kind === "unreachable") return outcome;
+  if (outcome.status === 401) return { kind: "unauthorized" };
+  if (outcome.status === 402) return { kind: "subscription_required" };
+  if (outcome.status === 422 && errorCode(outcome.body) === "confirmation_mismatch") {
+    return { kind: "confirmation_mismatch" };
+  }
+  if (outcome.status === 200 && isTestDataReport(outcome.body)) return { kind: "ok", data: outcome.body };
+  return UNEXPECTED;
+}

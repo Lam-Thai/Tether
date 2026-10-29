@@ -42,6 +42,8 @@ Only ask if the answer isn't already clear from the issue or the existing code â
 - [ ] New provider calls wrapped by `UsageGuard`, bounded retries, and a fake exists for tests.
 - [ ] Migration reviewed by hand (indexes, FKs, constraints) and downgrade tested.
 - [ ] An interaction is closed only through `services/lifecycle.InteractionLifecycle` (`end`, `abandon_idle`); status is `in_progress | completed | failed | abandoned`, outcome comes from `close_outcome`. Customer/model text goes through `services/redaction.redact` before it is stored or logged.
+- [ ] Going live is one gate: `agents.active` changes only through `POST /agent/activate|deactivate`, checked by `services/readiness.ReadinessChecker` (a new go-live requirement is one row in `readiness.evaluate`, never a check in a router or the UI). New agents start inactive, so a test that needs a live call activates the agent explicitly (`tests/api/test_voice._activate_agent`); never relax the inactive check.
+- [ ] A bulk delete of tenant data keeps configuration and TODAY's usage counters (deleting must never reset a daily cap), checks its typed confirmation before any side effect, and reports provider side effects it could not undo instead of raising (`services/test_data.TestDataEraser`).
 - [ ] When several agents share the checkout, run `ruff format` on your own files only, never a directory.
 - [ ] Tests at the service/repository boundary, including a cross-tenant test for any new business data. Run them with `sh scripts/test.sh` (local Postgres, parallel workers); keep each test independent so it is parallel-safe.
 

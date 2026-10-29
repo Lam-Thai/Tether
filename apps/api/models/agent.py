@@ -36,8 +36,11 @@ class Agent(Base):
     # TTS voice name; NULL = the settings default voice, 'standard' = Twilio <Say>.
     # No CHECK: the allowed list comes from settings.
     voice: Mapped[str | None] = mapped_column(String, nullable=True)
+    # New agents start inactive: the owner activates through `POST /agent/activate` once the
+    # readiness checklist passes (`services/readiness.py`). Callers hear "not available"
+    # while inactive; the test chat works regardless. Existing rows keep their value.
     active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=False, server_default="false"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
