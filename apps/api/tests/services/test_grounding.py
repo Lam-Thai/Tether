@@ -397,6 +397,78 @@ def test_a_non_booking_intent_may_state_a_time_from_a_retrieved_faq():
     assert grounding_problem(other, evidence) == "unverified_time"
 
 
+WALK_IN_ANSWER = (
+    "Yes, we take walk-ins before 3 PM, Monday to Saturday. After 3 PM it's appointments only."
+)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        WALK_IN_ANSWER,
+        "Yes! Walk-ins are welcome before 3 PM; after that it's by appointment only.",
+        "You can walk in before 3 PM. After 3 PM you'll need an appointment.",
+        "Before 3 PM, yes. After 3 PM you'll need to book an appointment.",
+        "Walk-ins until 3 PM, Monday to Saturday. After 3 PM appointments are required.",
+        "Sure, before 3 PM. After that we're appointment-only, so you need to book ahead.",
+    ],
+    ids=[
+        "verbatim",
+        "by-appointment-only",
+        "need-an-appointment",
+        "need-to-book-one",
+        "appointments-required",
+        "appointment-only-book-ahead",
+    ],
+)
+def test_saying_a_retrieved_faq_time_needs_an_appointment_is_not_an_offer(text):
+    evidence = TurnEvidence(hours_listed=True, hour_times=_t((9, 0), (17, 0)))
+    snippet = _faq(WALK_IN_ANSWER)
+    evidence.add_faq(snippet)
+    assert grounding_problem(_turn(text, intent="FAQ", sources=[str(snippet.id)]), evidence) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Appointments at 3 PM are available.",
+        "I can fit you in at 3.",
+        "I have 3 PM available.",
+        "I can book you at 3.",
+        "3 PM works.",
+        "I have a slot at 3 PM.",
+        "We have an appointment at 3 PM.",
+        "After 3 PM it's appointments only, and I have 3 PM free.",
+        "You'll need an appointment, and 3 PM is available.",
+        "After 3 PM it's by appointment only - see you at 3!",
+        "You'll need to book 3 PM.",
+        "You can get 3 PM by booking now.",
+        "After 3 PM it's appointments only, and 4 PM is open.",
+    ],
+    ids=[
+        "appointments-available",
+        "fit-you-in",
+        "i-have-available",
+        "book-you",
+        "works",
+        "slot",
+        "we-have-an-appointment",
+        "policy-then-i-have",
+        "policy-then-available",
+        "policy-then-see-you",
+        "need-to-book-a-time",
+        "by-booking-now",
+        "unverified-slot",
+    ],
+)
+def test_offering_a_retrieved_faq_time_still_needs_a_checked_slot(text):
+    evidence = TurnEvidence(hours_listed=True, hour_times=_t((9, 0), (17, 0)))
+    snippet = _faq(WALK_IN_ANSWER)
+    evidence.add_faq(snippet)
+    reply = _turn(text, intent="FAQ", sources=[str(snippet.id)])
+    assert grounding_problem(reply, evidence) == "unverified_time"
+
+
 def test_a_faq_time_is_not_allowed_before_that_faq_was_retrieved():
     evidence = TurnEvidence(hours_listed=False)
     reply = _turn("Walk-ins are welcome until 3 PM.", intent="UNKNOWN")
