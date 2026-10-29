@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core import log_context
 from core.auth import AuthError, Principal, verify_principal
 from core.config import settings
 from core.db import get_session
@@ -70,4 +71,5 @@ async def get_tenant(
     )
     business = await get_business_by_owner_id(session, owner_id=user.id)
     await session.commit()
+    log_context.bind(business_id=business.id if business else None)
     return Tenant(user=user, business=business)

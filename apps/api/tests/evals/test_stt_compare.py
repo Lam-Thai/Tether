@@ -81,3 +81,17 @@ def test_the_table_is_markdown_and_tolerates_no_data():
     assert "| gemini_audio | stt_ms | 800 | 1000 | 2 |" in table
     assert "| a.log | llm_ms | 1500 | 1500 | 1 |" in table
     assert "no voice turn lines" in latency_table(LatencyStats())
+
+
+def test_json_log_lines_parse_like_key_value_ones():
+    stats = LatencyStats()
+    lines = [
+        '{"level": "INFO", "logger": "tether.voice", "msg": "voice turn", "webhook": "respond", '
+        '"input_mode": "gemini_audio", "stt_ms": 700, "latency_ms": 1800}',
+        '{"level": "INFO", "logger": "tether.voice", "msg": "voice turn worker", "llm_ms": 1200}',
+        '{"msg": "voice turn", "broken json',
+    ]
+    parse_log_lines(lines, stats, source="b.log")
+    assert stats.by_mode["gemini_audio"]["stt_ms"] == [700]
+    assert stats.by_mode["gemini_audio"]["latency_ms"] == [1800]
+    assert stats.llm_ms["b.log"] == [1200]
