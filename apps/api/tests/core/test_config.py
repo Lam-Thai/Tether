@@ -181,3 +181,31 @@ def test_live_clerk_key_is_allowed_in_production():
         clerk_secret_key="sk_live_abc", environment="production", gemini_api_key="test-key"
     )
     assert settings.clerk_secret_key is not None
+
+
+def test_e2e_fake_providers_are_off_by_default():
+    assert _settings().e2e_fake_providers is False
+
+
+def test_e2e_fake_providers_are_allowed_locally():
+    assert _settings(environment="local", e2e_fake_providers=True).e2e_fake_providers is True
+
+
+def test_e2e_fake_providers_are_refused_against_a_remote_database():
+    with pytest.raises(ValidationError, match="local DATABASE_URL"):
+        _settings(
+            environment="local",
+            database_url="postgresql://u:p@ep-dev-123.neon.tech/db",
+            e2e_fake_providers=True,
+        )
+
+
+def test_e2e_fake_providers_are_refused_in_production():
+    # Everything else is valid for production, so only the fake-provider flag can fail.
+    with pytest.raises(ValidationError, match="E2E_FAKE_PROVIDERS"):
+        _settings(
+            environment="production",
+            gemini_api_key="test-key",
+            clerk_secret_key="sk_live_abc",
+            e2e_fake_providers=True,
+        )

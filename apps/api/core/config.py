@@ -16,6 +16,8 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from core.db_hosts import is_local_database
+
 # `TETHER_ENV_FILE=` (empty) reads no env file at all: `scripts/test.sh` sets it so tests
 # see only the CI-like settings it exports, never a developer's .env (real keys, a remote
 # database). Unset, the app reads `.env` as before.
@@ -212,6 +214,10 @@ class Settings(BaseSettings):
     # Tests refuse a non-local DATABASE_URL unless this is set (tests/conftest.py).
     # Only for a disposable test database: tests create and delete tenants.
     test_database_allow_remote: bool = False
+    # E2E mode (slice 17, `scripts/e2e-server.sh`): Gemini, Stripe and Google Calendar are
+    # replaced by in-process fakes (`integrations/*/e2e.py`) so a Playwright run needs no
+    # provider network call. Clerk stays real. Refused when ENVIRONMENT=production.
+    e2e_fake_providers: bool = False
 
     @field_validator("stripe_secret_key")
     @classmethod
@@ -261,6 +267,17 @@ class Settings(BaseSettings):
             and self.environment != "production"
         ):
             raise ValueError("A live Clerk key is only allowed when ENVIRONMENT=production.")
+        return self
+
+    @model_validator(mode="after")
+    def _no_fake_providers_in_production(self) -> "Settings":
+        # Fake providers would "book" appointments and "charge" nobody for real customers.
+        if self.e2e_fake_providers and self.environment == "production":
+            raise ValueError("E2E_FAKE_PROVIDERS must not be set when ENVIRONMENT=production.")
+        # Nor against any shared database (a Neon branch, a preview deploy's): fake
+        # bookings and fake subscriptions must only ever land in a throwaway local one.
+        if self.e2e_fake_providers and not is_local_database(self.database_url):
+            raise ValueError("E2E_FAKE_PROVIDERS needs a local DATABASE_URL.")
         return self
 
     @model_validator(mode="after")
