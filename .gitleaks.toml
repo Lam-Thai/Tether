@@ -21,8 +21,9 @@ regexes = [
   # "example-secret-key-for-ci-only-0000000000"): `next build` needs syntactically valid keys.
   '''pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk''',
   '''sk_test_ZXhhbXBsZS1zZWNyZXQta2V5LWZvci1jaS1vbmx5LTAwMDAwMDAwMDA''',
-  # api.yml / eval.yml Stripe placeholders.
-  '''(?:sk_test|whsec|price)_ci_placeholder''',
+  # Stripe placeholders: api.yml / eval.yml (`_ci_`) and the E2E server and Playwright
+  # setup (`_e2e_`, apps/api/scripts/e2e-server.sh, apps/web/e2e/global-setup.ts).
+  '''(?:sk_test|whsec|price)_(?:ci|e2e)_placeholder''',
   # Bundle-scan canaries (web.yml): fake values planted to prove they never reach the bundle.
   '''canary-[a-z0-9-]+-\$\{\{ github\.run_id \}\}''',
 ]
