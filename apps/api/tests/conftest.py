@@ -26,7 +26,8 @@ from core.calendar import (
     get_token_vault,
 )
 from core.config import settings
-from core.db import async_session_factory, is_local_database
+from core.db import async_session_factory
+from core.db_hosts import is_local_database
 from core.llm import get_llm_client
 from core.rate_limit import get_rate_limiter
 from core.tenant import get_signing_key_resolver

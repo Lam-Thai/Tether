@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from core.config import settings
-from core.db import is_local_database
+from core.db_hosts import is_local_database
 from evals.cases import Suite, SuiteError, load_suite
 from evals.report import REPORTS_DIR, summary, write
 from evals.runner import EvalRunner, RunLimits, Tier, resolve_limits

@@ -23,6 +23,7 @@ from core.db import get_session
 from core.directory import SqlDirectoryStore
 from core.usage import get_usage_guard
 from integrations.google_calendar import GoogleCalendarApi, HttpGoogleCalendarApi
+from integrations.google_calendar.e2e import E2EGoogleCalendarApi
 from repositories.calendar import SqlCalendarStore
 from services.availability import AvailabilityService
 from services.booking_rules import BookingRules
@@ -44,6 +45,10 @@ class _Unconfigured:
 
 
 def _build_api() -> GoogleCalendarApi:
+    if settings.e2e_fake_providers:
+        # E2E only (refused in production by `Settings`): accounts and events live in this
+        # process, so the feature needs no Google credentials.
+        return E2EGoogleCalendarApi()
     if not (settings.calendar_configured and settings.google_oauth_client_id):
         return cast(GoogleCalendarApi, _Unconfigured())
     assert settings.google_oauth_client_secret is not None
@@ -55,6 +60,8 @@ def _build_api() -> GoogleCalendarApi:
 
 
 def _build_vault() -> TokenVault:
+    if settings.e2e_fake_providers and settings.calendar_token_keys is None:
+        return TokenVault({"e2e": secrets.token_bytes(32)}, "e2e")
     if settings.calendar_token_keys is None:
         return TokenVault({"unconfigured": secrets.token_bytes(32)}, "unconfigured")
     keys, active = parse_token_keys(settings.calendar_token_keys.get_secret_value())
@@ -90,7 +97,7 @@ def get_oauth_state_signer() -> OAuthStateSigner:
 
 def get_calendar_config() -> CalendarConfig:
     return CalendarConfig(
-        client_configured=settings.calendar_configured,
+        client_configured=settings.calendar_configured or settings.e2e_fake_providers,
         redirect_uri=settings.calendar_redirect_uri,
         status_check_seconds=settings.calendar_status_check_seconds,
     )

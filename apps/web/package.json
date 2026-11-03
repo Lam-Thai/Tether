@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.9.15",
@@ -26,8 +27,10 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@clerk/testing": "2.2.52",
     "@eslint/js": "^9.39.5",
     "@next/eslint-plugin-next": "15.5.28",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",

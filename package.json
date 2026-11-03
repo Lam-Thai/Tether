@@ -11,6 +11,7 @@
     "dev": "concurrently -n web,api -c blue,green \"pnpm --filter web dev\" \"uv run --directory apps/api uvicorn main:app --reload\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "e2e": "pnpm --filter web e2e",
     "typecheck": "tsc --noEmit",
     "scan:bundle": "node tooling/scan-bundle.ts"
   },
