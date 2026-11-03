@@ -209,8 +209,11 @@ test("inbox shows the conversation, summary and escalation", async () => {
   // Escalation record.
   await expect(page.getByRole("heading", { name: "Escalation", exact: true })).toBeVisible();
   const escalations = page.getByRole("list", { name: "Escalations" });
-  await expect(escalations.getByText("Asked for a person")).toBeVisible();
+  // Exactly one escalation (one record per reason), still open, for the manager request.
+  // The reason label also sits in the Resolve button's screen-reader text, so assert it there.
+  await expect(escalations.getByRole("listitem")).toHaveCount(1);
   await expect(escalations.getByText("Open", { exact: true })).toBeVisible();
+  await expect(escalations.getByRole("button", { name: "Resolve Asked for a person" })).toBeVisible();
 });
 
 test("falls back safely once the daily AI limit is reached", async () => {
