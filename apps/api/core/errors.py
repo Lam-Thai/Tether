@@ -20,6 +20,8 @@ class AppError(Exception):
 
     status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR
     code: str = "internal_error"
+    # Extra response headers (e.g. `Retry-After` on a 429); set per instance by subclasses.
+    headers: dict[str, str] | None = None
 
     def __init__(self, message: str) -> None:
         self.message = message
@@ -50,6 +52,7 @@ async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=app_error.status_code,
         content=_envelope(app_error.code, app_error.message),
+        headers=app_error.headers,
     )
 
 

@@ -28,6 +28,7 @@ from core.calendar import (
 from core.config import settings
 from core.db import async_session_factory, is_local_database
 from core.llm import get_llm_client
+from core.rate_limit import get_rate_limiter
 from core.tenant import get_signing_key_resolver
 from core.usage import SqlUsageStore, cost_rates, get_usage_guard, usage_limits
 from integrations.clerk.fake import build_fake_signing_key_resolver
@@ -41,8 +42,10 @@ from models.usage import UsageCounter, UsageEvent
 from models.user import User
 from services.calendar import CalendarConfig
 from services.oauth_state import OAuthStateSigner
+from services.rate_limit import RateLimiter
 from services.token_vault import TokenVault
 from services.usage import DailyLimit, UsageGuard, UsageKind, UsageLimits
+from tests.services.memory_rate_limit_store import MemoryRateLimitStore
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -199,6 +202,10 @@ def app(rsa_keypair, billing_gateway, llm, usage):
     application.dependency_overrides[get_llm_client] = lambda: llm
     # Built per request, so a test can tighten `usage` limits between calls.
     application.dependency_overrides[get_usage_guard] = usage.guard
+    # A private in-memory limiter per test (default limits), so tests never share rate
+    # windows through Postgres; `tests/api/test_rate_limit.py` tightens the rules.
+    limiter = RateLimiter(MemoryRateLimitStore())
+    application.dependency_overrides[get_rate_limiter] = lambda: limiter
     yield application
     application.dependency_overrides.clear()
 

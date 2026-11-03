@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db import get_session
 from core.escalation import build_escalation_service
+from core.rate_limit import limit_webhook
 from core.twilio import SMS_STATUS_PATH, TwilioWebhookAuth
 from core.voice import (
     INPUT_PATH,
@@ -43,7 +44,8 @@ from services.twiml import CallStep, Close, TwimlRenderer
 
 logger = logging.getLogger("tether.voice")
 
-router = APIRouter(tags=["webhooks"])
+# Per client IP, before the signature check (slice 17; see `core/rate_limit.py`).
+router = APIRouter(tags=["webhooks"], dependencies=[Depends(limit_webhook)])
 
 twilio_auth = TwilioWebhookAuth()
 

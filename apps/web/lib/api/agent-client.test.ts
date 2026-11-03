@@ -166,6 +166,13 @@ describe("agent client", () => {
       expect(await sendTestMessage("tok", { message: "a" })).toEqual({ kind: "busy" });
     });
 
+    it("maps 429 by error code: rate limited vs too many chats", async () => {
+      respond(429, error("rate_limited"));
+      expect(await sendTestMessage("tok", { message: "a" })).toEqual({ kind: "rate_limited" });
+      respond(429, error("concurrency_limited"));
+      expect(await sendTestMessage("tok", { message: "a" })).toEqual({ kind: "concurrency_limited" });
+    });
+
     it("treats a missing message fallback flag as false and keeps a true one", async () => {
       const { fallback: _omit, ...legacy } = MESSAGE;
       void _omit;

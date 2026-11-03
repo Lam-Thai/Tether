@@ -109,6 +109,18 @@ class Settings(BaseSettings):
     gemini_input_usd_per_million_tokens: Decimal = Field(default=Decimal("0.30"), ge=0)
     gemini_output_usd_per_million_tokens: Decimal = Field(default=Decimal("2.50"), ge=0)
 
+    # Rate limits (services/rate_limit.py, slice 17): fixed one-minute windows kept in
+    # Postgres. 0 blocks the route entirely. Webhooks are counted per client IP before
+    # the signature check; the rest per business.
+    rate_limit_enabled: bool = True
+    rate_limit_agent_test_per_minute: int = Field(default=30, ge=0, le=100_000)
+    rate_limit_voice_preview_per_minute: int = Field(default=6, ge=0, le=100_000)
+    rate_limit_mutations_per_minute: int = Field(default=120, ge=0, le=100_000)
+    rate_limit_webhooks_per_minute: int = Field(default=600, ge=0, le=1_000_000)
+    # Header that carries the real client IP behind a trusted proxy (Vercel: `x-real-ip`).
+    # Empty = use the socket peer. Never set it unless a proxy you control overwrites it.
+    trusted_client_ip_header: str = Field(default="", max_length=64, pattern=r"^[A-Za-z0-9-]*$")
+
     # Google Calendar (integrations/google_calendar). Every value is optional so the app
     # starts without them; the feature is "configured" only when all four secrets below
     # are set, and until then every calendar endpoint but GET /status answers 503

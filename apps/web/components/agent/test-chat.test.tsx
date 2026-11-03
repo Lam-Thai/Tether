@@ -25,7 +25,13 @@ vi.mock("@/lib/api/client", () => ({
 }));
 
 import type { MessageRead, TranscriptRead, TurnRead } from "@/lib/api/client";
-import { CONCURRENCY_NOTE, FALLBACK_NOTE, TestChat, USAGE_LIMITED_NOTE } from "./test-chat";
+import {
+  CONCURRENCY_NOTE,
+  FALLBACK_NOTE,
+  RATE_LIMITED_NOTE,
+  TestChat,
+  USAGE_LIMITED_NOTE,
+} from "./test-chat";
 
 const ID = "22222222-2222-4222-8222-222222222222";
 
@@ -306,6 +312,19 @@ describe("TestChat", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("We open at nine.")).toBeInTheDocument();
     expect(screen.queryByText(CONCURRENCY_NOTE)).not.toBeInTheDocument();
+  });
+
+  it("keeps the draft and asks the owner to wait when messages are rate limited", async () => {
+    sendMock.mockResolvedValueOnce({ kind: "rate_limited" });
+    const user = userEvent.setup();
+    render(<TestChat agentName="Riley" chat={{ kind: "none" }} />);
+
+    await type(user, "Hello there");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(RATE_LIMITED_NOTE)).toBeInTheDocument();
+    expect(screen.getByLabelText("Message")).toHaveValue("Hello there");
+    expect(screen.queryByText("This chat has ended.")).not.toBeInTheDocument();
   });
 
   it("recovers from the transcript instead of offering a resend when the turn was committed", async () => {

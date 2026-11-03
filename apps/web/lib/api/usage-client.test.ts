@@ -111,7 +111,7 @@ describe("sendTestMessage quota fields", () => {
   it("maps 429 concurrency_limited, and treats other 429s as unreachable", async () => {
     respond(429, error("concurrency_limited"));
     expect(await sendTestMessage("tok", { message: "hi" })).toEqual({ kind: "concurrency_limited" });
-    respond(429, error("rate_limited"));
+    respond(429, error("usage_limit_reached"));
     expect((await sendTestMessage("tok", { message: "hi" })).kind).toBe("unreachable");
   });
 });

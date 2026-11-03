@@ -12,12 +12,14 @@ budget (N TTS + N STT requests) is printed first and the run stops on the first 
 Refuses `ENVIRONMENT=production` and a missing `GEMINI_API_KEY`; the key is never printed.
 
 `latency` reads API log files and prints a markdown table of p50/p95 per `input_mode`
-for lines like `voice turn ... key=value ...`, plus `llm_ms` from `voice turn worker` lines.
+for `voice turn` lines (JSON, or the older `key=value` form), plus `llm_ms` from `voice turn
+worker` lines.
 Exit codes: 0 ok, 3 refused or bad input, 4 crashed.
 """
 
 import argparse
 import asyncio
+import json
 import math
 import re
 import sys
@@ -89,6 +91,16 @@ def percentile(values: Sequence[float], pct: float) -> float | None:
 
 
 def _fields(line: str) -> dict[str, str]:
+    """A JSON log line (`core/log_format`, slice 17) or an older `key=value` one."""
+    text = line.strip()
+    if text.startswith("{"):
+        try:
+            record = json.loads(text)
+        except ValueError:
+            return {}
+        if isinstance(record, dict):
+            return {str(key): str(value) for key, value in record.items()}
+        return {}
     return dict(_KV.findall(line))
 
 
