@@ -1,0 +1,72 @@
+name: Security
+
+# Merge-blocking security gates (slice 17): committed secrets and known-vulnerable
+# dependencies. The frontend bundle scan runs in the Web workflow (it needs the build) and
+# the migration round trip in the API workflow (it needs Postgres).
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  schedule:
+    - cron: "40 14 * * 1" # weekly, Monday 14:40 UTC: new advisories for unchanged lockfiles
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  node-deps:
+    name: Audit Node dependencies (pnpm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: ".nvmrc"
+
+      # Reads the lockfile only; no install needed. High and critical advisories block,
+      # dev dependencies included (they run in CI and on developer machines).
+      - name: pnpm audit (high and critical)
+        run: pnpm audit --audit-level high
+
+  python-deps:
+    name: Audit Python dependencies (pip-audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # The exact locked versions, all dependency groups; pip-audit resolves nothing itself.
+      - name: Export the locked dependencies
+        run: uv export --frozen --all-groups --no-hashes --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
+
+      - name: pip-audit
+        run: uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/requirements.txt" --disable-pip --no-deps --progress-spinner off

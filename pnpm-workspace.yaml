@@ -1,3 +1,8 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# Security (slice 17): Next 15 pins postcss 8.4.31, which `pnpm audit` flags (high,
+# build-time only). 8.5 is API-compatible; drop this once Next ships a patched postcss.
+overrides:
+  "next>postcss": ^8.5.18

@@ -61,8 +61,19 @@ jobs:
       - name: Type-check (pyright)
         run: uv run pyright
 
-      - name: Run migrations against an empty database
+      # Every migration must be reversible (slice 17): up, all the way down, up again on
+      # the empty service database, then no drift between the models and the migrations.
+      - name: Migrations up on an empty database
         run: uv run alembic upgrade head
+
+      - name: Migrations down to base (every downgrade runs)
+        run: uv run alembic downgrade base
+
+      - name: Migrations up again
+        run: uv run alembic upgrade head
+
+      - name: No model/migration drift (alembic check)
+        run: uv run alembic check
 
       - name: Test (pytest, parallel)
         run: uv run pytest -n auto --dist loadfile

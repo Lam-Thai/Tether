@@ -48,6 +48,8 @@ For the generic "ticket → tests → implementation" loop, use the `mattpocock-
 - Root: `pnpm install` (also installs the Husky `pre-push` hook), `pnpm test` (Vitest, all projects — tooling + `apps/web`), `pnpm typecheck` (root tooling).
 - `pnpm dev` runs both apps at once (`apps/web` on Next.js dev server + `apps/api` on `uvicorn --reload`, via `concurrently`). Requires local Postgres running first (see below).
 - `git push` runs `pnpm test` and the API suite (`apps/api/scripts/test.sh`) side by side, about 40s. The API half needs the local Postgres running (`docker compose up -d`). Don't bypass it with `--no-verify` unless the user asks.
+- `pnpm scan:bundle` (after `pnpm --filter web build`): fails if a server secret's value, a secret-shaped string, or a secret-sounding `NEXT_PUBLIC_*` name is in `apps/web/.next/static` (`tooling/bundle-scan.ts`). A new server secret goes into its `SECRET_ENV_NAMES` and gets a canary in `.github/workflows/web.yml`.
+- Security gates that block merges (slice 17): `Security` workflow (gitleaks with `.gitleaks.toml`, `pnpm audit --audit-level high` incl. dev deps, `pip-audit` on the locked API deps), `Web` (bundle scan), `API` (migrations up → `downgrade base` → up, then `alembic check`). Fix an advisory by upgrading; a `pnpm-workspace.yaml` override needs a comment saying when to drop it. Allow a gitleaks false positive by its exact VALUE in `.gitleaks.toml`, never by a broad path.
 
 Backend (`apps/api`, run from inside that directory or via `uv run --directory apps/api`):
 
