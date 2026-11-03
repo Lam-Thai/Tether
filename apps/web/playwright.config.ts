@@ -7,7 +7,8 @@ import { defineConfig, devices } from "@playwright/test";
  *
  * Secrets come from the environment only (CI secrets, or exported by the developer):
  *   E2E_CLERK_PUBLISHABLE_KEY, E2E_CLERK_SECRET_KEY, E2E_CLERK_ISSUER,
- *   E2E_CLERK_USER_EMAIL (a `+clerk_test` address), E2E_CLERK_USER_PASSWORD.
+ *   E2E_CLERK_USER_EMAIL (a `+clerk_test` address). Sign-in uses a Clerk sign-in ticket minted
+ *   with the secret key, so no password is needed or ever typed into the page.
  * No .env file is read. The 100% pass requirement means NO retries: a flake is a failure.
  */
 const WEB_ORIGIN = "http://localhost:3000";

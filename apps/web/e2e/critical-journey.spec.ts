@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Response } from "@playwright/test";
-import { setupClerkTestingToken } from "@clerk/testing/playwright";
+import { clerk, setupClerkTestingToken } from "@clerk/testing/playwright";
 
 /**
  * The MVP critical journey, one serial run in a single browser context (slice 17).
@@ -10,9 +10,6 @@ import { setupClerkTestingToken } from "@clerk/testing/playwright";
 test.describe.configure({ mode: "serial" });
 
 const EMAIL = process.env.E2E_CLERK_USER_EMAIL ?? "";
-const PASSWORD = process.env.E2E_CLERK_USER_PASSWORD ?? "";
-// Clerk development instances accept this code for +clerk_test addresses.
-const CLERK_TEST_CODE = "424242";
 // Start of USAGE_LIMITED_NOTE in components/agent/test-chat.tsx (a client component, not imported here).
 const USAGE_LIMITED_NOTE = "Today's AI limit is reached";
 
@@ -54,22 +51,16 @@ async function sendChatMessage(text: string) {
 
 const chatLog = () => page.getByRole("log", { name: "Test conversation" });
 
-test("signs in with the custom form", async () => {
+test("signs in with a Clerk sign-in ticket", async () => {
+  // No password ever enters the page: `clerk.signIn` uses CLERK_SECRET_KEY on the test
+  // runner to mint a one-time sign-in ticket for the E2E user (it also skips the new-device
+  // email step). Page snapshots and traces are uploaded as CI artifacts on a PUBLIC repo,
+  // so anything typed into the page must be safe to publish. The custom sign-in form has
+  // its own unit tests (components/auth/sign-in-form.test.tsx).
   await page.goto("/sign-in");
-  await page.getByLabel("Email").fill(EMAIL);
-  await page.getByLabel("Password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
-
-  // A new device (every fresh browser context) may need the emailed code.
-  const code = page.getByLabel("Verification code");
-  const onboarding = page.waitForURL("**/onboarding", { timeout: 60_000 });
-  const codeStep = code.waitFor({ state: "visible", timeout: 60_000 });
-  await Promise.race([onboarding, codeStep]);
-  if (await code.isVisible()) {
-    await code.fill(CLERK_TEST_CODE);
-    await page.getByRole("button", { name: "Verify and sign in" }).click();
-  }
-  // A new account has no business yet, so the gate sends it to onboarding.
+  await clerk.signIn({ page, emailAddress: EMAIL });
+  // A new account has no business yet, so the dashboard gate sends it to onboarding.
+  await page.goto("/dashboard");
   await page.waitForURL("**/onboarding");
   await expect(page.getByRole("heading", { name: "Set up your business" })).toBeVisible();
 });

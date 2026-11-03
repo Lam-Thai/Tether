@@ -42,14 +42,13 @@ jobs:
       E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
       E2E_CLERK_ISSUER: ${{ secrets.E2E_CLERK_ISSUER }}
       E2E_CLERK_USER_EMAIL: ${{ secrets.E2E_CLERK_USER_EMAIL }}
-      E2E_CLERK_USER_PASSWORD: ${{ secrets.E2E_CLERK_USER_PASSWORD }}
       E2E_DATABASE_URL: postgresql://tether:tether@127.0.0.1:5432/tether
     steps:
       - name: Require the E2E secrets
         # A required check must never pass by skipping: a fork or a missing secret fails loudly.
         run: |
           missing=""
-          for name in E2E_CLERK_PUBLISHABLE_KEY E2E_CLERK_SECRET_KEY E2E_CLERK_ISSUER E2E_CLERK_USER_EMAIL E2E_CLERK_USER_PASSWORD; do
+          for name in E2E_CLERK_PUBLISHABLE_KEY E2E_CLERK_SECRET_KEY E2E_CLERK_ISSUER E2E_CLERK_USER_EMAIL; do
             eval "value=\${$name:-}"
             if [ -z "$value" ]; then missing="$missing $name"; fi
           done
@@ -92,6 +91,8 @@ jobs:
       - name: Run the E2E journey
         run: pnpm --filter web e2e
 
+      # This repository is PUBLIC, so artifacts are downloadable by anyone with a GitHub
+      # account: nothing secret may be typed into the page (sign-in uses a Clerk ticket).
       - name: Upload the Playwright report and traces
         if: failure()
         uses: actions/upload-artifact@v4

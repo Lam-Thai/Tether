@@ -8,7 +8,6 @@ const REQUIRED = [
   "E2E_CLERK_SECRET_KEY",
   "E2E_CLERK_ISSUER",
   "E2E_CLERK_USER_EMAIL",
-  "E2E_CLERK_USER_PASSWORD",
 ] as const;
 
 /** Fetches a Clerk testing token for the run, then empties the E2E user's business so the
