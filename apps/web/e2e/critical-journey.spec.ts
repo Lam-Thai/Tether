@@ -109,7 +109,8 @@ test("sets up the agent: persona, FAQ, service, hours", async () => {
   await page.getByLabel("Receptionist name").fill("Riley");
   await page.getByLabel("Greeting").fill("Hello, you have reached E2E Salon. How can I help?");
   const persona = apiResponse("PATCH", /\/agent$/, [200]);
-  await page.getByRole("button", { name: "Save changes" }).click();
+  // Persona and Business information both have a "Save changes" button: use the persona's.
+  await page.locator("#persona").getByRole("button", { name: "Save changes" }).click();
   await persona;
 
   // FAQ
@@ -150,9 +151,20 @@ test("sets up the agent: persona, FAQ, service, hours", async () => {
 });
 
 test("connects Google Calendar (fake OAuth) and selects the calendar", async () => {
+  // The API hands out Google's real consent URL shape (the only host the web client
+  // follows). Stand in for Google: send the browser to the URL's redirect_uri with the E2E
+  // fake's code and the same state, exactly what Google does after consent.
+  await page.route("https://accounts.google.com/**", async (route) => {
+    const consent = new URL(route.request().url());
+    const callback = new URL(consent.searchParams.get("redirect_uri") ?? "");
+    callback.searchParams.set("code", "e2e-fake-code");
+    callback.searchParams.set("state", consent.searchParams.get("state") ?? "");
+    await route.fulfill({ status: 302, headers: { location: callback.toString() } });
+  });
+
   await page.goto("/dashboard/settings/calendar");
   await page.getByRole("button", { name: "Connect Google Calendar" }).click();
-  // The fake provider returns straight to the callback, which then returns here.
+  // The callback page posts the code and state, then returns here.
   await page.waitForURL("**/dashboard/settings/calendar");
   await page.getByLabel("Calendar for bookings").selectOption({ label: "E2E Calendar" });
   const selected = apiResponse("PATCH", /\/calendar$/, [200]);

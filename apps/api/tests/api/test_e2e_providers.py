@@ -15,7 +15,7 @@ from core.booking_rules import default_booking_rules
 from core.calendar import get_calendar_api, get_clock
 from core.db import async_session_factory
 from core.llm import get_llm_client
-from integrations.google_calendar.e2e import E2E_CALENDAR_ID, E2EGoogleCalendarApi
+from integrations.google_calendar.e2e import E2E_CALENDAR_ID, E2E_CODE, E2EGoogleCalendarApi
 from integrations.llm.e2e import NO_INFO, E2EScriptedLLM
 from integrations.stripe.e2e import E2EBillingGateway
 from models.billing import Subscription
@@ -87,13 +87,13 @@ async def _salon(client, tenant) -> str:
         headers=_auth(tenant),
     )
     assert created.status_code == 201, created.text
-    # The E2E flow: the consent URL is the web callback itself; the browser follows it.
+    # The E2E flow: Playwright intercepts Google's consent URL and sends the browser to the
+    # callback with E2E_CODE and the same state, which the callback page POSTs here.
     connect = await client.get("/api/v1/calendar/connect", headers=_auth(tenant))
-    callback = urlparse(connect.json()["url"])
-    query = parse_qs(callback.query)
+    query = parse_qs(urlparse(connect.json()["url"]).query)
     done = await client.post(
         "/api/v1/calendar/callback",
-        json={"code": query["code"][0], "state": query["state"][0]},
+        json={"code": E2E_CODE, "state": query["state"][0]},
         headers=_auth(tenant),
     )
     assert done.status_code == 200, done.text
@@ -257,14 +257,17 @@ async def test_checkout_completes_through_the_stripe_url_the_web_client_follows(
     assert urlparse(portal).hostname == "billing.stripe.com"
 
 
-async def test_the_calendar_consent_url_points_back_at_the_web_callback():
+async def test_the_calendar_consent_url_is_googles_shape_so_the_web_client_follows_it():
     api = E2EGoogleCalendarApi()
     url = api.authorization_url(
         state="st", code_challenge="cc", redirect_uri="http://localhost:3000/cb"
     )
     parsed = urlparse(url)
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "http://localhost:3000/cb"
-    assert parse_qs(parsed.query)["state"] == ["st"]
+    # The web client only follows https://accounts.google.com; the journey intercepts it.
+    assert (parsed.scheme, parsed.netloc) == ("https", "accounts.google.com")
+    query = parse_qs(parsed.query)
+    assert query["state"] == ["st"]
+    assert query["redirect_uri"] == ["http://localhost:3000/cb"]
     grant = await api.exchange_code(
         code="x", code_verifier="v", redirect_uri="http://localhost:3000/cb"
     )
