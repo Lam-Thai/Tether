@@ -166,7 +166,8 @@ test("connects Google Calendar (fake OAuth) and selects the calendar", async () 
   await page.getByRole("button", { name: "Connect Google Calendar" }).click();
   // The callback page posts the code and state, then returns here.
   await page.waitForURL("**/dashboard/settings/calendar");
-  await page.getByLabel("Calendar for bookings").selectOption({ label: "E2E Calendar" });
+  // By id: the option text is decorated ("E2E Calendar (primary)"); the id is the fake's own.
+  await page.getByLabel("Calendar for bookings").selectOption("e2e-owner@example.com");
   const selected = apiResponse("PATCH", /\/calendar$/, [200]);
   await page.getByRole("button", { name: "Save calendar" }).click();
   await selected;
