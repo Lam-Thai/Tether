@@ -45,6 +45,9 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version-file: ".nvmrc"
+          # Nothing is installed here, so there is no store to cache (v5 caches pnpm by
+          # default, and its post-job save fails when the store path doesn't exist).
+          package-manager-cache: false
 
       # Reads the lockfile only; no install needed. High and critical advisories block,
       # dev dependencies included (they run in CI and on developer machines).
@@ -70,3 +73,13 @@ jobs:
 
       - name: pip-audit
         run: uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/requirements.txt" --disable-pip --no-deps --progress-spinner off
+
+      # The build backend (`[build-system].requires`, e.g. uv_build) is installed by every
+      # `uv sync` but is not in uv.lock, so the export above misses it. Audit the newest
+      # release in its allowed range, which is what a fresh build would install.
+      - name: Export the build requirements
+        run: uv run --no-project python -c "import tomllib; print('
+'.join(tomllib.load(open('pyproject.toml', 'rb'))['build-system']['requires']))" > "$RUNNER_TEMP/build-requirements.txt"
+
+      - name: pip-audit (build requirements)
+        run: uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/build-requirements.txt" --progress-spinner off

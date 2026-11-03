@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { findSecretsInBundle, SECRET_ENV_NAMES } from "./bundle-scan.ts";
+import { findSecretsInBundle, publicSecretValues, SECRET_ENV_NAMES } from "./bundle-scan.ts";
 
 const file = (content: string, path = "static/chunks/app.js") => ({ path, content });
 // Fixtures shaped like real keys are assembled at runtime, so this file never contains a
@@ -82,5 +82,29 @@ describe("findSecretsInBundle", () => {
       file(`x="${fake("whsec_", "abcdefghijklmnop")}"`, "c.js"),
     ]);
     expect(findings.map((f) => f.path)).toEqual(["a.js", "c.js"]);
+  });
+});
+
+describe("publicSecretValues", () => {
+  it("picks secret-sounding NEXT_PUBLIC_ variables, whose values Next inlines", () => {
+    const env = {
+      NEXT_PUBLIC_STRIPE_SECRET_KEY: "value-one-that-is-long",
+      NEXT_PUBLIC_MAPS_API_KEY: "value-two-that-is-long",
+      NEXT_PUBLIC_API_BASE_URL: "https://api.example.com",
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk-value",
+      STRIPE_SECRET_KEY: "server-only",
+      X_NEXT_PUBLIC_TOKEN: "not-a-public-name",
+    };
+    expect(Object.keys(publicSecretValues(env)).sort()).toEqual([
+      "NEXT_PUBLIC_MAPS_API_KEY",
+      "NEXT_PUBLIC_STRIPE_SECRET_KEY",
+    ]);
+  });
+
+  it("finds an inlined value even though the name is gone from the bundle", () => {
+    const leaked = "inlined-secret-value-123456";
+    const values = publicSecretValues({ NEXT_PUBLIC_PAYMENTS_TOKEN: leaked });
+    const findings = findSecretsInBundle([file(`const t="${leaked}";`)], values);
+    expect(findings.map((f) => f.rule)).toEqual(["secret-env-value"]);
   });
 });

@@ -8,14 +8,7 @@ title = "Tether gitleaks config"
 useDefault = true
 
 [allowlist]
-description = "Synthetic test fixtures and CI placeholders, never real credentials"
-paths = [
-  # Test suites: every key, token and phone number in them is synthetic by rule
-  # (root CLAUDE.md: synthetic data only).
-  '''^apps/api/tests/''',
-  '''^apps/web/.*\.test\.tsx?$''',
-  '''^tooling/.*\.test\.ts$''',
-]
+description = "Exact synthetic values (test fixtures, CI placeholders), never real credentials; no path is allowlisted"
 regexes = [
   # web.yml's dummy Clerk keys (base64 of "example.clerk.accounts.dev$" and
   # "example-secret-key-for-ci-only-0000000000"): `next build` needs syntactically valid keys.
@@ -24,6 +17,13 @@ regexes = [
   # Stripe placeholders: api.yml / eval.yml (`_ci_`) and the E2E server and Playwright
   # setup (`_e2e_`, apps/api/scripts/e2e-server.sh, apps/web/e2e/global-setup.ts).
   '''(?:sk_test|whsec|price)_(?:ci|e2e)_placeholder''',
+  # Synthetic values in the API tests, matched exactly (anchored): the Stripe/Clerk key
+  # placeholders (test_config, test_calendar_config, test_twilio, test_stripe_adapter,
+  # test_clerk_users_adapter) and the fake 43-character media token in test_log_format.
+  # A new key-shaped test value is assembled at runtime instead of being added here.
+  '''^sk_test_placeholder$''',
+  '''^sk_test_secretvalue123$''',
+  '''^AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde$''',
   # Bundle-scan canaries (web.yml): fake values planted to prove they never reach the bundle.
   '''canary-[a-z0-9-]+-\$\{\{ github\.run_id \}\}''',
 ]

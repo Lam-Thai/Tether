@@ -40,6 +40,19 @@ const SECRET_VALUE_RULES: ReadonlyArray<{ rule: string; pattern: RegExp }> = [
 const PUBLIC_SECRET_NAME =
   /\bNEXT_PUBLIC_[A-Z0-9_]*(?:SECRET|PASSWORD|PRIVATE|TOKEN|API_KEY|DATABASE_URL)[A-Z0-9_]*\b/g;
 
+/**
+ * The environment's secret-sounding `NEXT_PUBLIC_*` variables. Next inlines their VALUES at
+ * build time and the name disappears from the bundle, so the name rule alone can't see them:
+ * the scan searches for these values too.
+ */
+export function publicSecretValues(
+  env: Readonly<Record<string, string | undefined>>,
+): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => (name.match(PUBLIC_SECRET_NAME) ?? [])[0] === name),
+  );
+}
+
 // A secret value shorter than this is too generic to search for without false positives.
 const MIN_VALUE_LENGTH = 12;
 
