@@ -22,6 +22,18 @@ export default async function globalSetup() {
     );
   }
 
+  // A real account here would get real verification emails on every run (Clerk only skips
+  // them, and accepts the fixed code 424242, for `+clerk_test` addresses), and the reset
+  // below would delete that account's business. Fail before touching Clerk or the database.
+  const [local = "", domain] = process.env.E2E_CLERK_USER_EMAIL!.toLowerCase().split("@");
+  if (!domain || !local.includes("+clerk_test")) {
+    throw new Error(
+      "E2E_CLERK_USER_EMAIL must be a Clerk test address with '+clerk_test' before the @ " +
+        "(e.g. you+clerk_test@gmail.com), created as its own user in the Clerk dashboard. " +
+        "Never use a real account.",
+    );
+  }
+
   await clerkSetup();
 
   const apiDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../api");

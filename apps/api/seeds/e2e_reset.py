@@ -7,8 +7,10 @@ everything under it: subscription, agent, FAQs, services, hours, calendar connec
 interactions, bookings, escalations and the business's usage rows. The `users` row stays,
 so the same Clerk sign-in simply onboards again. Global usage counters are untouched.
 
-Refuses unless the database is on this machine and ENVIRONMENT is not production: it
-deletes a whole business without confirmation. Never run at startup.
+Refuses unless the database is on this machine, ENVIRONMENT is not production and the
+email is a Clerk test address (`+clerk_test` in its local part): it deletes a whole business
+without confirmation, so a real owner's email (a mistyped E2E secret) must never reach it.
+Never run at startup.
 """
 
 import argparse
@@ -33,6 +35,16 @@ def refuse_unless_safe() -> None:
         raise SystemExit("e2e_reset: refusing to run against a database that is not local.")
 
 
+def refuse_unless_test_email(email: str) -> None:
+    """Raises SystemExit unless `email` is a Clerk test address (`name+clerk_test@...`)."""
+    local, _, domain = email.strip().lower().partition("@")
+    if not domain or "+clerk_test" not in local:
+        raise SystemExit(
+            "e2e_reset: refusing an email without '+clerk_test' (e.g. you+clerk_test@example.com): "
+            "the E2E user must be a Clerk test user, never a real account."
+        )
+
+
 async def reset_user(session: AsyncSession, email: str) -> int:
     """Deletes the businesses (and their usage rows) of users with `email`; returns how
     many businesses were deleted. The caller commits."""
@@ -53,6 +65,7 @@ async def reset_user(session: AsyncSession, email: str) -> int:
 
 async def run(email: str) -> int:
     refuse_unless_safe()
+    refuse_unless_test_email(email)
     async with async_session_factory() as session:
         deleted = await reset_user(session, email)
         await session.commit()

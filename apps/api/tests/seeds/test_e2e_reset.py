@@ -58,4 +58,23 @@ def test_reset_refuses_a_remote_database(monkeypatch):
 async def test_run_checks_safety_before_touching_the_database(monkeypatch):
     monkeypatch.setattr(e2e_reset.settings, "environment", "production")
     with pytest.raises(SystemExit):
-        await e2e_reset.run("someone@example.com")
+        await e2e_reset.run("someone+clerk_test@example.com")
+
+
+@pytest.mark.parametrize(
+    "email",
+    ["owner@gmail.com", "clerk_test@example.com", "a@b+clerk_test.com", "+clerk_test", ""],
+    ids=["real", "no-plus", "tag-in-domain", "no-domain", "empty"],
+)
+async def test_run_refuses_an_email_that_is_not_a_clerk_test_address(email):
+    with pytest.raises(SystemExit, match="clerk_test"):
+        await e2e_reset.run(email)
+
+
+@pytest.mark.parametrize(
+    "email",
+    ["e2e+clerk_test@example.com", "Owner+Clerk_Test@Gmail.com"],
+    ids=["plain", "mixed-case"],
+)
+def test_a_clerk_test_address_is_accepted(email):
+    e2e_reset.refuse_unless_test_email(email)
