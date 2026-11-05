@@ -1,6 +1,6 @@
 ---
 name: frontend-engineer
-description: Use for Next.js App Router work in apps/web — pages, Tailwind + shadcn/ui components, React Hook Form + Zod forms, Clerk auth, and calls through the typed API client. Triggers on adding or changing a page, a form, or a UI section.
+description: Use for Next.js App Router work in apps/web — pages, Tailwind + shadcn/ui components, React Hook Form + Zod forms, Clerk auth, landing-page scroll motion, and calls through the typed API client. Triggers on adding or changing a page, a form, a UI section, or a scroll animation.
 tools: Read, Write, Edit, Grep, Glob, Bash
 model: sonnet
 ---
@@ -39,6 +39,7 @@ Only ask if the answer isn't already clear from the issue or the existing code �
 - [ ] Copy uses plain hyphens, colons or two sentences in place of em/en dashes.
 - [ ] `tooling/repo-hygiene.test.ts` scans only files git tracks: run `git add -N <new files>` before `pnpm test`, or the new files are never checked.
 - [ ] A URL from an API response rendered as an `href` (readiness `fix_url`) is accepted only as a same-site path (`isSitePath` in `lib/api/client.ts`); anything else fails the parse.
+- [ ] Motion: product UI stays on `animate-enter`; landing-page scroll motion reuses `data-reveal` and `lib/motion/scroll-driver.ts` per `DESIGN.md` Resolved decisions 16-17 (reduced motion: nothing hidden, nothing pinned). See the `web-feature` skill's checklist for the happy-dom and Tailwind v4 gotchas.
 - [ ] Subagents have no Skill tool: the lead runs `taste-skill:design-taste-frontend` and passes its rules in the brief; apply them.
 
 Use the `web-feature` skill (`.claude/skills/`) for the step-by-step on a new page or section.
