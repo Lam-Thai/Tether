@@ -56,26 +56,44 @@ export function HowItWorks() {
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
-    const rows = Array.from(list.querySelectorAll<HTMLElement>("[data-step]"));
+    const rows = Array.from(list.querySelectorAll<HTMLElement>("[data-step]")).map((row) => ({
+      row,
+      media: row.querySelector<HTMLElement>(".story-media")!,
+      copy: row.querySelector<HTMLElement>(".story-copy")!,
+    }));
 
     return whileMotionAllowed(() => {
       const paint = () => {
         const viewport = window.innerHeight;
-        for (const row of rows) {
-          const { media, copy } = slideIn(row.getBoundingClientRect().top, viewport);
-          row.style.setProperty("--media-p", media.toFixed(4));
-          row.style.setProperty("--copy-p", copy.toFixed(4));
+        // Both halves only slide sideways, so their tops are their resting positions.
+        for (const { row, media, copy } of rows) {
+          const photo = media.getBoundingClientRect();
+          const text = copy.getBoundingClientRect();
+          // Side by side, the copy is scrubbed from the photo's top and trails it (`slideIn`).
+          // Stacked on phones, it sits below the photo, so it is scrubbed from its own top:
+          // otherwise it would settle before it was even on screen.
+          const stacked = text.top >= photo.bottom;
+          const mediaP = slideIn(photo.top, viewport).media;
+          const copyP = slideIn(stacked ? text.top : photo.top, viewport).copy;
+          row.style.setProperty("--media-p", mediaP.toFixed(4));
+          row.style.setProperty("--copy-p", copyP.toFixed(4));
         }
       };
-      // Place every row now, so nothing shows at full strength for a frame before the driver runs.
+      // Place every row as soon as the effect runs. Server HTML has no progress, so until
+      // hydration every row shows fully in; a row low in the viewport then snaps back to its
+      // scrubbed position here (rare: it needs a slow hydration with this section on screen).
       paint();
       const stop = driveWhileVisible(list, () => {
         paint();
         return false;
       });
+      // A reflow with no scroll (fonts, content above changing height) moves rows too.
+      const resize = typeof ResizeObserver === "function" ? new ResizeObserver(paint) : null;
+      resize?.observe(list);
       return () => {
         stop();
-        for (const row of rows) {
+        resize?.disconnect();
+        for (const { row } of rows) {
           row.style.removeProperty("--media-p");
           row.style.removeProperty("--copy-p");
         }

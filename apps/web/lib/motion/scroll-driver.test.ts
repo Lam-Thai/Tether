@@ -114,6 +114,9 @@ describe("slideIn", () => {
     const { media, copy } = slideIn(vh * 0.75, vh);
     expect(media).toBeGreaterThan(copy);
     expect(copy).toBeGreaterThan(0);
+    // Eased (ease-out cubic); linear progress would give about 0.49 and 0.31 here.
+    expect(media).toBeCloseTo(0.867, 2);
+    expect(copy).toBeCloseTo(0.677, 2);
   });
 
   it("depends only on position, so scrolling back up rewinds it", () => {

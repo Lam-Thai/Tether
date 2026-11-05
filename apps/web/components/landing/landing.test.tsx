@@ -9,6 +9,7 @@ import { LandingHeader } from "@/components/landing/landing-header";
 import { ScrollReveal } from "@/components/landing/motion/scroll-reveal";
 import { Pricing } from "@/components/landing/pricing";
 import { PrimaryCta } from "@/components/landing/primary-cta";
+import { slideIn } from "@/lib/motion/scroll-driver";
 
 describe("PrimaryCta", () => {
   it("links signed-out visitors to sign-up", () => {
@@ -220,31 +221,101 @@ describe("motion-driven landing sections", () => {
     }
   }
 
-  it("story: each row slides in from its position and rewinds on scroll up", () => {
-    reduceMotion(false);
-    const { container } = render(<HowItWorks />);
-    const list = container.querySelector("ol")!;
-    const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-step]"));
-    const vh = window.innerHeight;
-    // happy-dom lays nothing out: row 0 has risen well into view, row 1 is half way, row 2 is below.
-    const place = (tops: number[]) =>
-      rows.forEach((row, i) => (row.getBoundingClientRect = () => ({ top: tops[i] }) as DOMRect));
-    const story = observers.find((o) => o.targets.includes(list));
-    const p = (row: HTMLElement) => Number(row.style.getPropertyValue("--media-p"));
+  describe("story rows", () => {
+    let resized: (() => void) | null;
 
-    place([vh * 0.2, vh * 0.7, vh * 1.5]);
-    act(() => story?.cb([{ target: list, isIntersecting: true }]));
-    runFrames();
-    expect(p(rows[0]!)).toBe(1);
-    expect(p(rows[1]!)).toBeGreaterThan(0);
-    expect(p(rows[1]!)).toBeLessThan(1);
-    expect(p(rows[2]!)).toBe(0);
+    beforeEach(() => {
+      resized = null;
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(cb: () => void) {
+            resized = cb;
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+    });
 
-    // Scrolling back up pushes row 0 down again, and it slides back out.
-    place([vh * 1.1, vh * 1.6, vh * 2.4]);
-    act(() => window.dispatchEvent(new Event("scroll")));
-    runFrames();
-    expect(p(rows[0]!)).toBe(0);
+    // happy-dom lays nothing out, so each row's photo and copy are placed by hand.
+    type Box = { media: number; copy: number; mediaHeight?: number };
+    function setup() {
+      reduceMotion(false);
+      const { container } = render(<HowItWorks />);
+      const list = container.querySelector("ol")!;
+      const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-step]"));
+      const place = (boxes: Box[]) =>
+        rows.forEach((row, i) => {
+          const { media, copy, mediaHeight = 400 } = boxes[i]!;
+          row.querySelector<HTMLElement>(".story-media")!.getBoundingClientRect = () =>
+            ({ top: media, bottom: media + mediaHeight }) as DOMRect;
+          row.querySelector<HTMLElement>(".story-copy")!.getBoundingClientRect = () =>
+            ({ top: copy, bottom: copy + 200 }) as DOMRect;
+        });
+      const story = observers.find((o) => o.targets.includes(list));
+      // An absent property reads as NaN, so a row that lost its progress can never pass as 0 or 1.
+      const read = (row: HTMLElement, name: "--media-p" | "--copy-p") => {
+        const raw = row.style.getPropertyValue(name);
+        return raw === "" ? NaN : Number(raw);
+      };
+      return { list, rows, place, story, read };
+    }
+
+    it("each row slides in from its position and rewinds on scroll up", () => {
+      const { list, rows, place, story, read } = setup();
+      const vh = window.innerHeight;
+      // Side by side (copy beside the photo): row 0 well into view, row 1 half way, row 2 below.
+      const side = (top: number) => ({ media: top, copy: top + 100 });
+      place([side(vh * 0.2), side(vh * 0.75), side(vh * 1.5)]);
+      act(() => story?.cb([{ target: list, isIntersecting: true }]));
+      runFrames();
+
+      expect(read(rows[0]!, "--media-p")).toBe(1);
+      expect(read(rows[0]!, "--copy-p")).toBe(1);
+      // Beside the photo, the copy is scrubbed from the photo's top and trails it.
+      const half = slideIn(vh * 0.75, vh);
+      expect(read(rows[1]!, "--media-p")).toBeCloseTo(half.media, 3);
+      expect(read(rows[1]!, "--copy-p")).toBeCloseTo(half.copy, 3);
+      expect(read(rows[2]!, "--media-p")).toBe(0);
+      expect(read(rows[2]!, "--copy-p")).toBe(0);
+
+      // Scrolling back up pushes row 0 down again, and both halves slide back out.
+      place([side(vh * 1.1), side(vh * 1.6), side(vh * 2.4)]);
+      act(() => window.dispatchEvent(new Event("scroll")));
+      runFrames();
+      expect(read(rows[0]!, "--media-p")).toBe(0);
+      expect(read(rows[0]!, "--copy-p")).toBe(0);
+    });
+
+    it("stacked (phones): the copy is scrubbed from its own top, below the photo", () => {
+      const { list, rows, place, story, read } = setup();
+      const vh = window.innerHeight;
+      // The photo has fully landed, but the copy under it is only just entering the viewport.
+      const stacked = { media: vh * 0.1, copy: vh * 0.95, mediaHeight: vh * 0.7 };
+      place([stacked, stacked, stacked]);
+      act(() => story?.cb([{ target: list, isIntersecting: true }]));
+      runFrames();
+
+      expect(read(rows[0]!, "--media-p")).toBe(1);
+      expect(read(rows[0]!, "--copy-p")).toBeCloseTo(slideIn(vh * 0.95, vh).copy, 3);
+      expect(read(rows[0]!, "--copy-p")).toBeLessThan(1);
+    });
+
+    it("repaints when the list reflows without a scroll", () => {
+      const { list, rows, place, story, read } = setup();
+      const vh = window.innerHeight;
+      place([{ media: vh * 1.2, copy: vh * 1.3 }, { media: vh * 2, copy: vh * 2.1 }, { media: vh * 3, copy: vh * 3.1 }]);
+      act(() => story?.cb([{ target: list, isIntersecting: true }]));
+      runFrames();
+      expect(read(rows[0]!, "--media-p")).toBe(0);
+
+      // Something above shrinks: row 0 is now in view, with no scroll or resize event.
+      place([{ media: vh * 0.2, copy: vh * 0.3 }, { media: vh, copy: vh * 1.1 }, { media: vh * 2, copy: vh * 2.1 }]);
+      act(() => resized?.());
+      runFrames();
+      expect(read(rows[0]!, "--media-p")).toBe(1);
+    });
   });
 
   it("story: under reduced motion nothing is driven and every row stays in place", () => {
