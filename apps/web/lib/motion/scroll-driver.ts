@@ -78,10 +78,31 @@ export function nextHeaderHidden(
   return hidden;
 }
 
+const REDUCE = "(prefers-reduced-motion: reduce)";
+
 export function prefersReducedMotion(): boolean {
-  return typeof window.matchMedia === "function"
-    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    : false;
+  return typeof window.matchMedia === "function" ? window.matchMedia(REDUCE).matches : false;
+}
+
+/**
+ * Runs `setup` while motion is allowed and tears it down (its returned cleanup) the moment
+ * the visitor turns on reduced motion, setting it up again if they turn it back off.
+ * Returns a cleanup for the whole subscription.
+ */
+export function whileMotionAllowed(setup: () => (() => void) | void): () => void {
+  const query = typeof window.matchMedia === "function" ? window.matchMedia(REDUCE) : null;
+  let teardown: (() => void) | void;
+  const apply = () => {
+    teardown?.();
+    teardown = query?.matches ? undefined : setup();
+  };
+  apply();
+  query?.addEventListener?.("change", apply);
+  return () => {
+    query?.removeEventListener?.("change", apply);
+    teardown?.();
+    teardown = undefined;
+  };
 }
 
 /**

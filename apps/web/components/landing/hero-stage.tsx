@@ -9,8 +9,8 @@ import {
   driveWhileVisible,
   frameLayer,
   pinProgress,
-  prefersReducedMotion,
   stepFor,
+  whileMotionAllowed,
 } from "@/lib/motion/scroll-driver";
 import { cn } from "@/lib/utils";
 
@@ -19,14 +19,23 @@ export type HeroBeat = { headline: string; body: string };
 /** Pin progress at which the last frame is fully in. */
 const FRAMES_DONE_AT = 0.88;
 
+/** A frame layer's resting style, before any scroll (frame 1 on, the rest waiting). */
+const restingLayer = (i: number) => ({
+  opacity: i === 0 ? "1" : "0",
+  transform: `scale(${1 + 0.14 * (i === 0 ? 0.57 : 1)})`,
+});
+
 /**
- * Full-bleed pinned hero (DESIGN.md Resolved decisions 16 and 18). The section is three
- * screens tall and its stage sticks to the top of the viewport, so the first few scrolls
- * stay on the hero: scroll progress scrubs through the photo sequence (each frame zooms
- * out and dissolves into the next) and steps the headline through the beats. Beat 1's
- * headline is the page's h1; the actions never change. Reduced motion and no-JS get a
- * one-screen hero on frame 1 and beat 1. Per-frame work writes styles directly (no React
- * state); only the beat index is state.
+ * Full-bleed pinned hero (DESIGN.md Resolved decisions 16 and 18). Once the scroll effect
+ * starts it marks the section `data-pinned`, which makes it three screens tall while its
+ * stage sticks to the top: the first few scrolls stay on the hero, scroll progress scrubs
+ * the photo sequence (each frame zooms out and dissolves into the next) and steps the
+ * headline through the beats. Beat 1's headline is the page's h1; the actions never change.
+ *
+ * Without JS the hero is one screen on frame 1 and beat 1. Under reduced motion (checked
+ * live) it is one screen with every beat stacked and readable. The stage is at least one
+ * screen tall and grows with its content, so short viewports and large text never clip it.
+ * Per-frame work writes styles directly (no React state); only the beat index is state.
  */
 export function HeroStage({
   beats,
@@ -45,40 +54,51 @@ export function HeroStage({
   useEffect(() => {
     const section = sectionRef.current;
     const stage = stageRef.current;
-    if (!section || !stage || prefersReducedMotion()) return;
+    if (!section || !stage) return;
 
-    let current = 0;
-    let shown = 0;
-    return driveWhileVisible(section, () => {
-      const target = pinProgress({
-        top: section.getBoundingClientRect().top,
-        height: section.offsetHeight,
-        stageHeight: stage.offsetHeight,
-        stickyTop: 0,
+    return whileMotionAllowed(() => {
+      section.setAttribute("data-pinned", "");
+      let current = 0;
+      let shown = 0;
+      const stop = driveWhileVisible(section, () => {
+        const target = pinProgress({
+          top: section.getBoundingClientRect().top,
+          height: section.offsetHeight,
+          stageHeight: stage.offsetHeight,
+          stickyTop: 0,
+        });
+        current = approach(current, target, 0.12);
+        section.style.setProperty("--hero-p", current.toFixed(4));
+        // The sequence completes a little before the pin ends, so the last frame holds briefly.
+        const framesProgress = Math.min(1, current / FRAMES_DONE_AT);
+        layerRefs.current.forEach((layer, i) => {
+          if (!layer) return;
+          const { opacity, scale } = frameLayer(framesProgress, i, frames.length);
+          layer.style.opacity = opacity.toFixed(3);
+          layer.style.transform = `scale(${scale.toFixed(4)})`;
+        });
+        const next = stepFor(current, beats.length);
+        if (next !== shown) {
+          shown = next;
+          setBeat(next);
+        }
+        return current !== target;
       });
-      current = approach(current, target, 0.12);
-      section.style.setProperty("--hero-p", current.toFixed(4));
-      // The sequence completes a little before the pin ends, so the last frame holds briefly.
-      const framesProgress = Math.min(1, current / FRAMES_DONE_AT);
-      layerRefs.current.forEach((layer, i) => {
-        if (!layer) return;
-        const { opacity, scale } = frameLayer(framesProgress, i, frames.length);
-        layer.style.opacity = opacity.toFixed(3);
-        layer.style.transform = `scale(${scale.toFixed(4)})`;
-      });
-      const next = stepFor(current, beats.length);
-      if (next !== shown) {
-        shown = next;
-        setBeat(next);
-      }
-      return current !== target;
+
+      return () => {
+        stop();
+        section.removeAttribute("data-pinned");
+        section.style.removeProperty("--hero-p");
+        layerRefs.current.forEach((layer, i) => layer && Object.assign(layer.style, restingLayer(i)));
+        setBeat(0);
+      };
     });
   }, [beats.length, frames.length]);
 
   return (
     // -mt-16 tucks the stage under the 4rem sticky header, so the photo runs edge to edge.
-    <section ref={sectionRef} className="relative -mt-16 bg-surface-dark motion-safe:h-[300dvh]">
-      <div ref={stageRef} className="sticky top-0 isolate h-[100dvh] overflow-hidden">
+    <section ref={sectionRef} className="group/hero relative -mt-16 bg-surface-dark data-[pinned]:h-[300dvh]">
+      <div ref={stageRef} className="sticky top-0 isolate overflow-hidden">
         <div aria-hidden className="absolute inset-0 -z-10">
           {frames.map((frame, i) => (
             <div
@@ -87,7 +107,7 @@ export function HeroStage({
                 layerRefs.current[i] = el;
               }}
               className="absolute inset-0 will-change-[opacity,transform]"
-              style={{ opacity: i === 0 ? 1 : 0, transform: `scale(${1 + 0.14 * (i === 0 ? 0.57 : 1)})` }}
+              style={restingLayer(i)}
             >
               <Image
                 src={frame.src}
@@ -112,11 +132,12 @@ export function HeroStage({
           />
         </div>
 
-        <div className="mx-auto flex h-full w-full max-w-[1280px] flex-col justify-end gap-6 px-6 pt-24 pb-[clamp(2.5rem,8dvh,5rem)] text-surface-dark-foreground">
+        <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1280px] flex-col justify-end gap-6 px-6 pt-24 pb-[clamp(2.5rem,8dvh,5rem)] text-surface-dark-foreground">
           <span aria-hidden className="block h-2 w-16 -skew-x-12 bg-brand-red" />
-          {/* Beats share one grid cell, so the block is as tall as the longest beat and the
-              actions below never move. All stay in the accessibility tree, in order. */}
-          <div className="animate-enter grid">
+          {/* With motion, the beats share one grid cell (the block is as tall as the longest
+              beat, so the actions never move) and only the active one shows. Under reduced
+              motion they stack and all show. Every beat stays in the accessibility tree. */}
+          <div className="animate-enter grid motion-reduce:flex motion-reduce:flex-col motion-reduce:gap-8">
             {beats.map((b, i) => {
               const Headline = i === 0 ? "h1" : "p";
               return (
@@ -125,9 +146,14 @@ export function HeroStage({
                   data-active={i === beat}
                   // The outgoing beat clears in 200ms before the incoming one rises in, so
                   // two headlines never sit on top of each other mid-swap.
-                  className="flex flex-col gap-4 transition-[opacity,translate] duration-200 ease-(--ease-out-quick) [grid-area:1/1] data-[active=false]:-translate-y-2 data-[active=false]:opacity-0 data-[active=true]:delay-200 data-[active=true]:duration-[420ms] motion-reduce:transition-none"
+                  className="flex flex-col gap-4 transition-[opacity,translate] duration-200 ease-(--ease-out-quick) [grid-area:1/1] motion-safe:data-[active=false]:-translate-y-2 motion-safe:data-[active=false]:opacity-0 data-[active=true]:delay-200 data-[active=true]:duration-[420ms] motion-reduce:transition-none"
                 >
-                  <Headline className="max-w-4xl text-[clamp(2.5rem,5.5vw,4.5rem)] leading-[1.02] font-bold tracking-tight uppercase">
+                  <Headline
+                    className={cn(
+                      "max-w-4xl text-[clamp(2.25rem,min(5.5vw,8.5dvh),4.5rem)] leading-[1.02] font-bold tracking-tight uppercase",
+                      i > 0 && "motion-reduce:text-h1",
+                    )}
+                  >
                     {b.headline}
                   </Headline>
                   <p className="max-w-[48ch] text-lg text-surface-dark-foreground/90">{b.body}</p>
@@ -141,7 +167,7 @@ export function HeroStage({
           >
             {actions}
           </div>
-          <div aria-hidden className="hidden gap-2 motion-safe:flex">
+          <div aria-hidden className="hidden gap-2 group-data-[pinned]/hero:flex">
             {beats.map((b, i) => (
               <span key={b.headline} className="relative h-1 w-10 overflow-hidden bg-surface-dark-foreground/30">
                 <span

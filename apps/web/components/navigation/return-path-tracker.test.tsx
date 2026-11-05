@@ -30,4 +30,14 @@ describe("ReturnPathTracker", () => {
     render(<ReturnPathTracker />);
     expect(window.sessionStorage.getItem(RETURN_PATH_KEY)).toBe("/");
   });
+
+  it("follows client-side navigation while it stays mounted", () => {
+    nav.pathname = "/dashboard/inbox";
+    nav.search = "type=attention";
+    const { rerender } = render(<ReturnPathTracker />);
+    nav.pathname = "/dashboard/settings/usage";
+    nav.search = "";
+    rerender(<ReturnPathTracker />);
+    expect(window.sessionStorage.getItem(RETURN_PATH_KEY)).toBe("/dashboard/settings/usage");
+  });
 });

@@ -8,6 +8,7 @@ import {
   pinProgress,
   prefersReducedMotion,
   stepFor,
+  whileMotionAllowed,
 } from "@/lib/motion/scroll-driver";
 
 describe("pinProgress", () => {
@@ -143,6 +144,60 @@ describe("prefersReducedMotion", () => {
   it("is false when matchMedia is missing", () => {
     vi.stubGlobal("matchMedia", undefined);
     expect(prefersReducedMotion()).toBe(false);
+  });
+});
+
+describe("whileMotionAllowed", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubQuery(initial: boolean) {
+    const listeners = new Set<() => void>();
+    const query = {
+      matches: initial,
+      addEventListener: (_: string, cb: () => void) => listeners.add(cb),
+      removeEventListener: (_: string, cb: () => void) => listeners.delete(cb),
+    };
+    vi.stubGlobal("matchMedia", () => query);
+    return {
+      flip(reduce: boolean) {
+        query.matches = reduce;
+        listeners.forEach((cb) => cb());
+      },
+      listeners,
+    };
+  }
+
+  it("sets up when motion is allowed and never under reduced motion", () => {
+    stubQuery(true);
+    const setup = vi.fn();
+    whileMotionAllowed(setup);
+    expect(setup).not.toHaveBeenCalled();
+  });
+
+  it("tears down when reduced motion turns on, and sets up again when it turns off", () => {
+    const media = stubQuery(false);
+    const teardown = vi.fn();
+    const setup = vi.fn(() => teardown);
+    whileMotionAllowed(setup);
+    expect(setup).toHaveBeenCalledTimes(1);
+
+    media.flip(true);
+    expect(teardown).toHaveBeenCalledTimes(1);
+    expect(setup).toHaveBeenCalledTimes(1);
+
+    media.flip(false);
+    expect(setup).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops listening and tears down on cleanup", () => {
+    const media = stubQuery(false);
+    const teardown = vi.fn();
+    const stop = whileMotionAllowed(() => teardown);
+    stop();
+    expect(teardown).toHaveBeenCalledTimes(1);
+    expect(media.listeners.size).toBe(0);
   });
 });
 

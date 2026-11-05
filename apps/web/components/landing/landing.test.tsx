@@ -131,13 +131,20 @@ describe("ScrollReveal", () => {
   it("marks on-screen blocks revealed before arming, and observes the rest", () => {
     stubMotion(false);
     const observed: Element[] = [];
+    const unobserved: Element[] = [];
+    let onIntersect: ((entries: Partial<IntersectionObserverEntry>[]) => void) | null = null;
     vi.stubGlobal(
       "IntersectionObserver",
       class {
+        constructor(cb: (entries: Partial<IntersectionObserverEntry>[]) => void) {
+          onIntersect = cb;
+        }
         observe(el: Element) {
           observed.push(el);
         }
-        unobserve() {}
+        unobserve(el: Element) {
+          unobserved.push(el);
+        }
         disconnect() {}
       },
     );
@@ -157,8 +164,111 @@ describe("ScrollReveal", () => {
     expect(below).not.toHaveAttribute("data-revealed");
     expect(observed).toEqual([below]);
     expect(document.documentElement).toHaveAttribute("data-reveal-armed");
+
+    // Scrolling near it without entering the band reveals nothing; entering reveals it once.
+    act(() => onIntersect?.([{ target: below, isIntersecting: false }]));
+    expect(below).not.toHaveAttribute("data-revealed");
+    act(() => onIntersect?.([{ target: below, isIntersecting: true }]));
+    expect(below).toHaveAttribute("data-revealed");
+    expect(unobserved).toEqual([below]);
     above.remove();
     below.remove();
+  });
+});
+
+describe("motion-driven landing sections", () => {
+  type Entry = Partial<IntersectionObserverEntry>;
+  let observers: { cb: (entries: Entry[]) => void; targets: Element[] }[];
+  let frames: FrameRequestCallback[];
+
+  beforeEach(() => {
+    observers = [];
+    frames = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        targets: Element[] = [];
+        constructor(cb: (entries: Entry[]) => void) {
+          observers.push({ cb, targets: this.targets });
+        }
+        observe(el: Element) {
+          this.targets.push(el);
+        }
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const reduceMotion = (reduce: boolean) =>
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: reduce && q.includes("reduce") }));
+
+  function runFrames(limit = 400) {
+    for (let i = 0; i < limit && frames.length; i++) {
+      const next = frames.shift();
+      act(() => next?.(0));
+    }
+  }
+
+  it("story: the step crossing mid-viewport becomes active", () => {
+    reduceMotion(false);
+    const { container } = render(<HowItWorks />);
+    const steps = Array.from(container.querySelectorAll("[data-step]"));
+    const story = observers.find((o) => o.targets.includes(steps[0]!));
+    act(() => story?.cb([{ target: steps[1], isIntersecting: true }]));
+
+    const marker = (i: number) => steps[i]!.querySelector(".bg-brand-red");
+    expect(marker(1)).toHaveClass("scale-y-100");
+    expect(marker(0)).toHaveClass("scale-y-0");
+  });
+
+  it("hero: scrolling through the pin scrubs the frames and steps the beats", () => {
+    reduceMotion(false);
+    const { container } = render(<Hero signedIn={false} />);
+    const section = container.querySelector("section")!;
+    const stage = section.firstElementChild as HTMLElement;
+    expect(section).toHaveAttribute("data-pinned");
+
+    // Three screens of section, one screen of stage, scrolled to the end of the pin.
+    Object.defineProperty(section, "offsetHeight", { value: 2400, configurable: true });
+    Object.defineProperty(stage, "offsetHeight", { value: 800, configurable: true });
+    section.getBoundingClientRect = () => ({ top: -1600 }) as DOMRect;
+    const hero = observers.find((o) => o.targets.includes(section));
+    act(() => hero?.cb([{ target: section, isIntersecting: true }]));
+    runFrames();
+
+    const beatOf = (text: RegExp) => screen.getByText(text).closest("[data-active]");
+    expect(beatOf(/once your Google Calendar confirms/)).toHaveAttribute("data-active", "true");
+    expect(beatOf(/Every call answered/)).toHaveAttribute("data-active", "false");
+    const layers = Array.from(section.querySelectorAll<HTMLElement>(".will-change-\\[opacity\\,transform\\]"));
+    expect(layers.at(-1)?.style.opacity).toBe("1.000");
+    expect(layers.at(-1)?.style.transform).not.toBe("scale(1.14)");
+  });
+
+  it("hero: under reduced motion nothing pins or is observed", () => {
+    reduceMotion(true);
+    const { container } = render(<Hero signedIn={false} />);
+    const section = container.querySelector("section")!;
+    expect(section).not.toHaveAttribute("data-pinned");
+    expect(observers.some((o) => o.targets.includes(section))).toBe(false);
+  });
+
+  it("header: never hides under reduced motion", () => {
+    reduceMotion(true);
+    render(<LandingHeader signedIn={false} />);
+    act(() => {
+      Object.defineProperty(window, "scrollY", { value: 900, configurable: true });
+      window.dispatchEvent(new Event("scroll"));
+    });
+    runFrames();
+    expect(screen.getByRole("banner")).toHaveAttribute("data-hidden", "false");
+    Object.defineProperty(window, "scrollY", { value: 0, configurable: true });
   });
 });
 

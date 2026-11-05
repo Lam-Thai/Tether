@@ -45,7 +45,8 @@ const steps: Step[] = [
  * Sticky story (DESIGN.md Resolved decision 16). From md up the photo column stays pinned
  * while the steps scroll past; the step crossing the middle of the viewport becomes active,
  * swapping the photo and its accent shape and drawing the step's marker. Phones get each
- * photo inline above its step instead. Reduced motion keeps the swap but drops the easing.
+ * photo inline above its step instead; so does reduced motion at every width (nothing pins,
+ * each step sits beside its own photo).
  */
 export function HowItWorks() {
   const listRef = useRef<HTMLOListElement>(null);
@@ -79,8 +80,8 @@ export function HowItWorks() {
           Three jobs, handled while you work
         </h2>
       </div>
-      <div className="grid grid-cols-1 gap-12 md:grid-cols-[5fr_6fr] md:gap-16">
-        <div aria-hidden className="hidden md:block">
+      <div className="grid grid-cols-1 gap-12 md:gap-16 md:motion-safe:grid-cols-[5fr_6fr]">
+        <div aria-hidden className="hidden md:motion-safe:block">
           <div className="sticky top-24 h-[min(72dvh,36rem)] overflow-hidden rounded-lg bg-surface-dark">
             {steps.map((step, i) => (
               <StoryFrame key={step.title} step={step} on={i === active} />
@@ -96,20 +97,20 @@ export function HowItWorks() {
                 key={step.title}
                 data-step={index}
                 data-reveal
-                className="flex flex-col gap-6 md:min-h-[min(72dvh,36rem)] md:justify-center"
+                className="flex flex-col gap-6 md:justify-center md:motion-safe:min-h-[min(72dvh,36rem)] md:motion-reduce:grid md:motion-reduce:grid-cols-[5fr_6fr] md:motion-reduce:items-center md:motion-reduce:gap-16"
               >
                 <div
                   aria-hidden
-                  className="relative h-56 overflow-hidden rounded-md bg-surface-dark md:hidden"
+                  className="relative h-56 overflow-hidden rounded-md bg-surface-dark md:motion-safe:hidden md:motion-reduce:h-72"
                 >
                   <StoryFrame step={step} on />
                 </div>
-                <div className="relative flex flex-col gap-3 md:pl-8">
+                <div className="relative flex flex-col gap-3 md:motion-safe:pl-8">
                   {/* Active-step marker: a red rule that draws down the step's left edge. */}
                   <span
                     aria-hidden
                     className={cn(
-                      "absolute inset-y-0 left-0 hidden w-1 origin-top bg-brand-red transition-transform duration-[420ms] ease-(--ease-out-quick) motion-reduce:transition-none md:block",
+                      "absolute inset-y-0 left-0 hidden w-1 origin-top bg-brand-red transition-transform duration-[420ms] ease-(--ease-out-quick) motion-reduce:transition-none md:motion-safe:block",
                       on ? "scale-y-100" : "scale-y-0",
                     )}
                   />
