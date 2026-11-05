@@ -30,7 +30,9 @@ or disabled the fact since).
   `offered_slots`) unless a check this turn found nothing to offer, and an hours,
   FAQ or location reply (`HOURS_TIME_INTENTS`) that doesn't use offer wording
   ("available", "book", "works", ...) may state opening or closing times shown
-  this turn or times in an FAQ answer retrieved this turn. Intent is the model's
+  this turn or times in an FAQ answer retrieved this turn. Saying a time needs an
+  appointment ("after 3 PM it's appointments only", "you'll need to book an
+  appointment") is not offer wording (`offers_a_time`). Intent is the model's
   word, so an hours reply that offers a time is held to the slots like a booking
   one. A time without am/pm counts if either
   reading is allowed. A miss is `unverified_time`, which the engine answers with
@@ -103,6 +105,21 @@ CALLBACK_CORRECTION = (
 _OFFER_WORDING = re.compile(
     r"(?i:\b(?:availab\w*|book\w*|appointments?|slots?|reserv\w*|works?|"
     r"see\s+you|i\s+have|i\s+can|how\s+about|fit\s+you|squeeze)\b)"
+)
+# Saying a time needs an appointment ("after 3 PM it's appointments only", "you'll need
+# to book an appointment") is policy an FAQ answer states, not an offer. Only these
+# phrases are masked before `_OFFER_WORDING` looks; any other offer wording still counts,
+# so "appointments at 3 PM are available" or "you'll need to book 3 PM" are offers.
+_NOUN = r"(?:appointments?|bookings?|reservations?)"
+_POLICY_WORDING = re.compile(
+    r"(?i:\b(?:"
+    rf"(?:by\s+)?{_NOUN}[\s-]+only"
+    r"|by\s+(?:appointments?|reservations?)"
+    rf"|{_NOUN}\s+(?:are|is)\s+(?:required|needed|necessary)"
+    rf"|(?:need|needs|require|requires)\s+(?:an?\s+)?{_NOUN}"
+    rf"|(?:need|needs)\s+to\s+(?:book|make|schedule)\s+(?:an?\s+)?{_NOUN}"
+    r"|(?:need|needs)\s+to\s+book\s+(?:ahead|in\s+advance)"
+    r")\b)"
 )
 _NO_SERVICE_DURATIONS = frozenset({"LOCATION", "BUSINESS_HOURS"})
 
@@ -206,7 +223,7 @@ class TurnEvidence:
             allowed = set(self._slot_times)
         else:
             allowed = set(self._earlier_offer_times)
-            if turn.intent in HOURS_TIME_INTENTS and not _OFFER_WORDING.search(turn.response_text):
+            if turn.intent in HOURS_TIME_INTENTS and not offers_a_time(turn.response_text):
                 allowed |= self._hour_times
                 allowed |= {
                     reading
@@ -236,6 +253,12 @@ class TurnEvidence:
 def grounding_problem(turn: AgentTurn, evidence: TurnEvidence) -> str | None:
     """Why `turn` isn't grounded in this turn's evidence, as a fixed code (or None)."""
     return evidence.problem(turn)
+
+
+def offers_a_time(text: str) -> bool:
+    """True when `text` offers, accepts or proposes a time ("I have 3 PM", "3 PM works",
+    "appointments at 3 are available"). Saying a time needs an appointment is not one."""
+    return bool(_OFFER_WORDING.search(_POLICY_WORDING.sub(" ", text)))
 
 
 def _all(extract, texts: Iterable[str]) -> set[Decimal]:
