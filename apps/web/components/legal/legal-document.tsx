@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 
 import { LandingFooter } from "@/components/landing/closing-footer";
+import { BackLink } from "@/components/legal/back-link";
 import { LegalLinks } from "@/components/legal/legal-links";
 import { Wordmark } from "@/components/ui/construct";
 import { formatLegalDate, LAST_UPDATED } from "@/lib/legal";
@@ -18,7 +19,8 @@ export type LegalSection = {
  * with its Last updated date, an anchor table of contents (sticky beside the
  * text from 768px, above it below that) and the sections as h2s in a ~70ch
  * column. A static server component: it never reads the session, so both
- * pages render the same signed in or out.
+ * pages render the same signed in or out. The Back link (`back-link.tsx`) is
+ * the one client island: it returns to the page the visitor came from.
  */
 export function LegalDocument({
   title,
@@ -48,6 +50,9 @@ export function LegalDocument({
       </header>
       <main className="animate-enter mx-auto w-full max-w-[1280px] px-6 py-[clamp(3rem,6vw,5rem)]">
         <div className="flex max-w-[70ch] flex-col gap-4">
+          <div className="mb-4">
+            <BackLink />
+          </div>
           <span aria-hidden className="block h-2 w-16 -skew-x-12 bg-brand-red" />
           <h1 className="text-h1 font-bold tracking-tight uppercase">{title}</h1>
           <p className="text-lg leading-relaxed text-muted-foreground">{summary}</p>

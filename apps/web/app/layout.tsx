@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Oswald } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { Suspense } from "react";
+
+import { ReturnPathTracker } from "@/components/navigation/return-path-tracker";
 import "./globals.css";
 
 const oswald = Oswald({
@@ -35,6 +38,10 @@ export default function RootLayout({
       <html lang="en" className={`${oswald.variable} ${jetbrainsMono.variable}`}>
         <body className="bg-background text-foreground antialiased">
           {children}
+          {/* Remembers the last page for the legal pages' Back link (reads search params). */}
+          <Suspense fallback={null}>
+            <ReturnPathTracker />
+          </Suspense>
         </body>
       </html>
     </ClerkProvider>
