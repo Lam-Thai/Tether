@@ -56,6 +56,27 @@ export function frameLayer(progress: number, i: number, count: number): { opacit
   return { opacity, scale: 1 + FRAME_ZOOM * (1 - life) };
 }
 
+/** How far (fraction of the viewport) a row rises from the bottom edge before it is fully in. */
+const SLIDE_SPAN = 0.6;
+/** The copy trails the photo by this much of the slide. */
+const SLIDE_LAG = 0.15;
+const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
+
+/**
+ * Slide-in progress (0..1, eased) for a story row whose top is `top` px from the top of a
+ * `viewport`-tall window: 0 while the row is at or below the bottom edge, 1 once its top has
+ * risen 60% of the viewport. `media` (the photo) leads and `copy` trails slightly. It is a
+ * pure function of position, so scrolling back up plays it in reverse.
+ */
+export function slideIn(top: number, viewport: number): { media: number; copy: number } {
+  if (viewport <= 0) return { media: 1, copy: 1 };
+  const raw = clamp01((viewport - top) / (viewport * SLIDE_SPAN));
+  return {
+    media: easeOutCubic(clamp01(raw / (1 - SLIDE_LAG))),
+    copy: easeOutCubic(clamp01((raw - SLIDE_LAG) / (1 - SLIDE_LAG))),
+  };
+}
+
 /** Eases `current` towards `target` by `rate` per frame, snapping once within `epsilon`. */
 export function approach(current: number, target: number, rate: number, epsilon = 0.001): number {
   const next = current + (target - current) * rate;

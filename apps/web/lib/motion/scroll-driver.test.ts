@@ -7,6 +7,7 @@ import {
   nextHeaderHidden,
   pinProgress,
   prefersReducedMotion,
+  slideIn,
   stepFor,
   whileMotionAllowed,
 } from "@/lib/motion/scroll-driver";
@@ -93,6 +94,45 @@ describe("frameLayer", () => {
 
   it("handles a single frame", () => {
     expect(frameLayer(0.7, 0, 1).opacity).toBe(1);
+  });
+});
+
+describe("slideIn", () => {
+  const vh = 800;
+
+  it("is fully out while the row is still below the viewport", () => {
+    expect(slideIn(vh, vh)).toEqual({ media: 0, copy: 0 });
+    expect(slideIn(vh + 300, vh)).toEqual({ media: 0, copy: 0 });
+  });
+
+  it("is fully in once the row has risen past its settle line, and stays in above it", () => {
+    expect(slideIn(vh * 0.4, vh)).toEqual({ media: 1, copy: 1 });
+    expect(slideIn(-2000, vh)).toEqual({ media: 1, copy: 1 });
+  });
+
+  it("brings the photo in a little ahead of the copy", () => {
+    const { media, copy } = slideIn(vh * 0.75, vh);
+    expect(media).toBeGreaterThan(copy);
+    expect(copy).toBeGreaterThan(0);
+    // Eased (ease-out cubic); linear progress would give about 0.49 and 0.31 here.
+    expect(media).toBeCloseTo(0.867, 2);
+    expect(copy).toBeCloseTo(0.677, 2);
+  });
+
+  it("depends only on position, so scrolling back up rewinds it", () => {
+    const down = slideIn(vh * 0.6, vh);
+    slideIn(vh * 0.2, vh);
+    expect(slideIn(vh * 0.6, vh)).toEqual(down);
+    for (let top = vh; top >= 0; top -= 40) {
+      const next = slideIn(top - 40, vh);
+      const here = slideIn(top, vh);
+      expect(next.media).toBeGreaterThanOrEqual(here.media);
+      expect(next.copy).toBeGreaterThanOrEqual(here.copy);
+    }
+  });
+
+  it("is fully in for a zero-height viewport", () => {
+    expect(slideIn(0, 0)).toEqual({ media: 1, copy: 1 });
   });
 });
 
