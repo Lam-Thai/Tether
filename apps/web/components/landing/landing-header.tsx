@@ -1,12 +1,13 @@
 import Link from "next/link";
 
 import { PrimaryCta } from "@/components/landing/primary-cta";
+import { SmartHeader } from "@/components/landing/smart-header";
 import { LegalLinks } from "@/components/legal/legal-links";
 import { Wordmark } from "@/components/ui/construct";
 
 export function LandingHeader({ signedIn }: { signedIn: boolean }) {
   return (
-    <header className="sticky top-0 z-(--z-sticky) border-b border-border bg-background">
+    <SmartHeader className="sticky top-0 z-(--z-sticky) border-b border-border bg-background">
       {/* Phones: wordmark + account on the first row, the legal links wrap onto a slim second row
           (they don't fit beside the CTA). From md it is one 64px row. */}
       <div className="mx-auto flex w-full max-w-[1280px] flex-wrap items-center justify-between gap-x-4 gap-y-1 px-6 pt-3 pb-2 md:h-16 md:flex-nowrap md:gap-x-8 md:py-0">
@@ -30,6 +31,6 @@ export function LandingHeader({ signedIn }: { signedIn: boolean }) {
           <PrimaryCta signedIn={signedIn} size="sm" />
         </nav>
       </div>
-    </header>
+    </SmartHeader>
   );
 }

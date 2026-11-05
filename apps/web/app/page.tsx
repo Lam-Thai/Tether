@@ -4,7 +4,9 @@ import { auth } from "@clerk/nextjs/server";
 import { ClosingCta, LandingFooter } from "@/components/landing/closing-footer";
 import { Hero } from "@/components/landing/hero";
 import { HowItWorks } from "@/components/landing/how-it-works";
+import { Journey } from "@/components/landing/journey";
 import { LandingHeader } from "@/components/landing/landing-header";
+import { ScrollReveal } from "@/components/landing/motion/scroll-reveal";
 import { Pricing } from "@/components/landing/pricing";
 
 const description =
@@ -31,10 +33,12 @@ export default async function LandingPage() {
       <main>
         <Hero signedIn={signedIn} />
         <HowItWorks />
+        <Journey />
         <Pricing signedIn={signedIn} />
         <ClosingCta signedIn={signedIn} />
       </main>
       <LandingFooter />
+      <ScrollReveal />
     </>
   );
 }

@@ -16,13 +16,17 @@ export function Pricing({ signedIn }: { signedIn: boolean }) {
       id="pricing"
       className="mx-auto grid w-full max-w-[1280px] scroll-mt-28 grid-cols-1 items-center gap-10 px-6 pb-[clamp(4rem,8vw,8rem)] md:grid-cols-[5fr_6fr] md:gap-16"
     >
-      <div className="flex flex-col gap-3">
+      <div data-reveal className="flex flex-col gap-3">
         <h2 className="text-h1 font-bold tracking-tight uppercase">One plan. One price.</h2>
         <p className="max-w-[44ch] text-base text-muted-foreground">
           Everything Tether does is included. Try it for two weeks before you pay anything.
         </p>
       </div>
-      <div className="flex flex-col gap-6 rounded-md border border-border bg-card p-8 shadow-card">
+      <div
+        data-reveal
+        style={{ "--i": 1 } as React.CSSProperties}
+        className="flex flex-col gap-6 rounded-md border border-border bg-card p-8 shadow-card"
+      >
         <p className="flex items-baseline gap-2">
           <span className="text-hero font-bold tracking-tight">$29</span>
           <span className="text-lg text-muted-foreground">per month, USD</span>
