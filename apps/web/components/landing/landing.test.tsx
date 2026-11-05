@@ -220,19 +220,41 @@ describe("motion-driven landing sections", () => {
     }
   }
 
-  it("story: the step crossing mid-viewport becomes active", () => {
+  it("story: each row slides in from its position and rewinds on scroll up", () => {
     reduceMotion(false);
     const { container } = render(<HowItWorks />);
-    const steps = Array.from(container.querySelectorAll("[data-step]"));
-    const story = observers.find((o) => o.targets.includes(steps[0]!));
-    // The band is the middle 10% of the viewport, in pixels.
-    const inset = -Math.round(window.innerHeight * 0.45);
-    expect(story?.options?.rootMargin).toBe(`${inset}px 0px ${inset}px 0px`);
-    act(() => story?.cb([{ target: steps[1], isIntersecting: true }]));
+    const list = container.querySelector("ol")!;
+    const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-step]"));
+    const vh = window.innerHeight;
+    // happy-dom lays nothing out: row 0 has risen well into view, row 1 is half way, row 2 is below.
+    const place = (tops: number[]) =>
+      rows.forEach((row, i) => (row.getBoundingClientRect = () => ({ top: tops[i] }) as DOMRect));
+    const story = observers.find((o) => o.targets.includes(list));
+    const p = (row: HTMLElement) => Number(row.style.getPropertyValue("--media-p"));
 
-    const marker = (i: number) => steps[i]!.querySelector(".bg-brand-red");
-    expect(marker(1)).toHaveClass("scale-y-100");
-    expect(marker(0)).toHaveClass("scale-y-0");
+    place([vh * 0.2, vh * 0.7, vh * 1.5]);
+    act(() => story?.cb([{ target: list, isIntersecting: true }]));
+    runFrames();
+    expect(p(rows[0]!)).toBe(1);
+    expect(p(rows[1]!)).toBeGreaterThan(0);
+    expect(p(rows[1]!)).toBeLessThan(1);
+    expect(p(rows[2]!)).toBe(0);
+
+    // Scrolling back up pushes row 0 down again, and it slides back out.
+    place([vh * 1.1, vh * 1.6, vh * 2.4]);
+    act(() => window.dispatchEvent(new Event("scroll")));
+    runFrames();
+    expect(p(rows[0]!)).toBe(0);
+  });
+
+  it("story: under reduced motion nothing is driven and every row stays in place", () => {
+    reduceMotion(true);
+    const { container } = render(<HowItWorks />);
+    const list = container.querySelector("ol")!;
+    expect(observers.some((o) => o.targets.includes(list))).toBe(false);
+    for (const row of container.querySelectorAll<HTMLElement>("[data-step]")) {
+      expect(row.style.getPropertyValue("--media-p")).toBe("");
+    }
   });
 
   it("hero: scrolling through the pin scrubs the frames and steps the beats", () => {

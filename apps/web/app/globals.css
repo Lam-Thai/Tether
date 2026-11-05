@@ -226,3 +226,28 @@ body {
     }
   }
 }
+
+/* How it works (decision 16): each story row's photo slides in from the left and its copy
+   from the right, scrubbed by --media-p / --copy-p (0..1) that how-it-works.tsx writes from
+   the row's position, so scrolling up rewinds it. Unset (no JS, reduced motion) means fully
+   in. The section clips horizontal overflow, so the off-screen start never scrolls the page. */
+@media (prefers-reduced-motion: no-preference) {
+  .story-media {
+    opacity: var(--media-p, 1);
+    translate: calc((1 - var(--media-p, 1)) * -6rem) 0;
+  }
+
+  .story-accent {
+    translate: 0 calc((1 - var(--media-p, 1)) * 5rem);
+  }
+
+  .story-copy {
+    opacity: var(--copy-p, 1);
+    translate: calc((1 - var(--copy-p, 1)) * 6rem) 0;
+  }
+
+  .story-mark {
+    transform-origin: top;
+    scale: 1 var(--copy-p, 1);
+  }
+}

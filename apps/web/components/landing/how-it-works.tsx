@@ -3,10 +3,11 @@
 import Image from "next/image";
 import { CalendarCheck, MessageSquareText, PhoneCall } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import { storyPhotos, type LandingPhoto } from "@/components/landing/photos";
 import { Eyebrow } from "@/components/ui/eyebrow";
+import { driveWhileVisible, slideIn, whileMotionAllowed } from "@/lib/motion/scroll-driver";
 import { cn } from "@/lib/utils";
 
 type Step = {
@@ -42,141 +43,105 @@ const steps: Step[] = [
 ];
 
 /**
- * Sticky story (DESIGN.md Resolved decision 16). From md up the photo column stays pinned
- * while the steps scroll past; the step crossing the middle of the viewport becomes active,
- * swapping the photo and its accent shape and drawing the step's marker. Phones get each
- * photo inline above its step instead; so does reduced motion at every width (nothing pins,
- * each step sits beside its own photo).
+ * Story rows (DESIGN.md Resolved decision 16). Each step is a row: photo left, copy right
+ * (stacked on phones). As a row rises into view the photo slides in from the left and the
+ * copy from the right, scrubbed straight from the row's position (`slideIn`), so scrolling
+ * back up plays it in reverse. Progress lands in `--media-p` / `--copy-p` on each row and
+ * `app/globals.css` turns it into `translate` + `opacity`. Without JS, or under reduced
+ * motion, nothing is driven and every row sits in place, fully visible.
  */
 export function HowItWorks() {
   const listRef = useRef<HTMLOListElement>(null);
-  const [active, setActive] = useState(0);
 
   useEffect(() => {
     const list = listRef.current;
-    if (!list || typeof IntersectionObserver !== "function") return;
-    const items = Array.from(list.querySelectorAll<HTMLElement>("[data-step]"));
-    let observer: IntersectionObserver | null = null;
-    let raf = 0;
-    // A thin band across the middle of the viewport (the middle 10%). The margins are pixels
-    // from the viewport height, rebuilt on resize: percentage rootMargins are an open spec
-    // question (w3c/IntersectionObserver#391), so no engine gets to read them differently.
-    const observe = () => {
-      raf = 0;
-      observer?.disconnect();
-      const inset = -Math.round(window.innerHeight * 0.45);
-      observer = new IntersectionObserver(
-        (entries) => {
-          for (const entry of entries) {
-            if (entry.isIntersecting) setActive(Number(entry.target.getAttribute("data-step")));
-          }
-        },
-        { rootMargin: `${inset}px 0px ${inset}px 0px` },
-      );
-      items.forEach((item) => observer?.observe(item));
-    };
-    const onResize = () => {
-      if (!raf) raf = requestAnimationFrame(observe);
-    };
-    observe();
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      if (raf) cancelAnimationFrame(raf);
-      observer?.disconnect();
-    };
+    if (!list) return;
+    const rows = Array.from(list.querySelectorAll<HTMLElement>("[data-step]"));
+
+    return whileMotionAllowed(() => {
+      const paint = () => {
+        const viewport = window.innerHeight;
+        for (const row of rows) {
+          const { media, copy } = slideIn(row.getBoundingClientRect().top, viewport);
+          row.style.setProperty("--media-p", media.toFixed(4));
+          row.style.setProperty("--copy-p", copy.toFixed(4));
+        }
+      };
+      // Place every row now, so nothing shows at full strength for a frame before the driver runs.
+      paint();
+      const stop = driveWhileVisible(list, () => {
+        paint();
+        return false;
+      });
+      return () => {
+        stop();
+        for (const row of rows) {
+          row.style.removeProperty("--media-p");
+          row.style.removeProperty("--copy-p");
+        }
+      };
+    });
   }, []);
 
   return (
     <section
       id="how-it-works"
-      className="mx-auto w-full max-w-[1280px] scroll-mt-28 px-6 py-[clamp(4rem,8vw,8rem)]"
+      className="mx-auto w-full max-w-[1280px] scroll-mt-28 overflow-x-clip px-6 py-[clamp(4rem,8vw,8rem)]"
     >
-      <div data-reveal className="mb-12 flex max-w-2xl flex-col gap-3">
+      <div data-reveal className="mb-12 flex max-w-2xl flex-col gap-3 md:mb-20">
         <Eyebrow>How it works</Eyebrow>
         <h2 className="text-h1 font-bold tracking-tight uppercase">
           Three jobs, handled while you work
         </h2>
       </div>
-      <div className="grid grid-cols-1 gap-12 md:gap-16 md:motion-safe:grid-cols-[5fr_6fr]">
-        <div aria-hidden className="hidden md:motion-safe:block">
-          <div className="sticky top-24 h-[min(72dvh,36rem)] overflow-hidden rounded-lg bg-surface-dark">
-            {steps.map((step, i) => (
-              <StoryFrame key={step.title} step={step} on={i === active} />
-            ))}
-          </div>
-        </div>
-        <ol ref={listRef} className="flex flex-col gap-12 md:gap-0">
-          {steps.map((step, index) => {
-            const Icon = step.icon;
-            const on = index === active;
-            return (
-              <li
-                key={step.title}
-                data-step={index}
-                data-reveal
-                className="flex flex-col gap-6 md:justify-center md:motion-safe:min-h-[min(72dvh,36rem)] md:motion-reduce:grid md:motion-reduce:grid-cols-[5fr_6fr] md:motion-reduce:items-center md:motion-reduce:gap-16"
+      <ol ref={listRef} className="flex flex-col gap-16 md:gap-28">
+        {steps.map((step, index) => {
+          const Icon = step.icon;
+          return (
+            <li
+              key={step.title}
+              data-step={index}
+              className="grid grid-cols-1 items-center gap-8 md:grid-cols-[5fr_6fr] md:gap-16"
+            >
+              <div
+                aria-hidden
+                className="story-media relative isolate aspect-[4/3] overflow-hidden rounded-lg bg-surface-dark"
               >
+                <Image
+                  src={step.photo.src}
+                  alt=""
+                  fill
+                  sizes="(min-width: 768px) 40vw, 90vw"
+                  className="-z-10 object-cover"
+                  style={{ objectPosition: step.photo.position }}
+                />
+                {/* The step's accent shape cuts in from the corner as the photo lands. */}
                 <div
+                  className={cn(
+                    "story-accent absolute -right-8 -bottom-12 size-36 rotate-12 md:size-44",
+                    step.accent,
+                  )}
+                />
+              </div>
+              <div className="story-copy relative flex flex-col gap-3 pl-6 md:pl-8">
+                {/* A red rule that draws down the copy's left edge as it slides in. */}
+                <span aria-hidden className="story-mark absolute inset-y-0 left-0 w-1 bg-brand-red" />
+                <span
                   aria-hidden
-                  className="relative h-56 overflow-hidden rounded-md bg-surface-dark md:motion-safe:hidden md:motion-reduce:h-72"
+                  className={cn(
+                    "flex size-12 items-center justify-center rounded-sm text-foreground",
+                    step.accent,
+                  )}
                 >
-                  <StoryFrame step={step} on />
-                </div>
-                <div className="relative flex flex-col gap-3 md:motion-safe:pl-8">
-                  {/* Active-step marker: a red rule that draws down the step's left edge. */}
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "absolute inset-y-0 left-0 hidden w-1 origin-top bg-brand-red transition-transform duration-[420ms] ease-(--ease-out-quick) motion-reduce:transition-none md:motion-safe:block",
-                      on ? "scale-y-100" : "scale-y-0",
-                    )}
-                  />
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "flex size-12 items-center justify-center rounded-sm text-foreground",
-                      step.accent,
-                    )}
-                  >
-                    <Icon className="size-6" strokeWidth={1.5} />
-                  </span>
-                  <h3 className="text-h2 font-bold tracking-tight uppercase">{step.title}</h3>
-                  <p className="max-w-[56ch] text-base text-muted-foreground">{step.body}</p>
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      </div>
+                  <Icon className="size-6" strokeWidth={1.5} />
+                </span>
+                <h3 className="text-h2 font-bold tracking-tight uppercase">{step.title}</h3>
+                <p className="max-w-[56ch] text-base text-muted-foreground">{step.body}</p>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
     </section>
-  );
-}
-
-/** One step's B&W photo with its accent shape cutting in from the corner. */
-function StoryFrame({ step, on }: { step: Step; on: boolean }) {
-  return (
-    <div
-      className={cn(
-        "absolute inset-0 isolate transition-opacity duration-[600ms] ease-(--ease-out-quick) motion-reduce:transition-none",
-        on ? "opacity-100" : "opacity-0",
-      )}
-    >
-      <Image
-        src={step.photo.src}
-        alt=""
-        fill
-        sizes="(min-width: 768px) 40vw, 90vw"
-        className="-z-10 object-cover"
-        style={{ objectPosition: step.photo.position }}
-      />
-      <div
-        className={cn(
-          "absolute -right-8 -bottom-12 size-36 rotate-12 transition-transform duration-[600ms] ease-(--ease-out-quick) motion-reduce:transition-none md:size-44",
-          step.accent,
-          on ? "translate-y-0" : "translate-y-16",
-        )}
-      />
-    </div>
   );
 }

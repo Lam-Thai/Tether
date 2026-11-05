@@ -26,7 +26,7 @@ export const heroFrames: LandingPhoto[] = [
 ];
 
 export const storyPhotos = {
-  calls: { src: storyCalls, position: "38% 50%" },
-  booking: { src: storyBooking, position: "50% 50%" },
+  calls: { src: storyCalls, position: "80% 40%" },
+  booking: { src: storyBooking, position: "60% 50%" },
   text: { src: storyText, position: "45% 40%" },
 } satisfies Record<string, LandingPhoto>;
