@@ -8,7 +8,10 @@ export function ClosingCta({ signedIn }: { signedIn: boolean }) {
   return (
     <section className="relative isolate overflow-hidden bg-surface-dark">
       <ConstructField className="-z-10 opacity-0 md:opacity-100" />
-      <div className="mx-auto flex w-full max-w-[1280px] flex-col items-start gap-6 px-6 py-[clamp(4rem,8vw,8rem)]">
+      <div
+        data-reveal
+        className="mx-auto flex w-full max-w-[1280px] flex-col items-start gap-6 px-6 py-[clamp(4rem,8vw,8rem)]"
+      >
         <h2 className="max-w-xl text-h1 font-bold tracking-tight text-surface-dark-foreground uppercase md:max-w-sm lg:max-w-md">
           Let the phone ring. Tether has it.
         </h2>

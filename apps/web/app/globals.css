@@ -170,3 +170,59 @@ body {
     animation: shimmer 1.4s linear infinite;
   }
 }
+
+/* Scroll motion, marketing page only (DESIGN.md Resolved decision 16).
+   <ScrollReveal /> sets data-reveal-armed on <html> after marking what is already on screen,
+   then each [data-reveal] rises in (16px, 420ms, 80ms stagger via --i) as it enters the
+   viewport. Without JS or with reduced motion nothing is ever hidden. Only the reveal
+   transitions, so arming hides off-screen blocks instantly. */
+.journey-line {
+  transform-origin: top;
+}
+
+@media (min-width: 48rem) {
+  .journey-line {
+    transform-origin: left;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-reveal-armed] [data-reveal]:not([data-revealed]) {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  [data-reveal-armed] [data-reveal][data-revealed] {
+    transition:
+      opacity 420ms var(--ease-out-quick),
+      transform 420ms var(--ease-out-quick);
+    transition-delay: calc(var(--i, 0) * 80ms);
+  }
+
+  /* Journey: the rule draws across, then each step's marker lights in turn. */
+  [data-reveal-armed] [data-reveal]:not([data-revealed]) .journey-line {
+    transform: scaleY(0);
+  }
+
+  [data-reveal-armed] [data-reveal]:not([data-revealed]) .journey-mark {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+
+  [data-reveal-armed] [data-revealed] .journey-line {
+    transition: transform 900ms var(--ease-out-quick) 120ms;
+  }
+
+  [data-reveal-armed] [data-revealed] .journey-mark {
+    transition:
+      opacity 240ms var(--ease-out-quick),
+      transform 420ms var(--ease-out-quick);
+    transition-delay: calc(360ms + var(--i, 0) * 220ms);
+  }
+
+  @media (min-width: 48rem) {
+    [data-reveal-armed] [data-reveal]:not([data-revealed]) .journey-line {
+      transform: scaleX(0);
+    }
+  }
+}

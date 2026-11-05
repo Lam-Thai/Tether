@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import PrivacyPage, { metadata as privacyMetadata } from "@/app/privacy/page";
 import TermsPage, { metadata as termsMetadata } from "@/app/terms/page";
@@ -12,6 +12,7 @@ import { LegalLinks } from "@/components/legal/legal-links";
 import { PRIVACY_SECTIONS } from "@/components/legal/privacy-sections";
 import { TERMS_SECTIONS } from "@/components/legal/terms-sections";
 import { CONTACT_EMAIL, formatLegalDate, LAST_UPDATED, LEGAL_NAME } from "@/lib/legal";
+import { RETURN_PATH_KEY } from "@/lib/navigation/return-path";
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -186,3 +187,30 @@ describe("formatLegalDate", () => {
     expect(formatLegalDate("2026-01-01")).toBe("January 1, 2026");
   });
 });
+
+describe("Back link", () => {
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it("goes home when the visitor opened the page directly", () => {
+    render(<PrivacyPage />);
+    expect(screen.getByRole("link", { name: "Back to home" })).toHaveAttribute("href", "/");
+  });
+
+  it("returns to the dashboard page the visitor came from", () => {
+    window.sessionStorage.setItem(RETURN_PATH_KEY, "/dashboard/inbox?type=attention");
+    render(<TermsPage />);
+    expect(screen.getByRole("link", { name: "Back to dashboard" })).toHaveAttribute(
+      "href",
+      "/dashboard/inbox?type=attention",
+    );
+  });
+
+  it("returns to the landing page", () => {
+    window.sessionStorage.setItem(RETURN_PATH_KEY, "/");
+    render(<PrivacyPage />);
+    expect(screen.getByRole("link", { name: "Back to home" })).toHaveAttribute("href", "/");
+  });
+});
+
