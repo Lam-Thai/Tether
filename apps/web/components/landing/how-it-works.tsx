@@ -56,17 +56,35 @@ export function HowItWorks() {
     const list = listRef.current;
     if (!list || typeof IntersectionObserver !== "function") return;
     const items = Array.from(list.querySelectorAll<HTMLElement>("[data-step]"));
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) setActive(Number(entry.target.getAttribute("data-step")));
-        }
-      },
-      // A thin band across the middle of the viewport.
-      { rootMargin: "-45% 0px -45% 0px" },
-    );
-    items.forEach((item) => observer.observe(item));
-    return () => observer.disconnect();
+    let observer: IntersectionObserver | null = null;
+    let raf = 0;
+    // A thin band across the middle of the viewport (the middle 10%). The margins are pixels
+    // from the viewport height, rebuilt on resize: percentage rootMargins are an open spec
+    // question (w3c/IntersectionObserver#391), so no engine gets to read them differently.
+    const observe = () => {
+      raf = 0;
+      observer?.disconnect();
+      const inset = -Math.round(window.innerHeight * 0.45);
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) setActive(Number(entry.target.getAttribute("data-step")));
+          }
+        },
+        { rootMargin: `${inset}px 0px ${inset}px 0px` },
+      );
+      items.forEach((item) => observer?.observe(item));
+    };
+    const onResize = () => {
+      if (!raf) raf = requestAnimationFrame(observe);
+    };
+    observe();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (raf) cancelAnimationFrame(raf);
+      observer?.disconnect();
+    };
   }, []);
 
   return (

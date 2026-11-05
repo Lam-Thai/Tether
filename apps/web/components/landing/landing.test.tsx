@@ -178,7 +178,11 @@ describe("ScrollReveal", () => {
 
 describe("motion-driven landing sections", () => {
   type Entry = Partial<IntersectionObserverEntry>;
-  let observers: { cb: (entries: Entry[]) => void; targets: Element[] }[];
+  let observers: {
+    cb: (entries: Entry[]) => void;
+    targets: Element[];
+    options?: IntersectionObserverInit;
+  }[];
   let frames: FrameRequestCallback[];
 
   beforeEach(() => {
@@ -188,8 +192,8 @@ describe("motion-driven landing sections", () => {
       "IntersectionObserver",
       class {
         targets: Element[] = [];
-        constructor(cb: (entries: Entry[]) => void) {
-          observers.push({ cb, targets: this.targets });
+        constructor(cb: (entries: Entry[]) => void, options?: IntersectionObserverInit) {
+          observers.push({ cb, targets: this.targets, options });
         }
         observe(el: Element) {
           this.targets.push(el);
@@ -221,6 +225,9 @@ describe("motion-driven landing sections", () => {
     const { container } = render(<HowItWorks />);
     const steps = Array.from(container.querySelectorAll("[data-step]"));
     const story = observers.find((o) => o.targets.includes(steps[0]!));
+    // The band is the middle 10% of the viewport, in pixels.
+    const inset = -Math.round(window.innerHeight * 0.45);
+    expect(story?.options?.rootMargin).toBe(`${inset}px 0px ${inset}px 0px`);
     act(() => story?.cb([{ target: steps[1], isIntersecting: true }]));
 
     const marker = (i: number) => steps[i]!.querySelector(".bg-brand-red");
