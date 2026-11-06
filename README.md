@@ -82,7 +82,7 @@ These are hard rules built into the code, not just good intentions:
 - **No fake confirmations.** Tether never tells a caller "you're booked" or "I've sent you a text" unless the real system confirmed it.
 - **The AI never acts directly.** Gemini can only *suggest* an action. The backend checks every suggestion before anything happens.
 - **Each business only sees its own data.** One salon can never see another salon's customers, even by accident.
-- **Spending is capped.** Every call to an outside service (AI, phone, calendar) is counted against a limit. When the limit is reached, Tether gives a polite fallback instead of running up a bill.
+- **Usage is capped.** Every request Tether makes to an outside service (AI, phone, calendar) is counted against a limit. When the limit is reached, Tether stops making those requests and gives a polite fallback instead. (A phone call that arrives after the limit still gets a short spoken message before Tether hangs up, so on a paid phone plan that call would still cost a little.)
 - **No secrets in the browser.** Passwords and keys for outside services live only on the server.
 - **Only made-up data in development.** Test customers are fictional people (like "Alex Rivera"), never real ones.
 
@@ -177,14 +177,14 @@ The project also uses two shared collections of skills:
 ## How we check it works
 
 - **Automatic tests** for both apps. They use pretend versions of Gemini, Twilio, Google Calendar and Stripe, so they're fast, free and never touch real customers.
-- **A check before every upload.** Pushing code to GitHub first runs the full test suite (about 40 seconds). If anything fails, the upload is stopped.
+- **A check before every upload.** Pushing code to GitHub first runs the website tests and the backend tests (about 40 seconds). If either fails, the upload is stopped. The real-browser click-through runs separately, on GitHub.
 - **Checks on every proposed change** on GitHub: tests, code style, type checks, a full click-through of the main journey in a real browser, database changes tested forwards and backwards, a scan for leaked passwords, and a scan for known security problems in the tools we depend on.
 - **An AI exam.** A set of sample conversations (the "eval harness") that grades how well the real Gemini answers questions, books, and escalates. It's run by hand because it uses real AI requests.
 - **A live demo script** ([`docs/runbook-live-demo.md`](docs/runbook-live-demo.md)) for making a real test call end to end.
 
 ## Cost
 
-Tether is built as a working prototype on **free tiers only**: Gemini's free allowance, a Twilio trial account, Stripe test mode, Clerk's development plan, and free hosting. Usage limits are built into the product so it can't accidentally spend money.
+Tether is built as a working prototype on **free tiers only**: Gemini's free allowance, a Twilio trial account, Stripe test mode, Clerk's development plan, and free hosting. Usage limits are built into the product to keep it inside those free allowances. They limit what Tether itself does, not everything a provider could charge for, which is why development sticks to trial and test accounts.
 
 ---
 
@@ -249,8 +249,10 @@ uv run --directory apps/api tether-eval --suite core
 pnpm test                       # Vitest across all projects (tooling + apps/web)
 pnpm typecheck                  # strict TypeScript check of root tooling
 sh apps/api/scripts/test.sh     # API suite with CI-like settings (needs local Postgres)
-pnpm e2e                        # Playwright critical journey (needs E2E_CLERK_* env vars)
+pnpm e2e                        # Playwright critical journey (needs local Postgres and E2E_CLERK_* env vars)
 ```
+
+E2E always runs against the local Postgres (`docker compose up --wait`), never the Neon `DATABASE_URL`. See [E2E setup](apps/web/CLAUDE.md#e2e-slice-17) for the Clerk test user and browser install.
 
 See the root [`CLAUDE.md`](CLAUDE.md) for the full command reference (per-app lint/typecheck/test/build commands).
 
@@ -277,6 +279,6 @@ CI (`.github/workflows/api.yml`, `.github/workflows/web.yml`) lints, type-checks
 2. **Vercel — API** (`apps/api`): new project, Root Directory = `apps/api`. Vercel auto-detects the FastAPI app from `main.py` (no `vercel.json` needed). Env vars: `DATABASE_URL` (from Neon), `CORS_ORIGINS` (the web app's deployed URL, once known), `ENVIRONMENT=production`, `APP_VERSION` (e.g. a git SHA or release tag).
 3. **Vercel — Web** (`apps/web`): new project, Root Directory = `apps/web`. Env vars: `NEXT_PUBLIC_API_BASE_URL` (the API project's deployed URL from step 2).
 4. Go back and update the API project's `CORS_ORIGINS` with the web app's actual deployed URL from step 3, then redeploy the API.
-5. Run `uv run alembic upgrade head` against the Neon database once (locally, with `DATABASE_URL` pointed at Neon) before relying on it. Migrations are never run automatically on startup or in CI against Neon.
+5. Run `uv run --directory apps/api alembic upgrade head` against the Neon database once (locally, with `DATABASE_URL` pointed at Neon) before relying on it. Migrations are never run automatically on startup or in CI against Neon.
 
 Once both are deployed, the web URL should show `API: healthy · Database: connected`.
