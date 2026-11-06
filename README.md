@@ -82,7 +82,7 @@ These are hard rules built into the code, not just good intentions:
 - **No fake confirmations.** Tether never tells a caller "you're booked" or "I've sent you a text" unless the real system confirmed it.
 - **The AI never acts directly.** Gemini can only *suggest* an action. The backend checks every suggestion before anything happens.
 - **Each business only sees its own data.** One salon can never see another salon's customers, even by accident.
-- **Usage is capped.** Every request Tether makes to an outside service (AI, phone, calendar) is counted against a limit. When the limit is reached, Tether stops making those requests and gives a polite fallback instead. (A phone call that arrives after the limit still gets a short spoken message before Tether hangs up, so on a paid phone plan that call would still cost a little.)
+- **Usage is counted, and the costly parts are capped.** Every request Tether makes to an outside service is counted. The ones that cost money or use up a free allowance (AI replies, AI voice, phone calls and text messages) also have daily limits; calendar and billing requests are counted but not limited. When a limit is reached, Tether stops making those requests and gives a polite fallback instead. (A phone call that arrives after the limit still gets a short spoken message before Tether hangs up, so on a paid phone plan that call would still cost a little.)
 - **No secrets in the browser.** Passwords and keys for outside services live only on the server.
 - **Only made-up data in development.** Test customers are fictional people (like "Alex Rivera"), never real ones.
 
@@ -252,7 +252,13 @@ sh apps/api/scripts/test.sh     # API suite with CI-like settings (needs local P
 pnpm e2e                        # Playwright critical journey (needs local Postgres and E2E_CLERK_* env vars)
 ```
 
-E2E always runs against the local Postgres (`docker compose up --wait`), never the Neon `DATABASE_URL`. See [E2E setup](apps/web/CLAUDE.md#e2e-slice-17) for the Clerk test user and browser install.
+Before running `pnpm e2e`:
+
+- Start the local Postgres (`docker compose up --wait`).
+- Stop any running `pnpm dev`. Outside CI, Playwright reuses web and API servers that are already up, and an API started with a Neon `DATABASE_URL` would write the test data there.
+- Use a dedicated `+clerk_test` user. Every run first deletes that user's business, and everything under it, from the local database without asking.
+
+See [E2E setup](apps/web/CLAUDE.md#e2e-slice-17) for the Clerk test user and browser install.
 
 See the root [`CLAUDE.md`](CLAUDE.md) for the full command reference (per-app lint/typecheck/test/build commands).
 
