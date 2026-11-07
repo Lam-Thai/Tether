@@ -18,7 +18,7 @@ Convention for data-fetching pages: Server Component does the fetch via the clie
 
 - `components/ui/*` holds shadcn-style primitives (`cn()` in `lib/utils.ts`, `class-variance-authority` for variants). `components.json` records the CLI config (`new-york` style, `@/components`, `@/lib`, `@/hooks` aliases) so `pnpm dlx shadcn add <component>` drops files in the right place.
 - Tailwind v4, CSS-first config: tokens live in `app/globals.css` under `:root` + `@theme inline`, implementing `DESIGN.md` (see root `CLAUDE.md` `## Design`). No `tailwind.config.ts`.
-- Use semantic tokens (`bg-primary`, `text-muted-foreground`, `border-input`, `bg-surface-dark`, ...), never raw hex in components. Fonts: Oswald (`font-sans`), JetBrains Mono (`font-mono`, for technical values).
+- Use semantic tokens (`bg-primary`, `text-muted-foreground`, `border-input`, `bg-surface-dark`, ...), never raw hex in components. Fonts: Oswald (`font-sans`), JetBrains Mono (`font-mono`, for technical values), self-hosted with `next/font/local` from `app/fonts/` (variable latin woff2 + OFL licenses). Don't switch back to `next/font/google`: Google Fonts sometimes serves `/l/font?kit=...&skey=...` URLs and Turbopack then fails the build ("next/font/google queries have exactly one entry"), which broke a Vercel production deploy. A new weight inside the files' ranges (Oswald 400-700, JetBrains Mono 400-500) needs no new file; a new subset or range does.
 - States: `Callout` (`components/ui/callout.tsx`) for empty / warning / error panels, `FormError` / `FieldError` for forms, `Skeleton` for loading. Every state pairs color with a Lucide icon and text. Icons come from `lucide-react` only.
 - Invoke `taste-skill:design-taste-frontend` before touching any UI.
 
