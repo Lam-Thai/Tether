@@ -1,21 +1,27 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Oswald } from "next/font/google";
+import localFont from "next/font/local";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Suspense } from "react";
 
 import { ReturnPathTracker } from "@/components/navigation/return-path-tracker";
 import "./globals.css";
 
-const oswald = Oswald({
+// Self-hosted, not next/font/google: Google Fonts sometimes answers with
+// `/l/font?kit=...&skey=...` URLs, and Turbopack's font loader fails the whole build on
+// them ("next/font/google queries have exactly one entry"). Both files are the variable
+// latin subsets from Google Fonts (SIL OFL 1.1, licenses beside them in ./fonts).
+const oswald = localFont({
+  src: "./fonts/oswald-latin-wght.woff2",
   variable: "--font-oswald",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: "400 700",
+  display: "swap",
 });
 
-const jetbrainsMono = JetBrains_Mono({
+const jetbrainsMono = localFont({
+  src: "./fonts/jetbrains-mono-latin-wght.woff2",
   variable: "--font-jetbrains-mono",
-  subsets: ["latin"],
-  weight: ["400", "500"],
+  weight: "400 500",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
