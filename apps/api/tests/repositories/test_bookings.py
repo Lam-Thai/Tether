@@ -2,6 +2,7 @@
 (overlap exclusion, buffer, active-only), the active idempotency key, conditional
 status changes, the stale-pending sweep and business scoping."""
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -170,6 +171,38 @@ async def test_resolve_pending_only_moves_pending_rows_of_the_business(two_tenan
     assert confirmed is not None
     assert (confirmed.status, confirmed.calendar_event_id) == ("confirmed", "evt-1")
     assert again is None
+
+
+async def test_resolve_pending_waits_for_the_reservation_lock(two_tenants):
+    """A status change re-checks the overlap constraint, so it must queue behind the
+    business's reservation lock like `reserve`. Otherwise a confirm and a concurrent
+    insert can wait on each other's uncommitted rows and Postgres aborts one (40P01)."""
+    tenant_a, _ = two_tenants
+    async with async_session_factory() as session:
+        service = await _service(session, tenant_a.business_id)
+        booking = await repo.reserve(session, tenant_a.business_id, _new(service))
+        assert isinstance(booking, Booking)
+        await session.commit()
+
+    async with async_session_factory() as holder, async_session_factory() as confirmer:
+        await repo.lock_reservations(holder, tenant_a.business_id)
+        confirm = asyncio.create_task(
+            repo.resolve_pending(
+                confirmer,
+                tenant_a.business_id,
+                booking.id,
+                status="confirmed",
+                calendar_event_id="evt-1",
+            )
+        )
+        await asyncio.sleep(0.5)
+        waited = not confirm.done()
+        await holder.commit()
+        confirmed = await asyncio.wait_for(confirm, timeout=5)
+        await confirmer.commit()
+
+    assert waited, "resolve_pending did not wait for the reservation lock"
+    assert confirmed is not None and confirmed.status == "confirmed"
 
 
 async def test_a_confirmed_booking_needs_its_event_id(two_tenants):

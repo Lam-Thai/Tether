@@ -8,12 +8,14 @@ ways an insert can lose a race come back as values, not exceptions:
 - `KeyConflict`: an active booking with the same idempotency key exists (the same
   tool call is already running or already made it).
 
-Concurrent inserts that race on an exclusion constraint can deadlock in Postgres (each
+Concurrent writes that race on an exclusion constraint can deadlock in Postgres (each
 waits on the other's uncommitted row; one is aborted with a deadlock error, not a
-constraint error). So `reserve` and `expire_stale_pending` first take a per-business
-transaction-level advisory lock: reservations of one business are serialized for the
-few milliseconds until the caller's `checkpoint()` commits, and the constraint stays
-the backstop. The lock is never held across a provider call (the service commits
+constraint error). An UPDATE re-checks the constraint too: confirming booking A while
+another caller inserts an overlapping B makes A's update wait on B and B's insert wait
+on A. So every write here (`reserve`, `resolve_pending`, `expire_stale_pending`) first
+takes a per-business transaction-level advisory lock: writes of one business are
+serialized for the few milliseconds until the caller's `checkpoint()` commits, and the
+constraint stays the backstop. The lock is never held across a provider call (the service commits
 before calling Google).
 
 Status changes are conditional on the row still being `pending` (`resolve_pending`),
@@ -103,7 +105,10 @@ async def resolve_pending(
     failure_reason: str | None = None,
 ) -> Booking | None:
     """Moves a `pending` booking to `status`. None when it isn't pending any more
-    (or isn't this business's): nothing is written."""
+    (or isn't this business's): nothing is written. Holds the business's reservation
+    lock until the caller commits (see the module docstring: the update re-checks the
+    overlap constraint)."""
+    await lock_reservations(session, business_id)
     values: dict[str, object] = {
         "status": status,
         "failure_reason": failure_reason,
